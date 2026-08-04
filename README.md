@@ -2,76 +2,115 @@
 
 A penalty shootout you play with your body. Your phone's camera tracks you:
 your **raised hand aims** the shot (left / centre / right) and a **fast leg
-swing kicks** it. On the laptop, **THE WALL** — an AI goalkeeper — watches
-your hand, studies your shot history, and dives.
+swing kicks** it. **THE WALL** — an AI goalkeeper — watches your hand, studies
+your shot history, and dives.
 
 The twist: the keeper reads your aim with human-like reaction lag
 (~0.45 s before the kick). Hold a fake direction, switch your hand at the
 last moment, then swing — and send the machine the wrong way.
 
-## Quick start
+Branch: `prateek` · Target silicon: Galaxy S25 (Snapdragon 8 Elite) + laptop TV.
 
-1. **Run the host** (laptop, same Wi-Fi as the phone):
+---
+
+## What's built (today)
+
+### Playable stack
+| Piece | Where | Status |
+|---|---|---|
+| Match server + AI keeper + WebSocket hub | `laptop/server.py` (also runs on-phone via Termux) | Done |
+| TV stadium (scoreboard, aim reticle, keeper dive, ball flight) | `laptop/public/tv.html` | Done |
+| Browser striker (fallback) | `laptop/public/phone.html` | Done |
+| **Native Android striker app** | `android/` — installed on S25 as `com.sentinelmesh.gesturefootball` | Done (GPU path) |
+| ForcePose (arXiv:2503.22363) — kicks in real Newtons | Browser + native (`ForcePoseEngine.kt`) | Done |
+| Bullet-time 3D skeleton replay on TV | Phone captures world landmarks → TV orbits | Done |
+| Headless match test | `laptop/test_match.py` | Done |
+
+### Native app (Phase 1 — live on device)
+- CameraX front camera
+- MediaPipe PoseLandmarker (**GPU** delegate, ~30–40 ms/frame)
+- Hand aim + leg-kick ForcePose → same WebSocket JSON as the browser
+- HUD: `BODY AI · ON-DEVICE`, `FORCEPOSE · N`, `DELEGATE · GPU · xx ms`
+- Connects to `ws://127.0.0.1:8080/ws` (Termux server on the same phone)
+
+### AI Hub models already on the phone (`~/gf/models`, ~1 GB)
+Staged for tomorrow — **not wired into the app yet**:
+
+| Model | Runtime | Use |
+|---|---|---|
+| MediaPipe Pose (8 Elite Galaxy) | QNN context + precompiled ONNX | Hexagon NPU pose |
+| Whisper Tiny | QNN / precompiled ONNX | On-device speech recognition |
+| Qwen3 0.6B | GenieX QAIRT w4a16 | On-device LLM for THE WALL |
+
+---
+
+## What to build tomorrow
+
+Priority order for the hackathon demo:
+
+1. **NPU pose swap (Phase 2)** — load the QNN pose binaries from `~/gf/models` via LiteRT/QNN (or ONNX Runtime QNN EP). Badge should read `DELEGATE · NPU` with a CPU/GPU/NPU latency toggle for judges.
+2. **THE WALL speaks** — Android TTS first (fast), then Whisper Tiny for hearing trash-talk, then Qwen 0.6B Genie for on-device commentary (move the desk off the laptop).
+3. **Spectacle polish** — selfie segmentation (you composited into the stadium), 6-zone shots from kick elevation (`dirDeg` already sent), NEURAL LOAD HUD on the TV.
+4. **Optional stretch** — learning keeper (trains on your run-up tells mid-match), rPPG pressure meter, Stable Diffusion match poster, Llama 3.2 export (license-gated; Qwen is the ready substitute).
+5. **Teammate integration** — freeze the WebSocket JSON contract; UNO Q / X Elite stations plug into the same hub.
+
+Build the APK on the provided laptop if this machine is out of disk; project + toolchain notes are in `android/README.md`.
+
+---
+
+## Quick start (recommended: native app + phone-hosted server)
+
+1. **On the phone (Termux):**
    ```
-   pip install -r requirements.txt
-   cd laptop
-   python server.py
+   cd ~/gf/laptop && python server.py
    ```
-2. **Open the TV** on the laptop: `http://localhost:8080/tv.html`
-3. **Open the striker page** on the phone: `https://<laptop-ip>:8443/phone.html`
-   (see HTTPS below), prop the phone up 2–3 m away so it sees your whole
-   body — the badge flips to **FULL BODY ✓** — then press **START MATCH**
-   on the TV.
+2. **Open the native app** — *Gesture Football* (not Chrome). Allow camera.
+3. **On the laptop TV:** `http://localhost:8080/tv.html`  
+   (USB: `adb reverse tcp:8080 tcp:8080` if the server runs on the phone; or run `server.py` on the laptop instead.)
+4. Prop the phone 2–3 m away → **FULL BODY ✓** → **START MATCH** on the TV.
+
+### Browser fallback
+- Phone: `http://localhost:8080/phone.html` (USB reverse) or `https://<laptop-ip>:8443/phone.html` with certs (see below).
+
+### Rebuild / reinstall the Android app
+```
+cd android
+.\gradlew.bat :app:assembleDebug
+adb install -r app\build\outputs\apk\debug\app-debug.apk
+```
+
+---
 
 ## The ForcePose engine
 
 Kick power isn't a made-up number — the phone measures your kick in **real
 Newtons**, implementing the pipeline from
-[ForcePose (arXiv:2503.22363)](https://arxiv.org/abs/2503.22363) fully
-on-device:
+[ForcePose (arXiv:2503.22363)](https://arxiv.org/abs/2503.22363) on-device:
 
-1. MediaPipe pose → 33 landmarks per frame (as in the paper)
-2. Savitzky-Golay temporal smoothing of the foot trajectory (paper §III-B)
-3. Torso-normalized metric scale, so pixels become metres (paper §III-B)
-4. Central-difference velocity + acceleration features (paper §III-D)
-5. Force head: the paper's trained BiLSTM and force-plate dataset aren't
-   public, so we substitute rigid-body dynamics — **F = m_leg × a_peak**,
-   with leg mass from Winter's anthropometric tables (6.18% of body mass)
+1. MediaPipe pose → 33 landmarks per frame
+2. Savitzky–Golay temporal smoothing of the foot trajectory
+3. Torso-normalized metric scale (pixels → metres)
+4. Central-difference velocity + acceleration
+5. Force head: **F = m_leg × a_peak** (Winter tables; paper's BiLSTM weights aren't public)
 
 Pass your weight for calibrated numbers: `phone.html?kg=82` (default 70).
-The live readout is the FORCEPOSE badge on the camera view; every shot's
-Newtons appear on the TV and feed the AI commentary.
 
 ## How to play
 
-- **Aim** — raise a hand; its position steers the target reticle you'll see
-  on the TV: left, centre or right.
-- **Kick** — when the TV says **KICK!**, swing your leg fast. ForcePose
-  measures the strike in Newtons; 380 N is full power, and enough power can
-  beat the keeper even in the right corner.
-- **Feint** — THE WALL watches your hand, but it reacts late. Point one way,
-  flick your hand to the real corner just before you swing.
+- **Aim** — raise a hand; L / C / R steers the TV reticle.
+- **Kick** — swing your leg on **KICK!** · ~380 N = full power.
+- **Feint** — point one way, snap your hand late, then swing.
 - 5 kicks per match. Beat the machine.
 
-## Phone camera & HTTPS
+## Phone camera & HTTPS (browser only)
 
-Off `localhost`, browsers block the camera on plain HTTP. Make a self-signed
-cert next to `server.py` and the server adds `https://<laptop-ip>:8443`
-automatically:
+Off `localhost`, browsers block the camera on plain HTTP. Next to `server.py`:
 ```
 openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem \
   -days 365 -subj "/CN=gesture-football"
 ```
-Open the `https://` link on the phone and accept the certificate warning once.
-(Android alternative: chrome://flags → "Insecure origins treated as secure" →
-add `http://<laptop-ip>:8080`.)
-
-## Turn on the AI Desk (optional — templates work without it)
-
-- **Cloud (Claude):** set `ANTHROPIC_API_KEY=sk-ant-…` then run the server.
-  Badge shows **CLAUDE DESK**.
-- **On-device (Ollama):** set `GF_LLM_URL=http://localhost:11434/v1/messages`
-  Badge shows **LOCAL AI DESK**. `GF_MODEL` overrides the model either way.
+Then open `https://<laptop-ip>:8443/phone.html` and accept the warning once.
+The **native app does not need HTTPS** (it uses CameraX).
 
 ## Knobs (env vars)
 
@@ -79,30 +118,29 @@ add `http://<laptop-ip>:8080`.)
 |---|---|---|
 | `GF_KICKS` | 5 | kicks per match |
 | `GF_SHOOT_WINDOW` | 4.0 | seconds to swing before the kick is skied |
-| `GF_KEEPER_REACTION` | 0.45 | keeper reads your aim this many s before the kick — the feint window |
-| `GF_KEEPER_IQ` | 0.75 | 0 = keeper guesses randomly, 1 = near-psychic |
+| `GF_KEEPER_REACTION` | 0.45 | feint window (s before kick that the keeper sees) |
+| `GF_KEEPER_IQ` | 0.75 | 0 = random, 1 = near-psychic |
 | `GF_ANNOUNCE_S` / `GF_COUNTDOWN_S` / `GF_RESOLVE_S` | 2.2 / 3.0 / 3.8 | phase pacing |
 
-Kick sensitivity lives in `phone.html` (`KICK_MS = 3.0` m/s trigger,
-`F_MAX = 380` N = full power).
+Kick sensitivity: `KICK_MS` / `F_MAX` in `phone.html` or `ForcePoseEngine.kt`.
 
 ## Troubleshooting
 
 | symptom | fix |
 |---|---|
-| START button greyed out | phone must be connected — check the PHONE LED |
-| "CAMERA BLOCKED" on phone | use the https:// link (see above) |
-| "STEP BACK" badge stays red | move the phone back until shoulders **and** ankles are in frame |
-| kicks not registering | swing faster, or lower `KICK_MS` in phone.html |
-| keeper saves everything | lower `GF_KEEPER_IQ`, or learn to feint |
-| no commentary upgrades | desk badge shows TEMPLATE DESK → set the key/URL and restart |
+| START greyed out | phone must be connected — check PHONE LED |
+| Native app dark / no body | step back until **FULL BODY ✓**; grant camera |
+| Server not found in app | Termux `server.py` running; same-device `127.0.0.1:8080` |
+| "CAMERA BLOCKED" in Chrome | use HTTPS or USB `localhost` |
+| kicks not registering | swing faster, or lower `KICK_MS` |
+| keeper saves everything | lower `GF_KEEPER_IQ`, or feint harder |
 
 ## Dev
 
-`laptop/test_match.py` simulates a full match headlessly (run the server with
-small `GF_*_S` values first):
 ```
 $env:GF_ANNOUNCE_S="0.1"; $env:GF_COUNTDOWN_S="0.2"; $env:GF_SHOOT_WINDOW="1.0"; $env:GF_RESOLVE_S="0.1"
 python laptop/server.py     # terminal 1
 python laptop/test_match.py # terminal 2
 ```
+
+Optional AI Desk (templates work without it): `ANTHROPIC_API_KEY` or `GF_LLM_URL` for Ollama.
