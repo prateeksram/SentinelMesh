@@ -12,12 +12,13 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.SystemClock
-import android.system.Os
+import com.sentinelmesh.gesturefootball.npu.HtpNative
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
 import kotlin.math.min
+
 
 /**
  * Hexagon NPU pose via Qualcomm AI Hub precompiled QNN ONNX
@@ -244,7 +245,7 @@ class NpuPoseEngine private constructor(
 
         fun create(context: Context): NpuPoseEngine? {
             return try {
-                prepareHtpNativePath(context)
+                HtpNative.prepare(context)
                 val dir = File(context.filesDir, ASSET_DIR)
                 dir.mkdirs()
                 val needed = listOf(
@@ -259,7 +260,6 @@ class NpuPoseEngine private constructor(
                         }
                     }
                 }
-                // Keep detector assets for future ROI tracking / judge demo
                 for (name in listOf(
                     "pose_detector.onnx",
                     "pose_detector_qairt_context.bin",
@@ -276,72 +276,12 @@ class NpuPoseEngine private constructor(
                     }
                 }
                 val env = OrtEnvironment.getEnvironment()
-                val nativeDir = context.applicationInfo.nativeLibraryDir
-                val lm = openQnnSession(env, File(dir, "pose_landmark_detector.onnx"), nativeDir)
+                val lm = HtpNative.openQnnSession(env, File(dir, "pose_landmark_detector.onnx"))
                 NpuPoseEngine(env, lm)
             } catch (e: Exception) {
                 e.printStackTrace()
                 null
             }
-        }
-
-        /**
-         * Point ADSP at the extracted nativeLibraryDir (contains *Skel.so).
-         * Do not preload HTP libs — let ORT's QNN EP own backend setup.
-         */
-        private fun prepareHtpNativePath(context: Context) {
-            val nativeDir = context.applicationInfo.nativeLibraryDir
-            val adsp = listOf(
-                nativeDir,
-                "/vendor/dsp/cdsp",
-                "/vendor/lib/rfsa/adsp",
-                "/vendor/dsp",
-                "/dsp",
-            ).joinToString(";")
-            try {
-                Os.setenv("ADSP_LIBRARY_PATH", adsp, true)
-            } catch (_: Exception) {
-            }
-            // Verify skels are on disk (legacy packaging), not only inside the APK.
-            val skel = File(nativeDir, "libQnnHtpV79Skel.so")
-            if (!skel.exists()) {
-                android.util.Log.w("NpuPose", "Missing skel at ${skel.absolutePath}")
-            } else {
-                android.util.Log.i("NpuPose", "HTP skel ready: ${skel.length()} bytes @ $nativeDir")
-            }
-        }
-
-        private fun openQnnSession(
-            env: OrtEnvironment,
-            model: File,
-            nativeDir: String,
-        ): OrtSession {
-            val attempts = listOf(
-                mapOf(
-                    "backend_type" to "htp",
-                    "htp_performance_mode" to "burst",
-                ),
-                mapOf(
-                    "backend_type" to "htp",
-                    "htp_performance_mode" to "high_performance",
-                ),
-            )
-            var last: Exception? = null
-            for (qnnOpts in attempts) {
-                try {
-                    val tryOpts = OrtSession.SessionOptions()
-                    tryOpts.addQnn(qnnOpts)
-                    val session = env.createSession(model.absolutePath, tryOpts)
-                    android.util.Log.i(
-                        "NpuPose",
-                        "QNN HTP session OK · ${model.name} · opts=$qnnOpts",
-                    )
-                    return session
-                } catch (e: Exception) {
-                    last = e
-                }
-            }
-            throw last ?: IllegalStateException("QNN session failed for $nativeDir")
         }
     }
 }

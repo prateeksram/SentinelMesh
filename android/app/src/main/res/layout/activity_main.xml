@@ -209,4 +209,20 @@
         app:layout_constraintBottom_toBottomOf="@id/preview"
         app:layout_constraintEnd_toEndOf="@id/preview" />
 
+    <TextView
+        android:id="@+id/voiceBadge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="36dp"
+        android:layout_marginStart="10dp"
+        android:background="#BF07131C"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:text="VOICE · OFF"
+        android:textColor="@color/amber"
+        android:textStyle="bold"
+        android:textSize="11sp"
+        app:layout_constraintBottom_toBottomOf="@id/preview"
+        app:layout_constraintStart_toStartOf="@id/preview" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>

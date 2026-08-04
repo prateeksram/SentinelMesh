@@ -16,6 +16,17 @@ NPU assets live in `app/src/main/assets/npu/` (copied from `~/gf/models` AI Hub 
 
 **Notes:** AI Hub landmark net exposes 25 BlazePose points (face→hips); ankles/feet are synthesised from hips + ROI so ForcePose still runs. Requires `libcdsprpc.so` (`uses-native-library`) and `extractNativeLibs` so Hexagon can mmap `libQnnHtpV79Skel.so`.
 
+### Whisper (on-device ASR)
+- Models are **not** in the APK (~112 MB). Push into the app **internal** `files/whisper/` (via `run-as` — shell-owned `Android/data/...` is invisible to the app UID):
+  ```
+  .\tools\push_whisper_models.ps1
+  ```
+  (expects files under `%TEMP%\gf_whisper_npu` or edit `-Source`)
+- Runtime: ONNX Runtime QNN HTP · badge `VOICE · LISTENING`
+- Mel filterbank ships in `assets/whisper/mel_filters.bin`; tokenizer in `assets/whisper/tokenizer.json`
+- Commands: “ready”, “left/right/center”, trash-talk → Android TTS coach reply
+- Verified on S25 Ultra: encoder+decoder `QNN HTP OK`, end-to-end ASR ~2–10 s depending on utterance length
+
 ### Calibration flow
 First launch (or tap **CALIBRATE**): height/weight → T-pose hold → aim L/C/R holds → practice swing → **PLAY**. Profile never leaves the phone.
 
