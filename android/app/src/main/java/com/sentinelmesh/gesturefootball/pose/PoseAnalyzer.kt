@@ -38,6 +38,8 @@ class PoseAnalyzer(
         val liveSpeed: Float = 0f,
         val liveFoot: String = "R",
         val bodyOkStreak: Int = 0,
+        /** True when pose fills the stand-here guide (used by calibration). */
+        val inGuide: Boolean = false,
     )
 
     companion object {
@@ -265,9 +267,11 @@ class PoseAnalyzer(
         fun x(i: Int) = landmarks[i][0]
         fun y(i: Int) = landmarks[i][1]
 
-        val bodyOk = vis(L_SHO) > 0.5f && vis(R_SHO) > 0.5f &&
-            vis(L_ANK) > 0.5f && vis(R_ANK) > 0.5f
-        bodyOkStreak = if (bodyOk) bodyOkStreak + 1 else 0
+        val bodyOk = vis(L_SHO) > 0.45f && vis(R_SHO) > 0.45f &&
+            (vis(L_ANK) > 0.35f || vis(L_FOOT) > 0.35f) &&
+            (vis(R_ANK) > 0.35f || vis(R_FOOT) > 0.35f)
+        val inGuide = BodyGuide.contains(landmarks, vis)
+        bodyOkStreak = if (bodyOk || inGuide) bodyOkStreak + 1 else 0
         lastPoseMs = latency
         delegateLabel = label
 
@@ -329,6 +333,7 @@ class PoseAnalyzer(
                 liveSpeed = force.liveSpeed,
                 liveFoot = force.liveFoot,
                 bodyOkStreak = bodyOkStreak,
+                inGuide = inGuide,
             )
         )
     }
