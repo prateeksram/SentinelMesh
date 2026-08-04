@@ -7,6 +7,9 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -15,8 +18,16 @@ class GameClient(
     url: String = DEFAULT_URL,
     private val listener: Listener,
 ) {
+    sealed class ConnectStatus {
+        data class Connecting(val url: String) : ConnectStatus()
+        data class Connected(val url: String) : ConnectStatus()
+        data class Failed(val url: String, val message: String) : ConnectStatus()
+        data class Disconnected(val url: String) : ConnectStatus()
+    }
+
     interface Listener {
         fun onConnected(connected: Boolean)
+        fun onConnectStatus(status: ConnectStatus) {}
         fun onState(state: MatchState)
     }
 
@@ -34,6 +45,8 @@ class GameClient(
 
     private val client = OkHttpClient.Builder()
         .pingInterval(20, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
@@ -42,6 +55,10 @@ class GameClient(
     private var ws: WebSocket? = null
     private val open = AtomicBoolean(false)
     private val allowReconnect = AtomicBoolean(true)
+    /** Report Failed once for the next failure after a user tap on HOST. */
+    private val userConnectAttempt = AtomicBoolean(false)
+    /** Ignore onFailure/onClosed from cancel() while swapping sockets after HOST. */
+    private val suppressCloseEvents = AtomicBoolean(false)
 
     @Volatile var phase: String = "lobby"
         private set
@@ -51,11 +68,15 @@ class GameClient(
     fun connect() {
         allowReconnect.set(true)
         ws?.cancel()
+        // Connecting is emitted from reconnect() (user HOST tap) so auto-reconnect
+        // does not overwrite a Failed hint.
         val req = Request.Builder().url(this.url).build()
         ws = client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 open.set(true)
+                userConnectAttempt.set(false)
                 listener.onConnected(true)
+                listener.onConnectStatus(ConnectStatus.Connected(url))
                 webSocket.send(JSONObject().put("type", "hello").put("client", "phone").toString())
             }
 
@@ -88,30 +109,76 @@ class GameClient(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (suppressCloseEvents.get()) {
+                    open.set(false)
+                    return
+                }
                 open.set(false)
                 listener.onConnected(false)
+                if (userConnectAttempt.getAndSet(false)) {
+                    listener.onConnectStatus(ConnectStatus.Disconnected(url))
+                }
                 scheduleReconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (suppressCloseEvents.get()) {
+                    open.set(false)
+                    return
+                }
                 open.set(false)
                 listener.onConnected(false)
+                if (userConnectAttempt.getAndSet(false)) {
+                    listener.onConnectStatus(
+                        ConnectStatus.Failed(url, humanizeFailure(t, response))
+                    )
+                }
                 scheduleReconnect()
             }
         })
     }
 
-    /** Switch host (e.g. laptop IP) and reconnect. */
-    fun reconnect(newUrl: String) {
-        url = newUrl
+    /**
+     * User tapped HOST — reconnect and surface the next success/failure clearly.
+     * @return false if URL invalid (Failed already emitted)
+     */
+    fun reconnect(newUrl: String): Boolean {
+        val trimmed = newUrl.trim()
+        if (trimmed.isEmpty() || trimmed == "ws://" || trimmed == "wss://") {
+            listener.onConnectStatus(
+                ConnectStatus.Failed(
+                    DEFAULT_URL,
+                    "Enter laptop IP, e.g. 172.20.10.2:8080",
+                )
+            )
+            return false
+        }
+        // Reject host-less garbage like "ws:///ws"
+        val hostPart = trimmed.removePrefix("ws://").removePrefix("wss://")
+            .substringBefore('/').substringBefore(':')
+        if (hostPart.isBlank()) {
+            listener.onConnectStatus(
+                ConnectStatus.Failed(
+                    trimmed,
+                    "Enter laptop IP, e.g. 172.20.10.2:8080",
+                )
+            )
+            return false
+        }
+        url = trimmed
+        userConnectAttempt.set(true)
         allowReconnect.set(false)
+        suppressCloseEvents.set(true)
         ws?.cancel()
         ws = null
         open.set(false)
+        listener.onConnectStatus(ConnectStatus.Connecting(url))
         Thread {
             try { Thread.sleep(200) } catch (_: InterruptedException) {}
+            suppressCloseEvents.set(false)
             connect()
         }.start()
+        return true
     }
 
     private fun scheduleReconnect() {
@@ -165,6 +232,7 @@ class GameClient(
 
     fun close() {
         allowReconnect.set(false)
+        userConnectAttempt.set(false)
         ws?.close(1000, "bye")
         ws = null
     }
@@ -184,6 +252,22 @@ class GameClient(
                 u = u.trimEnd('/') + "/ws"
             }
             return u
+        }
+
+        fun humanizeFailure(t: Throwable, response: Response?): String {
+            val msg = (t.message ?: "").lowercase()
+            return when {
+                t is UnknownHostException || "unable to resolve" in msg || "unknown host" in msg ->
+                    "bad IP / DNS"
+                t is SocketTimeoutException || "timeout" in msg || "timed out" in msg ->
+                    "timeout — same Wi‑Fi?"
+                t is ConnectException || "failed to connect" in msg || "connection refused" in msg ||
+                    "econnrefused" in msg ->
+                    "server not running or wrong port"
+                response != null -> "HTTP ${response.code}"
+                t.message.isNullOrBlank() -> "connection failed"
+                else -> t.message!!.take(60)
+            }
         }
     }
 }
