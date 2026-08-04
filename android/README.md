@@ -1,44 +1,67 @@
 # Gesture Football — native Android striker
 
-Kotlin app that replaces the browser `phone.html` on the Snapdragon phone.
+Kotlin app that replaces the browser `phone.html` on the Snapdragon phone (Player 1).
 
 ## What it does
 
-- CameraX front camera
-- MediaPipe PoseLandmarker (**GPU fallback**)
-- **Hexagon NPU pose** via ONNX Runtime QNN + AI Hub `pose_landmark_detector` (8 Elite for Galaxy) — badge `DELEGATE · NPU · xx ms`
-- ForcePose engine (Newtons) — same math as the browser
-- **On-device calibration** → `player_profile.json` (height/weight, T-pose torso scale, aim envelope, practice-swing kick threshold, dominant foot)
-- Hand aim + leg-kick → WebSocket JSON identical to `phone.html`
-- Bullet-time skeleton frames for the TV orbit replay
+- CameraX front camera (camera-first play layout)
+- **Pose on Hexagon NPU** via ONNX Runtime QNN + AI Hub `pose_landmark_detector` — tap `DELEGATE` to cycle **NPU → GPU → CPU**
+- MediaPipe PoseLandmarker for GPU/CPU delegates
+- ForcePose engine (Newtons) + richer kick wire (`height` / `spin` / `strike` / `foot`)
+- On-device calibration → `player_profile.json` (never uploaded)
+- Anti-cheat: full-body frame streak required before kicks fire
+- Predictability HUD when you loop the same corner
+- Whisper Tiny ASR on Hexagon + Android TTS
+- Private coach (GenieX Qwen when weights present; grounded on-device coach otherwise)
+- `HOST` field → laptop IP (`ws://<ip>:8080/ws`)
+- **NEURAL LOAD** strip: POSE / ASR / LLM ms
 
-NPU assets live in `app/src/main/assets/npu/` (copied from `~/gf/models` AI Hub bundle). If QNN/HTP fails to load, the app falls back to MediaPipe GPU automatically.
+NPU pose assets: `app/src/main/assets/npu/`. Whisper weights are **not** in the APK.
 
-**Notes:** AI Hub landmark net exposes 25 BlazePose points (face→hips); ankles/feet are synthesised from hips + ROI so ForcePose still runs. Requires `libcdsprpc.so` (`uses-native-library`) and `extractNativeLibs` so Hexagon can mmap `libQnnHtpV79Skel.so`.
+### Measured on Galaxy S25 Ultra (Snapdragon 8 Elite)
 
-### Whisper (on-device ASR)
-- Models are **not** in the APK (~112 MB). Push into the app **internal** `files/whisper/` (via `run-as` — shell-owned `Android/data/...` is invisible to the app UID):
-  ```
-  .\tools\push_whisper_models.ps1
-  ```
-  (expects files under `%TEMP%\gf_whisper_npu` or edit `-Source`)
-- Runtime: ONNX Runtime QNN HTP · badge `VOICE · LISTENING`
-- Mel filterbank ships in `assets/whisper/mel_filters.bin`; tokenizer in `assets/whisper/tokenizer.json`
-- Commands: “ready”, “left/right/center”, trash-talk → Android TTS coach reply
-- Verified on S25 Ultra: encoder+decoder `QNN HTP OK`, end-to-end ASR ~2–10 s depending on utterance length
+| Block | Delegate | Typical |
+|---|---|---|
+| Pose landmark | QNN HTP (NPU) | ~15–40 ms / frame (live badge) |
+| Whisper Tiny encode+decode | QNN HTP | ~1–10 s / utterance (length-dependent) |
+| Private coach line | on-device grounded / Qwen | &lt;50 ms grounded; GenieX when pushed |
 
-### Calibration flow
-First launch (or tap **CALIBRATE**): height/weight → T-pose hold → aim L/C/R holds → practice swing → **PLAY**. Profile never leaves the phone.
+Use QUAD `/quad-profile` for formal power numbers if available on the bench.
 
-## Build (this machine)
+### Whisper
+```powershell
+.\tools\push_whisper_models.ps1
+```
+Internal `files/whisper/` via `run-as`. Badge: `VOICE · LISTENING`.
+
+### Qwen / coach weights (optional)
+```powershell
+.\tools\push_qwen_models.ps1 -Source <extracted_geniex_folder>
+```
+Without weights the app still coaches offline from profile + kick memory (`COACH` backend on NEURAL LOAD).
+
+### Calibration
+First launch (or **CALIBRATE**): height/weight → T-pose → aim L/C/R → practice swing → **PLAY**.
+
+### Host
+Type laptop address (e.g. `192.168.1.20:8080`) → **HOST**. Prefs persist. Protocol: [`docs/phone_protocol.md`](../docs/phone_protocol.md).
+
+## Build
 
 ```powershell
-$env:JAVA_HOME = (Get-ChildItem "$env:USERPROFILE\android-dev\jdk" -Directory | Select-Object -First 1).FullName
-$env:ANDROID_HOME = "$env:USERPROFILE\android-dev\sdk"
+$env:JAVA_HOME = "C:\Users\prate\android-dev\jdk\jdk-17.0.20+8"
+$env:ANDROID_HOME = "C:\Users\prate\android-dev\sdk"
 cd android
 .\gradlew.bat :app:assembleDebug
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
-Server must be running on the phone (`Termux`: `python ~/gf/laptop/server.py`).
-The app connects to `ws://127.0.0.1:8080/ws` (same-device localhost).
+## 90s demo script
+
+1. Show `DELEGATE · NPU` → tap → GPU → CPU → numbers change  
+2. Calibrate once → “profile never leaves this Snapdragon”  
+3. Full body → kick → ForcePose Newtons + zone/height  
+4. Say “ready” / trash-talk → Whisper NPU → TTS  
+5. Miss → private coach line  
+6. Airplane mode → still coaches  
+7. Point at **NEURAL LOAD** strip  

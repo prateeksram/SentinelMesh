@@ -3,6 +3,7 @@ package com.sentinelmesh.gesturefootball.pose
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.SystemClock
+import android.util.Log
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
@@ -14,7 +15,8 @@ import com.sentinelmesh.gesturefootball.profile.PlayerProfile
 
 /**
  * Pose + ForcePose / aim / kick.
- * Prefers Hexagon NPU (AI Hub QNN ONNX); falls back to MediaPipe GPU.
+ * Prefers Hexagon NPU (AI Hub QNN ONNX); falls back to MediaPipe GPU/CPU.
+ * Tap-cycle: NPU → GPU → CPU → NPU for judge latency demos.
  */
 class PoseAnalyzer(
     context: Context,
@@ -22,6 +24,8 @@ class PoseAnalyzer(
     private val onKick: (ForcePoseEngine.KickEvent) -> Unit,
     private val onSkeleton: (Long, List<FloatArray>) -> Unit,
 ) {
+    enum class Mode { NPU, GPU, CPU }
+
     data class Hud(
         val zone: String,
         val bodyOk: Boolean,
@@ -30,8 +34,10 @@ class PoseAnalyzer(
         val latencyMs: Long,
         val delegateLabel: String,
         val wristXMirrored: Float? = null,
+        val wristY: Float? = null,
         val liveSpeed: Float = 0f,
         val liveFoot: String = "R",
+        val bodyOkStreak: Int = 0,
     )
 
     companion object {
@@ -46,18 +52,26 @@ class PoseAnalyzer(
         const val L_FOOT = 31
         const val R_FOOT = 32
         private const val MODEL_ASSET = "pose_landmarker_lite.task"
+        private const val TAG = "PoseAnalyzer"
+        /** Full-body frames required before a kick can fire (anti-cheat). */
+        const val BODY_OK_FRAMES = 8
     }
 
     private val appContext = context.applicationContext
     private val force = ForcePoseEngine()
-    private var landmarker: PoseLandmarker? = null
+    private var landmarkerGpu: PoseLandmarker? = null
+    private var landmarkerCpu: PoseLandmarker? = null
     private var npu: NpuPoseEngine? = null
+    private var npuAvailable = false
+    var mode: Mode = Mode.GPU
+        private set
     var zone: String = "C"
         private set
     var phase: String = "lobby"
     var calibrationSwing: Boolean = false
     private var lastKickAt = 0L
     private var lastShootPhase = false
+    private var bodyOkStreak = 0
 
     private var aimLMax = 0.34f
     private var aimCMin = 0.40f
@@ -66,33 +80,65 @@ class PoseAnalyzer(
 
     var delegateLabel: String = "GPU"
         private set
+    var lastPoseMs: Long = 0
+        private set
 
     init {
         npu = NpuPoseEngine.create(appContext)
-        if (npu != null) {
+        npuAvailable = npu != null
+        if (npuAvailable) {
+            mode = Mode.NPU
             delegateLabel = "NPU"
         } else {
-            ensureGpu()
+            mode = Mode.GPU
+            ensureLandmarker(Delegate.GPU)
         }
     }
 
-    private fun ensureGpu(): Boolean {
-        if (landmarker != null) {
-            delegateLabel = "GPU"
+    /** Cycle NPU → GPU → CPU → NPU (skips NPU if unavailable). */
+    fun cycleDelegate(): String {
+        mode = when (mode) {
+            Mode.NPU -> Mode.GPU
+            Mode.GPU -> Mode.CPU
+            Mode.CPU -> if (npuAvailable) Mode.NPU else Mode.GPU
+        }
+        when (mode) {
+            Mode.NPU -> {
+                if (npu == null) npu = NpuPoseEngine.create(appContext)
+                npuAvailable = npu != null
+                if (!npuAvailable) {
+                    mode = Mode.GPU
+                    ensureLandmarker(Delegate.GPU)
+                } else {
+                    delegateLabel = "NPU"
+                }
+            }
+            Mode.GPU -> ensureLandmarker(Delegate.GPU)
+            Mode.CPU -> ensureLandmarker(Delegate.CPU)
+        }
+        Log.i(TAG, "delegate → $delegateLabel")
+        return delegateLabel
+    }
+
+    private fun ensureLandmarker(delegate: Delegate): Boolean {
+        val slot = if (delegate == Delegate.CPU) ::landmarkerCpu else ::landmarkerGpu
+        if (slot.get() != null) {
+            delegateLabel = if (delegate == Delegate.CPU) "CPU" else "GPU"
             return true
         }
         return try {
             val base = BaseOptions.builder()
                 .setModelAssetPath(MODEL_ASSET)
-                .setDelegate(Delegate.GPU)
+                .setDelegate(delegate)
                 .build()
             val options = PoseLandmarker.PoseLandmarkerOptions.builder()
                 .setBaseOptions(base)
                 .setRunningMode(RunningMode.VIDEO)
                 .setNumPoses(1)
                 .build()
-            landmarker = PoseLandmarker.createFromOptions(appContext, options)
-            delegateLabel = "GPU"
+            val lm = PoseLandmarker.createFromOptions(appContext, options)
+            if (delegate == Delegate.CPU) landmarkerCpu = lm else landmarkerGpu = lm
+            delegateLabel = if (delegate == Delegate.CPU) "CPU" else "GPU"
             true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -112,7 +158,6 @@ class PoseAnalyzer(
         force.setKickThreshold(ms)
     }
 
-    /** Voice / UI override for aim zone. */
     fun forceZone(z: String) {
         if (z == "L" || z == "C" || z == "R") zone = z
     }
@@ -120,16 +165,25 @@ class PoseAnalyzer(
     fun close() {
         npu?.close()
         npu = null
-        landmarker?.close()
-        landmarker = null
+        landmarkerGpu?.close()
+        landmarkerGpu = null
+        landmarkerCpu?.close()
+        landmarkerCpu = null
     }
 
     fun analyze(bitmap: Bitmap, timestampMs: Long) {
-        val npuEngine = npu
-        if (npuEngine != null) {
-            analyzeNpu(npuEngine, bitmap, timestampMs)
-        } else {
-            analyzeGpu(bitmap, timestampMs)
+        when (mode) {
+            Mode.NPU -> {
+                val engine = npu
+                if (engine != null) analyzeNpu(engine, bitmap, timestampMs)
+                else {
+                    mode = Mode.GPU
+                    ensureLandmarker(Delegate.GPU)
+                    analyzeMp(bitmap, timestampMs, landmarkerGpu, "GPU")
+                }
+            }
+            Mode.GPU -> analyzeMp(bitmap, timestampMs, landmarkerGpu, "GPU")
+            Mode.CPU -> analyzeMp(bitmap, timestampMs, landmarkerCpu, "CPU")
         }
     }
 
@@ -140,15 +194,17 @@ class PoseAnalyzer(
             e.printStackTrace()
             npu?.close()
             npu = null
-            if (ensureGpu()) {
-                analyzeGpu(bitmap, timestampMs)
+            npuAvailable = false
+            mode = Mode.GPU
+            if (ensureLandmarker(Delegate.GPU)) {
+                analyzeMp(bitmap, timestampMs, landmarkerGpu, "GPU")
             } else {
                 onHud(Hud(zone, false, 0f, null, 0, "FAIL"))
             }
             return
         }
         if (result == null) {
-            onHud(Hud(zone, false, 0f, null, 0, "NPU"))
+            onHud(Hud(zone, false, 0f, null, 0, "NPU", bodyOkStreak = bodyOkStreak))
             return
         }
         processLandmarks(
@@ -161,19 +217,30 @@ class PoseAnalyzer(
         )
     }
 
-    private fun analyzeGpu(bitmap: Bitmap, timestampMs: Long) {
-        val lm = landmarker ?: run {
-            onHud(Hud(zone, false, 0f, null, 0, delegateLabel))
+    private fun analyzeMp(
+        bitmap: Bitmap,
+        timestampMs: Long,
+        lm: PoseLandmarker?,
+        label: String,
+    ) {
+        val landmarker = lm ?: run {
+            ensureLandmarker(if (label == "CPU") Delegate.CPU else Delegate.GPU)
+            if (label == "CPU") landmarkerCpu else landmarkerGpu
+        }
+        if (landmarker == null) {
+            onHud(Hud(zone, false, 0f, null, 0, label, bodyOkStreak = bodyOkStreak))
             return
         }
         val t0 = SystemClock.elapsedRealtime()
         val mpImage = BitmapImageBuilder(bitmap).build()
-        val result: PoseLandmarkerResult = lm.detectForVideo(mpImage, timestampMs)
+        val result: PoseLandmarkerResult = landmarker.detectForVideo(mpImage, timestampMs)
         val latency = SystemClock.elapsedRealtime() - t0
         val landmarks = result.landmarks().firstOrNull()
         val world = result.worldLandmarks().firstOrNull()
         if (landmarks == null) {
-            onHud(Hud(zone, false, 0f, null, latency, delegateLabel))
+            bodyOkStreak = 0
+            lastPoseMs = latency
+            onHud(Hud(zone, false, 0f, null, latency, label, bodyOkStreak = 0))
             return
         }
         val pts2d = landmarks.map { floatArrayOf(it.x(), it.y()) }
@@ -183,7 +250,7 @@ class PoseAnalyzer(
             world = world?.map { floatArrayOf(it.x(), it.y(), it.z()) },
             latency = latency,
             timestampMs = timestampMs,
-            label = delegateLabel,
+            label = label,
         )
     }
 
@@ -200,15 +267,20 @@ class PoseAnalyzer(
 
         val bodyOk = vis(L_SHO) > 0.5f && vis(R_SHO) > 0.5f &&
             vis(L_ANK) > 0.5f && vis(R_ANK) > 0.5f
+        bodyOkStreak = if (bodyOk) bodyOkStreak + 1 else 0
+        lastPoseMs = latency
+        delegateLabel = label
 
         val hipY = (y(L_HIP) + y(R_HIP)) / 2f
         val wrists = listOf(L_WRI, R_WRI)
             .filter { y(it) < hipY && vis(it) > 0.4f }
             .minByOrNull { y(it) }
         var wristXMirrored: Float? = null
+        var wristY: Float? = null
         if (wrists != null) {
             val wx = 1f - x(wrists)
             wristXMirrored = wx
+            wristY = y(wrists)
             zone = when {
                 zone != "L" && wx < aimLMax -> "L"
                 zone != "R" && wx > aimRMin -> "R"
@@ -225,7 +297,8 @@ class PoseAnalyzer(
         val lfY = (y(L_ANK) + y(L_FOOT)) / 2f
         val rfX = (x(R_ANK) + x(R_FOOT)) / 2f
         val rfY = (y(R_ANK) + y(R_FOOT)) / 2f
-        val canKick = (shoot || calibrationSwing) && bodyOk && timestampMs - lastKickAt > 900
+        val framedOk = calibrationSwing || bodyOkStreak >= BODY_OK_FRAMES
+        val canKick = (shoot || calibrationSwing) && framedOk && timestampMs - lastKickAt > 900
 
         val kick = force.update(
             nowMs = timestampMs,
@@ -237,6 +310,7 @@ class PoseAnalyzer(
             hipMidY = (y(L_HIP) + y(R_HIP)) / 2f,
             zone = zone,
             canKick = canKick,
+            aimHandY = wristY,
         )
         if (kick != null) {
             lastKickAt = timestampMs
@@ -251,8 +325,10 @@ class PoseAnalyzer(
             Hud(
                 zone, bodyOk, force.liveForce, landmarks, latency, label,
                 wristXMirrored = wristXMirrored,
+                wristY = wristY,
                 liveSpeed = force.liveSpeed,
                 liveFoot = force.liveFoot,
+                bodyOkStreak = bodyOkStreak,
             )
         )
     }

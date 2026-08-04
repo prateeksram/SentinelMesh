@@ -51,7 +51,7 @@ It only sends tiny JSON (`aim`, `kick`, optional extras). No video leaves the ph
 |---|---|---|
 | MediaPipe Pose (8 Elite Galaxy) | QNN / precompiled ONNX | **Wired into app** (NPU path) |
 | Whisper Tiny | QNN / precompiled ONNX | **Verified on S25** — push via `tools/push_whisper_models.ps1` |
-| Qwen3 0.6B | GenieX QAIRT w4a16 | On phone — not wired yet |
+| Qwen3 0.6B | GenieX QAIRT w4a16 | **Wired coach path** — grounded offline always; GenieX weights via `tools/push_qwen_models.ps1` |
 
 ---
 
@@ -117,25 +117,25 @@ Work on the **provided laptop** if disk is tight; app lives in `android/`. Deplo
 | 0 | Pull `prateek`, open `android/`, confirm app installs and joins laptop `server.py` | LED green, match starts from TV |
 | 1 | **Calibration screen** — height/weight + T-pose + practice swing → `player_profile.json` | ForcePose uses profile scale/mass; kick threshold personal |
 | 2 | **NPU pose swap** — load QNN pose from phone storage / pushed assets | Badge shows `NPU` + ms; fallback GPU if load fails | ✅ wired (ORT QNN HTP + AI Hub assets; GPU fallback) |
-| 3 | **Latency HUD** — toggle CPU / GPU / NPU on same frame | Side-by-side numbers for judges |
+| 3 | **Latency HUD** — toggle CPU / GPU / NPU on same frame | Side-by-side numbers for judges | ✅ tap `DELEGATE` badge + NEURAL LOAD |
 
 ### Afternoon — skill + voice
 | # | Task | Done when |
 |---|---|---|
-| 4 | **6-zone + dirDeg** — high/low from hand or kick elevation | TV or logs show high/low; protocol documented for UNO Q |
-| 5 | **Curve / chip / foot** fields on `kick` message | Server accepts extras (ignore if solo); UNO Q can match later |
-| 6 | **TTS coach** — speak line on announce / miss / goal | You hear the phone talk |
-| 7 | **Whisper** — “ready” / wake word / short trash-talk → coach reply | Mic path works offline |
-| 8 | **Qwen coach** — grounded on profile + last kicks | Private lines, airplane-mode OK |
+| 4 | **6-zone + dirDeg** — high/low from hand or kick elevation | TV or logs show high/low; protocol documented for UNO Q | ✅ `height` + `docs/phone_protocol.md` |
+| 5 | **Curve / chip / foot** fields on `kick` message | Server accepts extras (ignore if solo); UNO Q can match later | ✅ |
+| 6 | **TTS coach** — speak line on announce / miss / goal | You hear the phone talk | ✅ |
+| 7 | **Whisper** — “ready” / wake word / short trash-talk → coach reply | Mic path works offline | ✅ |
+| 8 | **Qwen coach** — grounded on profile + last kicks | Private lines, airplane-mode OK | ✅ |
 
 ### Evening — differentiators + glue
 | # | Task | Done when |
 |---|---|---|
-| 9 | **Private predictability HUD** | Warning before repeat patterns |
-| 10 | **Anti-cheat full-body gate** | Close-up hand cannot fire kicks |
-| 11 | **IMU kick assist / failover** | Kick still registers on brief occlusion |
-| 12 | **Protocol freeze doc** — `docs/phone_protocol.md` | Teammates can build UNO Q P2 against it |
-| 13 | **Host mode switch** — setting: laptop IP vs localhost | Final arch: laptop hosts, phone is P1 only |
+| 9 | **Private predictability HUD** | Warning before repeat patterns | ✅ |
+| 10 | **Anti-cheat full-body gate** | Close-up hand cannot fire kicks | ✅ |
+| 11 | **IMU kick assist / failover** | Kick still registers on brief occlusion | stretch |
+| 12 | **Protocol freeze doc** — `docs/phone_protocol.md` | Teammates can build UNO Q P2 against it | ✅ |
+| 13 | **Host mode switch** — setting: laptop IP vs localhost | Final arch: laptop hosts, phone is P1 only | ✅ |
 
 ### Stretch (if time)
 - Depth-cam metric scale · rPPG pressure · warm-up ghost · signature kick · player card · sonar Doppler
