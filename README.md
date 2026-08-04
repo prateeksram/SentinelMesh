@@ -1,126 +1,209 @@
-# GESTURE FOOTBALL ⚽ — solo edition
+# GESTURE FOOTBALL ⚽
 
-A penalty shootout you play with your body. Your phone's camera tracks you:
-your **raised hand aims** the shot (left / centre / right) and a **fast leg
-swing kicks** it. **THE WALL** — an AI goalkeeper — watches your hand, studies
-your shot history, and dives.
+Body-controlled penalty shootout on Snapdragon silicon.
 
-The twist: the keeper reads your aim with human-like reaction lag
-(~0.45 s before the kick). Hold a fake direction, switch your hand at the
-last moment, then swing — and send the machine the wrong way.
+**Hand aims. Leg kicks. ForcePose measures Newtons on-device.**
 
-Branch: `prateek` · Target silicon: Galaxy S25 (Snapdragon 8 Elite) + laptop TV.
+Branch: `prateek` · Phone: Galaxy S25 (Snapdragon 8 Elite)
 
 ---
 
-## What's built (today)
+## End architecture (target)
+
+| Role | Device | Job |
+|---|---|---|
+| **Player 1** | Phone (this repo's `android/` app) | Hand → direction, leg → kick, all AI on-device |
+| **Player 2** | Arduino UNO Q (teammates) | Same protocol — hand aim + leg kick |
+| **Host** | Laptop | Match engine, referee, TV stadium, WebSocket hub |
+
+The phone is **not** the host in the final design. It is Player 1’s edge-AI station.
+It only sends tiny JSON (`aim`, `kick`, optional extras). No video leaves the phone.
+
+> **Today’s interim:** laptop (or Termux on the phone) hosts a *solo* you-vs-THE-WALL match so Player 1 can be built and demoed before UNO Q lands. Same WebSocket contract either way.
+
+---
+
+## What's already built
 
 ### Playable stack
 | Piece | Where | Status |
 |---|---|---|
-| Match server + AI keeper + WebSocket hub | `laptop/server.py` (also runs on-phone via Termux) | Done |
-| TV stadium (scoreboard, aim reticle, keeper dive, ball flight) | `laptop/public/tv.html` | Done |
+| Match server + AI keeper + WebSocket hub | `laptop/server.py` | Done (solo / THE WALL) |
+| TV stadium | `laptop/public/tv.html` | Done |
 | Browser striker (fallback) | `laptop/public/phone.html` | Done |
-| **Native Android striker app** | `android/` — installed on S25 as `com.sentinelmesh.gesturefootball` | Done (GPU path) |
-| ForcePose (arXiv:2503.22363) — kicks in real Newtons | Browser + native (`ForcePoseEngine.kt`) | Done |
-| Bullet-time 3D skeleton replay on TV | Phone captures world landmarks → TV orbits | Done |
+| **Native Android striker** | `android/` → `com.sentinelmesh.gesturefootball` | Done (GPU pose) |
+| ForcePose (arXiv:2503.22363) — Newtons | Browser + `ForcePoseEngine.kt` | Done |
+| Bullet-time 3D skeleton → TV orbit | Phone world landmarks | Done |
 | Headless match test | `laptop/test_match.py` | Done |
 
-### Native app (Phase 1 — live on device)
+### Native app (Phase 1 — on the S25 now)
 - CameraX front camera
-- MediaPipe PoseLandmarker (**GPU** delegate, ~30–40 ms/frame)
-- Hand aim + leg-kick ForcePose → same WebSocket JSON as the browser
-- HUD: `BODY AI · ON-DEVICE`, `FORCEPOSE · N`, `DELEGATE · GPU · xx ms`
-- Connects to `ws://127.0.0.1:8080/ws` (Termux server on the same phone)
+- MediaPipe PoseLandmarker (**GPU**, ~30–40 ms/frame)
+- Hand aim + leg-kick ForcePose → same JSON as `phone.html`
+- HUD: `BODY AI · ON-DEVICE` · `FORCEPOSE · N` · `DELEGATE · GPU · xx ms`
+- Default server URL: `ws://127.0.0.1:8080/ws` (change to laptop IP for final host)
 
 ### AI Hub models already on the phone (`~/gf/models`, ~1 GB)
-Staged for tomorrow — **not wired into the app yet**:
+**On disk — not wired into the app yet:**
 
 | Model | Runtime | Use |
 |---|---|---|
 | MediaPipe Pose (8 Elite Galaxy) | QNN context + precompiled ONNX | Hexagon NPU pose |
-| Whisper Tiny | QNN / precompiled ONNX | On-device speech recognition |
-| Qwen3 0.6B | GenieX QAIRT w4a16 | On-device LLM for THE WALL |
+| Whisper Tiny | QNN / precompiled ONNX | On-device ASR |
+| Qwen3 0.6B | GenieX QAIRT w4a16 | On-device LLM coach / voice |
 
 ---
 
-## What to build tomorrow
+## Phone build backlog (everything we want on Player 1)
 
-Priority order for the hackathon demo:
+This is the full phone-side scope. Laptop TV polish and UNO Q are **out of scope here** — teammates own those; phone only speaks the protocol.
 
-1. **NPU pose swap (Phase 2)** — load the QNN pose binaries from `~/gf/models` via LiteRT/QNN (or ONNX Runtime QNN EP). Badge should read `DELEGATE · NPU` with a CPU/GPU/NPU latency toggle for judges.
-2. **THE WALL speaks** — Android TTS first (fast), then Whisper Tiny for hearing trash-talk, then Qwen 0.6B Genie for on-device commentary (move the desk off the laptop).
-3. **Spectacle polish** — selfie segmentation (you composited into the stadium), 6-zone shots from kick elevation (`dirDeg` already sent), NEURAL LOAD HUD on the TV.
-4. **Optional stretch** — learning keeper (trains on your run-up tells mid-match), rPPG pressure meter, Stable Diffusion match poster, Llama 3.2 export (license-gated; Qwen is the ready substitute).
-5. **Teammate integration** — freeze the WebSocket JSON contract; UNO Q / X Elite stations plug into the same hub.
+### A — Per-user on-device calibration (do early)
+20-second flow → `player_profile.json` on device (never uploaded):
 
-Build the APK on the provided laptop if this machine is out of disk; project + toolchain notes are in `android/README.md`.
+1. Stand still + T-pose → **torso scale in metres** (stop guessing 0.52 m)
+2. Enter **height + weight** → personal leg mass for ForcePose Newtons
+3. One practice swing → **personal kick threshold** (your fidget vs real strike)
+4. Detect **dominant foot**
+5. Learn **aim envelope** — how *you* hold L/C/R
+6. Optional online head: few practice kicks update aim/kick classifier **on NPU**
+
+Pitch line: *“Every player gets a private biomechanical profile on the Snapdragon.”*
+
+### B — Skill ceiling (richer kick, same wire)
+| Feature | Signal | Wire field (extend JSON) |
+|---|---|---|
+| 6-zone aim | hand X + Y / kick elevation | `zone` + `height` (`H`/`L`) or keep using `dirDeg` |
+| Curve / spin | ankle yaw at contact | `spin` ∈ [-1,1] |
+| Chip vs drive | foot pitch + swing path | `strike` = `chip`\|`drive` |
+| Strong / weak foot | which leg swung | `foot` = `L`\|`R` |
+| Run-up quality | steps + plant-foot (pose + IMU) | `plantStability` |
+| Kick prediction | extrapolate foot ~80 ms | earlier `kick` event (feel snappier) |
+
+### C — Private HUD (only on the phone — never on TV)
+- “You’re predictable” — on-device model on *your* history
+- Feint coach timed to keeper reaction window
+- Opponent read from broadcast match state (when P2 exists)
+- Focus meter — stillness before countdown or power capped
+- Anti-cheat framing — reject hand-only close-ups; require full body (+ depth if available)
+
+### D — On-device AI stack (models already downloaded)
+1. **NPU pose** — QNN binaries from `~/gf/models` → badge `DELEGATE · NPU`
+2. **CPU / GPU / NPU latency toggle** — judge candy
+3. **Whisper Tiny** — hear “ready”, name, trash-talk
+4. **Qwen 0.6B** — private earpiece coach (not public desk)
+5. **Android TTS** — coach speaks immediately (ship before Genie if needed)
+
+### E — Phone-native flex
+- Dual-cam / depth → metric ForcePose without torso guess
+- IMU + ultrasonic Doppler failover (“cover the lens, still score”)
+- rPPG heart-rate → private pressure meter
+- Warm-up arena on phone alone (ghost keeper) before joining laptop lobby
+- Signature kick — save best skeleton; score similarity next strikes
+- Player card at full time (template or on-device image gen)
+- Haptics language — countdown / feint window / goal / save patterns
+- NEURAL LOAD strip on phone UI (which block, ms)
 
 ---
 
-## Quick start (recommended: native app + phone-hosted server)
+## Tomorrow — start-here build plan (phone)
 
-1. **On the phone (Termux):**
-   ```
-   cd ~/gf/laptop && python server.py
-   ```
-2. **Open the native app** — *Gesture Football* (not Chrome). Allow camera.
-3. **On the laptop TV:** `http://localhost:8080/tv.html`  
-   (USB: `adb reverse tcp:8080 tcp:8080` if the server runs on the phone; or run `server.py` on the laptop instead.)
-4. Prop the phone 2–3 m away → **FULL BODY ✓** → **START MATCH** on the TV.
+Work on the **provided laptop** if disk is tight; app lives in `android/`. Deploy to S25 over USB. Point the app at the **laptop host** (`ws://<laptop-ip>:8080/ws`) for the real architecture.
 
-### Browser fallback
-- Phone: `http://localhost:8080/phone.html` (USB reverse) or `https://<laptop-ip>:8443/phone.html` with certs (see below).
+### Morning — foundation
+| # | Task | Done when |
+|---|---|---|
+| 0 | Pull `prateek`, open `android/`, confirm app installs and joins laptop `server.py` | LED green, match starts from TV |
+| 1 | **Calibration screen** — height/weight + T-pose + practice swing → `player_profile.json` | ForcePose uses profile scale/mass; kick threshold personal |
+| 2 | **NPU pose swap** — load QNN pose from phone storage / pushed assets | Badge shows `NPU` + ms; fallback GPU if load fails |
+| 3 | **Latency HUD** — toggle CPU / GPU / NPU on same frame | Side-by-side numbers for judges |
 
-### Rebuild / reinstall the Android app
+### Afternoon — skill + voice
+| # | Task | Done when |
+|---|---|---|
+| 4 | **6-zone + dirDeg** — high/low from hand or kick elevation | TV or logs show high/low; protocol documented for UNO Q |
+| 5 | **Curve / chip / foot** fields on `kick` message | Server accepts extras (ignore if solo); UNO Q can match later |
+| 6 | **TTS coach** — speak line on announce / miss / goal | You hear the phone talk |
+| 7 | **Whisper** — “ready” / wake word / short trash-talk → coach reply | Mic path works offline |
+| 8 | **Qwen coach** — grounded on profile + last kicks | Private lines, airplane-mode OK |
+
+### Evening — differentiators + glue
+| # | Task | Done when |
+|---|---|---|
+| 9 | **Private predictability HUD** | Warning before repeat patterns |
+| 10 | **Anti-cheat full-body gate** | Close-up hand cannot fire kicks |
+| 11 | **IMU kick assist / failover** | Kick still registers on brief occlusion |
+| 12 | **Protocol freeze doc** — `docs/phone_protocol.md` | Teammates can build UNO Q P2 against it |
+| 13 | **Host mode switch** — setting: laptop IP vs localhost | Final arch: laptop hosts, phone is P1 only |
+
+### Stretch (if time)
+- Depth-cam metric scale · rPPG pressure · warm-up ghost · signature kick · player card · sonar Doppler
+
+### Do *not* block on tomorrow (teammates / later)
+- UNO Q Player 2 implementation
+- Laptop 3D stadium / broadcast package (nice, but not phone)
+- Llama 3.2 (license export); Qwen is the ready LLM
+
+---
+
+## Quick start (today)
+
+### A) Native app + server (dev)
+1. Laptop or Termux: `cd laptop && python server.py`
+2. Phone: open **Gesture Football** app (allow camera)
+3. Laptop browser: `http://localhost:8080/tv.html` → START MATCH  
+   If server is on the phone: `adb reverse tcp:8080 tcp:8080` then open TV via reverse, **or** run server on the laptop (preferred for final arch).
+4. Prop phone 2–3 m → **FULL BODY ✓** → play
+
+### B) Rebuild app
 ```
 cd android
 .\gradlew.bat :app:assembleDebug
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
+See `android/README.md` for JDK / SDK paths.
+
+### C) Browser fallback
+`http://localhost:8080/phone.html` (USB) or `https://<host-ip>:8443/phone.html` with certs (below).
 
 ---
 
 ## The ForcePose engine
 
-Kick power isn't a made-up number — the phone measures your kick in **real
-Newtons**, implementing the pipeline from
-[ForcePose (arXiv:2503.22363)](https://arxiv.org/abs/2503.22363) on-device:
+On-device implementation of [ForcePose (arXiv:2503.22363)](https://arxiv.org/abs/2503.22363):
 
-1. MediaPipe pose → 33 landmarks per frame
-2. Savitzky–Golay temporal smoothing of the foot trajectory
-3. Torso-normalized metric scale (pixels → metres)
-4. Central-difference velocity + acceleration
-5. Force head: **F = m_leg × a_peak** (Winter tables; paper's BiLSTM weights aren't public)
+1. Pose → 33 landmarks  
+2. Savitzky–Golay foot smoothing  
+3. Torso-normalized metres (**tomorrow: replace with per-user calibration**)  
+4. Velocity + acceleration  
+5. **F = m_leg × a_peak** (Winter tables; paper BiLSTM weights not public)
 
-Pass your weight for calibrated numbers: `phone.html?kg=82` (default 70).
+Browser: `phone.html?kg=82` · Native: calibration profile weight.
 
 ## How to play
 
-- **Aim** — raise a hand; L / C / R steers the TV reticle.
-- **Kick** — swing your leg on **KICK!** · ~380 N = full power.
-- **Feint** — point one way, snap your hand late, then swing.
-- 5 kicks per match. Beat the machine.
+- **Aim** — raised hand → L / C / R  
+- **Kick** — leg swing on **KICK!** · ~380 N ≈ full power  
+- **Feint** — hold a fake corner, switch late, then swing  
+- Today: 5 kicks vs THE WALL · Target: P1 phone vs P2 UNO Q on laptop host  
 
 ## Phone camera & HTTPS (browser only)
 
-Off `localhost`, browsers block the camera on plain HTTP. Next to `server.py`:
 ```
 openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem \
   -days 365 -subj "/CN=gesture-football"
 ```
-Then open `https://<laptop-ip>:8443/phone.html` and accept the warning once.
-The **native app does not need HTTPS** (it uses CameraX).
+Native app uses CameraX — **no HTTPS needed**.
 
-## Knobs (env vars)
+## Knobs (server env)
 
 | var | default | meaning |
 |---|---|---|
 | `GF_KICKS` | 5 | kicks per match |
-| `GF_SHOOT_WINDOW` | 4.0 | seconds to swing before the kick is skied |
-| `GF_KEEPER_REACTION` | 0.45 | feint window (s before kick that the keeper sees) |
-| `GF_KEEPER_IQ` | 0.75 | 0 = random, 1 = near-psychic |
-| `GF_ANNOUNCE_S` / `GF_COUNTDOWN_S` / `GF_RESOLVE_S` | 2.2 / 3.0 / 3.8 | phase pacing |
+| `GF_SHOOT_WINDOW` | 4.0 | seconds to swing or ski |
+| `GF_KEEPER_REACTION` | 0.45 | feint window (s) |
+| `GF_KEEPER_IQ` | 0.75 | 0 = random · 1 = psychic |
+| `GF_ANNOUNCE_S` / `GF_COUNTDOWN_S` / `GF_RESOLVE_S` | 2.2 / 3.0 / 3.8 | pacing |
 
 Kick sensitivity: `KICK_MS` / `F_MAX` in `phone.html` or `ForcePoseEngine.kt`.
 
@@ -128,19 +211,18 @@ Kick sensitivity: `KICK_MS` / `F_MAX` in `phone.html` or `ForcePoseEngine.kt`.
 
 | symptom | fix |
 |---|---|
-| START greyed out | phone must be connected — check PHONE LED |
-| Native app dark / no body | step back until **FULL BODY ✓**; grant camera |
-| Server not found in app | Termux `server.py` running; same-device `127.0.0.1:8080` |
-| "CAMERA BLOCKED" in Chrome | use HTTPS or USB `localhost` |
-| kicks not registering | swing faster, or lower `KICK_MS` |
-| keeper saves everything | lower `GF_KEEPER_IQ`, or feint harder |
+| START greyed out | phone WebSocket connected? |
+| STEP BACK | full body — shoulders **and** ankles |
+| App can’t find server | laptop `server.py` + phone on same Wi‑Fi; set host IP in app |
+| CAMERA BLOCKED (Chrome) | HTTPS or USB localhost |
+| kicks not registering | faster swing or lower `KICK_MS` |
 
 ## Dev
 
 ```
 $env:GF_ANNOUNCE_S="0.1"; $env:GF_COUNTDOWN_S="0.2"; $env:GF_SHOOT_WINDOW="1.0"; $env:GF_RESOLVE_S="0.1"
-python laptop/server.py     # terminal 1
-python laptop/test_match.py # terminal 2
+python laptop/server.py
+python laptop/test_match.py
 ```
 
-Optional AI Desk (templates work without it): `ANTHROPIC_API_KEY` or `GF_LLM_URL` for Ollama.
+Optional public desk: `ANTHROPIC_API_KEY` or `GF_LLM_URL` (Ollama). Phone coach (Qwen) is separate and private.
