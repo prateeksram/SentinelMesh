@@ -143,14 +143,86 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         if (need.isNotEmpty()) permissionLauncher.launch(need.toTypedArray())
     }
 
+    private var hostTapGuardUntil = 0L
+    /** True after HOST tap until Connected / Failed — avoids auto-reconnect overwriting match hints. */
+    private var hostStatusPending = false
+    /** Keep connect result on the hint long enough to read (lobby state otherwise replaces it instantly). */
+    private var hostHintHoldUntil = 0L
+
+    private fun hintHeldByHost(): Boolean = System.currentTimeMillis() < hostHintHoldUntil
+
+    private fun showHostHint(text: String, colorRes: Int, holdMs: Long = 4500L) {
+        binding.hint.setTextColor(ContextCompat.getColor(this, colorRes))
+        binding.hint.text = text
+        hostHintHoldUntil = System.currentTimeMillis() + holdMs
+    }
+
     private fun connectHost() {
-        val raw = binding.hostUrl.text?.toString().orEmpty()
+        val now = System.currentTimeMillis()
+        if (now < hostTapGuardUntil) return
+        hostTapGuardUntil = now + 2000L
+        binding.hostConnect.isEnabled = false
+        mainHandler.postDelayed({
+            if (!isFinishing) binding.hostConnect.isEnabled = true
+        }, 2000)
+
+        val raw = binding.hostUrl.text?.toString().orEmpty().trim()
+        hostStatusPending = true
+        if (raw.isEmpty()) {
+            flashHostBtn("ERR")
+            showHostHint(
+                "Host failed · Enter laptop IP, e.g. 172.20.10.2:8080 · check Wi‑Fi & server.py",
+                R.color.red,
+            )
+            game.reconnect("")
+            hostStatusPending = false
+            vibrate(40)
+            return
+        }
         val url = GameClient.normalizeUrl(raw)
         getSharedPreferences(GameClient.PREFS, Context.MODE_PRIVATE)
             .edit().putString(GameClient.PREF_URL, url).apply()
-        binding.hint.text = "Connecting $url …"
+        showHostHint("Connecting $url …", R.color.cyan, holdMs = 8000L)
         game.reconnect(url)
         vibrate(30)
+    }
+
+    private fun flashHostBtn(label: String) {
+        val btn = binding.hostConnect
+        btn.text = label
+        mainHandler.postDelayed({
+            if (!isFinishing) btn.text = "HOST"
+        }, 1500)
+    }
+
+    override fun onConnectStatus(status: GameClient.ConnectStatus) {
+        mainHandler.post {
+            when (status) {
+                is GameClient.ConnectStatus.Connecting -> {
+                    if (!hostStatusPending) return@post
+                    showHostHint("Connecting ${status.url} …", R.color.cyan, holdMs = 8000L)
+                }
+                is GameClient.ConnectStatus.Connected -> {
+                    if (!hostStatusPending) return@post
+                    hostStatusPending = false
+                    flashHostBtn("OK")
+                    showHostHint("Connected · ${status.url}", R.color.green)
+                }
+                is GameClient.ConnectStatus.Failed -> {
+                    hostStatusPending = false
+                    flashHostBtn("ERR")
+                    showHostHint(
+                        "Host failed · ${status.message} · check Wi‑Fi & server.py",
+                        R.color.red,
+                    )
+                }
+                is GameClient.ConnectStatus.Disconnected -> {
+                    if (!hostStatusPending) return@post
+                    hostStatusPending = false
+                    showHostHint("Disconnected · ${status.url}", R.color.muted)
+                }
+            }
+        }
     }
 
     private fun startVoice() {
@@ -288,6 +360,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     }
 
     private fun updateProfileHint() {
+        if (hintHeldByHost()) return
         val p = profile
         if (p == null) {
             binding.hint.text = "Calibrate once — private profile on this phone."
@@ -560,6 +633,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             }
             pose?.phase = state.phase
             binding.big.setTextColor(ContextCompat.getColor(this, R.color.chalk))
+            val holdHint = hintHeldByHost()
             when (state.phase) {
                 "lobby" -> {
                     binding.big.text = "READY?"
@@ -568,14 +642,16 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 }
                 "announce" -> {
                     binding.big.text = "KICK ${state.kick} OF ${state.kicksTotal}"
-                    binding.hint.text = "Raise a hand to aim — THE WALL is watching…"
+                    if (!holdHint) {
+                        binding.hint.text = "Raise a hand to aim — THE WALL is watching…"
+                    }
                     if (lastPhase != "announce") {
                         coach?.speak("Kick ${state.kick} of ${state.kicksTotal}. Pick a corner.")
                     }
                 }
                 "countdown" -> {
                     binding.big.text = ceil(state.timerMs / 1000.0).toInt().toString()
-                    binding.hint.text = "Hold your fake… switch late!"
+                    if (!holdHint) binding.hint.text = "Hold your fake… switch late!"
                     if (lastPhase != "countdown") {
                         vibrate(30)
                         coach?.speak("Ready")
@@ -583,7 +659,9 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 }
                 "shoot" -> {
                     binding.big.text = "KICK!"
-                    binding.hint.text = "Swing your leg — your hand picks the corner!"
+                    if (!holdHint) {
+                        binding.hint.text = "Swing your leg — your hand picks the corner!"
+                    }
                     if (lastPhase != "shoot") vibrateBurst()
                 }
                 "resolve" -> {
@@ -601,9 +679,11 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                         )
                     )
                     val f = state.lastForce
-                    binding.hint.text = buildString {
-                        if (f != null && f > 0) append("$f N — ")
-                        append(state.line)
+                    if (!holdHint) {
+                        binding.hint.text = buildString {
+                            if (f != null && f > 0) append("$f N — ")
+                            append(state.line)
+                        }
                     }
                     val key = "${state.kick}:$r"
                     if (r != null && key != lastResultSpoken) {
@@ -629,7 +709,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 "end" -> {
                     binding.big.text = "${state.score} / ${state.kicksTotal}"
                     binding.big.setTextColor(ContextCompat.getColor(this, R.color.amber))
-                    binding.hint.text = state.line
+                    if (!holdHint) binding.hint.text = state.line
                     if (lastPhase != "end") {
                         coach?.speak("Final ${state.score} of ${state.kicksTotal}.")
                     }
