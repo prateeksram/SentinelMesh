@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/night"
+    android:padding="12dp">
+
+    <TextView
+        android:id="@+id/brand"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="@string/brand"
+        android:textColor="@color/chalk"
+        android:textStyle="bold"
+        android:textSize="18sp"
+        android:letterSpacing="0.08"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/ledRow"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <LinearLayout
+        android:id="@+id/ledRow"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="@id/brand"
+        app:layout_constraintBottom_toBottomOf="@id/brand">
+        <View
+            android:id="@+id/led"
+            android:layout_width="10dp"
+            android:layout_height="10dp"
+            android:background="@drawable/led_off" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="STRIKER"
+            android:textColor="@color/muted"
+            android:textStyle="bold"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/roleBanner"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:background="@color/amber"
+        android:gravity="center"
+        android:padding="10dp"
+        android:text="@string/role_banner"
+        android:textColor="@color/ink"
+        android:textStyle="bold"
+        android:textSize="18sp"
+        app:layout_constraintTop_toBottomOf="@id/brand"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <TextView
+        android:id="@+id/big"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center"
+        android:text="—"
+        android:textColor="@color/chalk"
+        android:textStyle="bold"
+        android:textSize="48sp"
+        app:layout_constraintTop_toBottomOf="@id/roleBanner"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <TextView
+        android:id="@+id/hint"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:text="@string/hint_default"
+        android:textColor="@color/muted"
+        android:textStyle="bold"
+        android:textSize="14sp"
+        app:layout_constraintTop_toBottomOf="@id/big"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <LinearLayout
+        android:id="@+id/zones"
+        android:layout_width="0dp"
+        android:layout_height="48dp"
+        android:layout_marginTop="10dp"
+        android:orientation="horizontal"
+        android:weightSum="3"
+        app:layout_constraintTop_toBottomOf="@id/hint"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+        <TextView android:id="@+id/zL" style="@style/ZoneChip" android:text="L" />
+        <TextView android:id="@+id/zC" style="@style/ZoneChip" android:text="C" android:layout_marginStart="8dp" android:layout_marginEnd="8dp" />
+        <TextView android:id="@+id/zR" style="@style/ZoneChip" android:text="R" />
+    </LinearLayout>
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/preview"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="10dp"
+        android:background="#000000"
+        app:implementationMode="compatible"
+        app:scaleType="fillCenter"
+        app:layout_constraintTop_toBottomOf="@id/zones"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <com.sentinelmesh.gesturefootball.ui.OverlayView
+        android:id="@+id/overlay"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintTop_toTopOf="@id/preview"
+        app:layout_constraintBottom_toBottomOf="@id/preview"
+        app:layout_constraintStart_toStartOf="@id/preview"
+        app:layout_constraintEnd_toEndOf="@id/preview" />
+
+    <TextView
+        android:id="@+id/aiBadge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="10dp"
+        android:background="#BF07131C"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:text="LOADING BODY AI…"
+        android:textColor="@color/amber"
+        android:textStyle="bold"
+        android:textSize="11sp"
+        app:layout_constraintTop_toTopOf="@id/preview"
+        app:layout_constraintStart_toStartOf="@id/preview" />
+
+    <TextView
+        android:id="@+id/bodyBadge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="10dp"
+        android:background="#BF07131C"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:text="NO BODY"
+        android:textColor="@color/red"
+        android:textStyle="bold"
+        android:textSize="11sp"
+        app:layout_constraintTop_toTopOf="@id/preview"
+        app:layout_constraintEnd_toEndOf="@id/preview" />
+
+    <TextView
+        android:id="@+id/forceBadge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="10dp"
+        android:background="#BF07131C"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:text="FORCEPOSE · — N"
+        android:textColor="@color/cyan"
+        android:textStyle="bold"
+        android:textSize="12sp"
+        app:layout_constraintBottom_toBottomOf="@id/preview"
+        app:layout_constraintStart_toStartOf="@id/preview" />
+
+    <TextView
+        android:id="@+id/npuBadge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="10dp"
+        android:background="#BF07131C"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:text="DELEGATE · GPU"
+        android:textColor="@color/muted"
+        android:textStyle="bold"
+        android:textSize="11sp"
+        app:layout_constraintBottom_toBottomOf="@id/preview"
+        app:layout_constraintEnd_toEndOf="@id/preview" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

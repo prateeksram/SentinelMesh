@@ -1,0 +1,21 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# TLS certs for the phone camera — never commit these
+*.pem
+
+# editor / OS noise
+.DS_Store
+Thumbs.db
+
+# Android
+android/local.properties
+android/.gradle/
+android/**/build/
+android/.idea/
+*.iml
+*.apk
+*.aab
