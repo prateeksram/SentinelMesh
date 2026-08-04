@@ -211,10 +211,12 @@ class NpuPoseEngine private constructor(
     }
 
     private fun fullBodyRoi(w: Int, h: Int): RectF {
-        val side = min(w, h) * 0.92f
-        val left = (w - side) / 2f
-        val top = (h - side) / 2f
-        return RectF(left, top, left + side, top + side)
+        // Portrait phones are much taller than wide — a centered square crop
+        // chops head/feet and calibration never sees a full body. Use nearly
+        // the full frame instead.
+        val mx = w * 0.03f
+        val my = h * 0.02f
+        return RectF(mx, my, w - mx, h - my)
     }
 
     private fun bitmapToUint8Nhwc(bitmap: Bitmap): ByteArray {
