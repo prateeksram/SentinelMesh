@@ -9,8 +9,11 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * 20-second on-device calibration state machine.
+ * On-device calibration state machine.
  * Steps: biometrics → T-pose → aim L/C/R → practice swing → profile.
+ *
+ * Hold steps auto-advance once the progress bar fills
+ * (T-pose [TPOSE_HOLD_MS], aim corners [AIM_HOLD_MS]).
  */
 class CalibrationSession {
 
@@ -31,6 +34,8 @@ class CalibrationSession {
         val progress: Float,
         val showBiometrics: Boolean,
         val canFinishSwing: Boolean = false,
+        /** True while a hold timer is actively filling the bar. */
+        val holding: Boolean = false,
     )
 
     var step: Step = Step.BIOMETRICS
@@ -50,6 +55,8 @@ class CalibrationSession {
 
     private var holdMs = 0L
     private var lastTs = 0L
+    private var lastBodyOk = false
+    private var lastGestureOk = false
     private val wristSamples = ArrayList<Float>(48)
     private var practicePeakSpeed = 0f
     private var practicePeakFoot = "R"
@@ -64,33 +71,41 @@ class CalibrationSession {
             0f,
             showBiometrics = true,
         )
-        Step.TPOSE -> Ui(
-            Step.TPOSE,
-            "T-POSE",
-            "Stand still, arms out, full body in frame. Hold…",
-            (holdMs / 2000f).coerceIn(0f, 1f),
-            showBiometrics = false,
+        Step.TPOSE -> holdUi(
+            step = Step.TPOSE,
+            needMs = TPOSE_HOLD_MS,
+            lookingTitle = "FIND YOU",
+            lookingHint = "Step back — full body in the camera frame",
+            readyTitle = "PERSON DETECTED",
+            readyHint = "Stand still, arms out like a T. Hold ${secs(TPOSE_HOLD_MS)}s",
+            holdingTitle = "HOLD T-POSE",
         )
-        Step.AIM_L -> Ui(
-            Step.AIM_L,
-            "AIM LEFT",
-            "Raise your hand to YOUR left corner. Hold…",
-            (holdMs / 1200f).coerceIn(0f, 1f),
-            showBiometrics = false,
+        Step.AIM_L -> holdUi(
+            step = Step.AIM_L,
+            needMs = AIM_HOLD_MS,
+            lookingTitle = "FIND YOU",
+            lookingHint = "Full body in frame, then raise your hand",
+            readyTitle = "PERSON DETECTED",
+            readyHint = "Raise your hand to YOUR left corner",
+            holdingTitle = "AIM LEFT",
         )
-        Step.AIM_C -> Ui(
-            Step.AIM_C,
-            "AIM CENTRE",
-            "Hand to centre. Hold…",
-            (holdMs / 1200f).coerceIn(0f, 1f),
-            showBiometrics = false,
+        Step.AIM_C -> holdUi(
+            step = Step.AIM_C,
+            needMs = AIM_HOLD_MS,
+            lookingTitle = "FIND YOU",
+            lookingHint = "Full body in frame, then raise your hand",
+            readyTitle = "PERSON DETECTED",
+            readyHint = "Move your hand to the centre",
+            holdingTitle = "AIM CENTRE",
         )
-        Step.AIM_R -> Ui(
-            Step.AIM_R,
-            "AIM RIGHT",
-            "Hand to YOUR right corner. Hold…",
-            (holdMs / 1200f).coerceIn(0f, 1f),
-            showBiometrics = false,
+        Step.AIM_R -> holdUi(
+            step = Step.AIM_R,
+            needMs = AIM_HOLD_MS,
+            lookingTitle = "FIND YOU",
+            lookingHint = "Full body in frame, then raise your hand",
+            readyTitle = "PERSON DETECTED",
+            readyHint = "Raise your hand to YOUR right corner",
+            holdingTitle = "AIM RIGHT",
         )
         Step.PRACTICE -> Ui(
             Step.PRACTICE,
@@ -108,6 +123,42 @@ class CalibrationSession {
             1f,
             showBiometrics = false,
         )
+    }
+
+    private fun holdUi(
+        step: Step,
+        needMs: Long,
+        lookingTitle: String,
+        lookingHint: String,
+        readyTitle: String,
+        readyHint: String,
+        holdingTitle: String,
+    ): Ui {
+        val leftMs = (needMs - holdMs).coerceAtLeast(0L)
+        val leftSec = leftMs / 1000f
+        return when {
+            !lastBodyOk -> Ui(
+                step, lookingTitle, lookingHint,
+                progress = 0f, showBiometrics = false, holding = false,
+            )
+            !lastGestureOk -> Ui(
+                step, readyTitle, readyHint,
+                progress = 0f, showBiometrics = false, holding = false,
+            )
+            else -> Ui(
+                step,
+                holdingTitle,
+                "Hold still… ${"%.1f".format(leftSec)}s left",
+                progress = (holdMs / needMs.toFloat()).coerceIn(0f, 1f),
+                showBiometrics = false,
+                holding = true,
+            )
+        }
+    }
+
+    private fun secs(ms: Long): String {
+        val s = ms / 1000f
+        return if (s == s.toInt().toFloat()) s.toInt().toString() else "%.1f".format(s)
     }
 
     fun submitBiometrics(heightCm: Float, weightKg: Float) {
@@ -158,8 +209,10 @@ class CalibrationSession {
         kickFoot: String?,
         footSpeed: Float,
     ): Boolean {
-        if (landmarks == null || !bodyOk) {
+        lastBodyOk = landmarks != null && bodyOk
+        if (!lastBodyOk) {
             holdMs = 0
+            lastGestureOk = false
             lastTs = nowMs
             return false
         }
@@ -167,17 +220,21 @@ class CalibrationSession {
         lastTs = nowMs
 
         return when (step) {
-            Step.TPOSE -> tickTpose(dt, landmarks)
+            Step.TPOSE -> tickTpose(dt, landmarks!!)
             Step.AIM_L -> tickAim(dt, wristXMirrored, target = "L")
             Step.AIM_C -> tickAim(dt, wristXMirrored, target = "C")
             Step.AIM_R -> tickAim(dt, wristXMirrored, target = "R")
-            Step.PRACTICE -> tickPractice(liveForce, kick, kickFoot, footSpeed)
+            Step.PRACTICE -> {
+                lastGestureOk = true
+                tickPractice(liveForce, kick, kickFoot, footSpeed)
+            }
             else -> false
         }
     }
 
     private fun tickTpose(dt: Long, landmarks: List<FloatArray>): Boolean {
-        if (!isTpose(landmarks)) {
+        lastGestureOk = isTpose(landmarks)
+        if (!lastGestureOk) {
             holdMs = 0
             return false
         }
@@ -194,7 +251,7 @@ class CalibrationSession {
             torsoM = base
         }
         holdMs += dt
-        if (holdMs >= 2000L) {
+        if (holdMs >= TPOSE_HOLD_MS) {
             advance(Step.AIM_L)
             return true
         }
@@ -204,6 +261,7 @@ class CalibrationSession {
     private fun tickAim(dt: Long, wristX: Float?, target: String): Boolean {
         if (wristX == null) {
             holdMs = 0
+            lastGestureOk = false
             wristSamples.clear()
             return false
         }
@@ -212,6 +270,7 @@ class CalibrationSession {
             "R" -> wristX > 0.62f
             else -> wristX in 0.38f..0.62f
         }
+        lastGestureOk = inZone
         if (!inZone) {
             holdMs = 0
             wristSamples.clear()
@@ -219,7 +278,7 @@ class CalibrationSession {
         }
         wristSamples.add(wristX)
         holdMs += dt
-        if (holdMs >= 1200L && wristSamples.isNotEmpty()) {
+        if (holdMs >= AIM_HOLD_MS && wristSamples.isNotEmpty()) {
             val avg = wristSamples.average().toFloat()
             when (target) {
                 "L" -> {
@@ -270,6 +329,7 @@ class CalibrationSession {
         step = next
         holdMs = 0
         lastTs = 0
+        lastGestureOk = false
         wristSamples.clear()
         if (next == Step.PRACTICE) {
             swingArmed = false
@@ -278,6 +338,9 @@ class CalibrationSession {
     }
 
     companion object {
+        const val TPOSE_HOLD_MS = 2500L
+        const val AIM_HOLD_MS = 1500L
+
         fun isTpose(lm: List<FloatArray>): Boolean {
             fun x(i: Int) = lm[i][0]
             fun y(i: Int) = lm[i][1]
