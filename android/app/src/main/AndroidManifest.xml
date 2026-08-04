@@ -17,7 +17,10 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.GestureFootball"
         android:usesCleartextTraffic="true"
-        android:networkSecurityConfig="@xml/network_security_config">
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:extractNativeLibs="true">
+        <!-- Required for Hexagon HTP / QNN rpcmem on Snapdragon (Samsung ships it in /vendor). -->
+        <uses-native-library android:name="libcdsprpc.so" android:required="true" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

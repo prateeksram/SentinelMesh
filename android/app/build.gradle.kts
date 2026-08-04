@@ -13,6 +13,9 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -38,6 +41,10 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        // Hexagon DSP must mmap HTP *Skel.so from a real filesystem path (not APK zip).
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 
@@ -56,8 +63,13 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
 
-    // MediaPipe Pose (GPU path for Phase 1; QNN swap in Phase 2)
+    // MediaPipe Pose (GPU fallback when Hexagon / QNN fails to load)
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
+
+    // ONNX Runtime + QNN EP → Snapdragon Hexagon NPU (AI Hub pose bundles)
+    // Model bundles compiled with QAIRT 2.45 — keep QNN runtime in sync.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android-qnn:1.28.0")
+    implementation("com.qualcomm.qti:qnn-runtime:2.45.0")
 
     // WebSocket client — same JSON protocol as phone.html
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

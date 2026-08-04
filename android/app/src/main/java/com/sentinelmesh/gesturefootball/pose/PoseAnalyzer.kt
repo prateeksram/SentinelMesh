@@ -13,8 +13,8 @@ import com.sentinelmesh.gesturefootball.forcepose.ForcePoseEngine
 import com.sentinelmesh.gesturefootball.profile.PlayerProfile
 
 /**
- * Runs MediaPipe PoseLandmarker (GPU by default) + ForcePose / aim / kick.
- * Phase 2 will swap the delegate / model for Hexagon QNN binaries.
+ * Pose + ForcePose / aim / kick.
+ * Prefers Hexagon NPU (AI Hub QNN ONNX); falls back to MediaPipe GPU.
  */
 class PoseAnalyzer(
     context: Context,
@@ -48,33 +48,56 @@ class PoseAnalyzer(
         private const val MODEL_ASSET = "pose_landmarker_lite.task"
     }
 
+    private val appContext = context.applicationContext
     private val force = ForcePoseEngine()
     private var landmarker: PoseLandmarker? = null
+    private var npu: NpuPoseEngine? = null
     var zone: String = "C"
         private set
     var phase: String = "lobby"
-    /** When true, kicks are armed outside the match shoot window (calibration). */
     var calibrationSwing: Boolean = false
     private var lastKickAt = 0L
     private var lastShootPhase = false
-    val delegateLabel = "GPU"
 
     private var aimLMax = 0.34f
     private var aimCMin = 0.40f
     private var aimCMax = 0.60f
     private var aimRMin = 0.66f
 
+    var delegateLabel: String = "GPU"
+        private set
+
     init {
-        val base = BaseOptions.builder()
-            .setModelAssetPath(MODEL_ASSET)
-            .setDelegate(Delegate.GPU)
-            .build()
-        val options = PoseLandmarker.PoseLandmarkerOptions.builder()
-            .setBaseOptions(base)
-            .setRunningMode(RunningMode.VIDEO)
-            .setNumPoses(1)
-            .build()
-        landmarker = PoseLandmarker.createFromOptions(context, options)
+        npu = NpuPoseEngine.create(appContext)
+        if (npu != null) {
+            delegateLabel = "NPU"
+        } else {
+            ensureGpu()
+        }
+    }
+
+    private fun ensureGpu(): Boolean {
+        if (landmarker != null) {
+            delegateLabel = "GPU"
+            return true
+        }
+        return try {
+            val base = BaseOptions.builder()
+                .setModelAssetPath(MODEL_ASSET)
+                .setDelegate(Delegate.GPU)
+                .build()
+            val options = PoseLandmarker.PoseLandmarkerOptions.builder()
+                .setBaseOptions(base)
+                .setRunningMode(RunningMode.VIDEO)
+                .setNumPoses(1)
+                .build()
+            landmarker = PoseLandmarker.createFromOptions(appContext, options)
+            delegateLabel = "GPU"
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
     }
 
     fun applyProfile(profile: PlayerProfile) {
@@ -90,32 +113,89 @@ class PoseAnalyzer(
     }
 
     fun close() {
+        npu?.close()
+        npu = null
         landmarker?.close()
         landmarker = null
     }
 
     fun analyze(bitmap: Bitmap, timestampMs: Long) {
-        val lm = landmarker ?: return
+        val npuEngine = npu
+        if (npuEngine != null) {
+            analyzeNpu(npuEngine, bitmap, timestampMs)
+        } else {
+            analyzeGpu(bitmap, timestampMs)
+        }
+    }
+
+    private fun analyzeNpu(engine: NpuPoseEngine, bitmap: Bitmap, timestampMs: Long) {
+        val result = try {
+            engine.infer(bitmap)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            npu?.close()
+            npu = null
+            if (ensureGpu()) {
+                analyzeGpu(bitmap, timestampMs)
+            } else {
+                onHud(Hud(zone, false, 0f, null, 0, "FAIL"))
+            }
+            return
+        }
+        if (result == null) {
+            onHud(Hud(zone, false, 0f, null, 0, "NPU"))
+            return
+        }
+        processLandmarks(
+            landmarks = result.landmarks33,
+            vis = { 1f },
+            world = result.landmarks33.map { floatArrayOf(it[0], it[1], 0f) },
+            latency = result.latencyMs,
+            timestampMs = timestampMs,
+            label = "NPU",
+        )
+    }
+
+    private fun analyzeGpu(bitmap: Bitmap, timestampMs: Long) {
+        val lm = landmarker ?: run {
+            onHud(Hud(zone, false, 0f, null, 0, delegateLabel))
+            return
+        }
         val t0 = SystemClock.elapsedRealtime()
         val mpImage = BitmapImageBuilder(bitmap).build()
         val result: PoseLandmarkerResult = lm.detectForVideo(mpImage, timestampMs)
         val latency = SystemClock.elapsedRealtime() - t0
-
         val landmarks = result.landmarks().firstOrNull()
         val world = result.worldLandmarks().firstOrNull()
         if (landmarks == null) {
             onHud(Hud(zone, false, 0f, null, latency, delegateLabel))
             return
         }
+        val pts2d = landmarks.map { floatArrayOf(it.x(), it.y()) }
+        processLandmarks(
+            landmarks = pts2d,
+            vis = { i -> landmarks[i].visibility().orElse(1f) },
+            world = world?.map { floatArrayOf(it.x(), it.y(), it.z()) },
+            latency = latency,
+            timestampMs = timestampMs,
+            label = delegateLabel,
+        )
+    }
 
-        fun vis(i: Int) = landmarks[i].visibility().orElse(1f)
-        fun x(i: Int) = landmarks[i].x()
-        fun y(i: Int) = landmarks[i].y()
+    private fun processLandmarks(
+        landmarks: List<FloatArray>,
+        vis: (Int) -> Float,
+        world: List<FloatArray>?,
+        latency: Long,
+        timestampMs: Long,
+        label: String,
+    ) {
+        fun x(i: Int) = landmarks[i][0]
+        fun y(i: Int) = landmarks[i][1]
 
         val bodyOk = vis(L_SHO) > 0.5f && vis(R_SHO) > 0.5f &&
             vis(L_ANK) > 0.5f && vis(R_ANK) > 0.5f
 
-        // Aim: highest wrist above hips (mirrored → user's left = L)
         val hipY = (y(L_HIP) + y(R_HIP)) / 2f
         val wrists = listOf(L_WRI, R_WRI)
             .filter { y(it) < hipY && vis(it) > 0.4f }
@@ -159,14 +239,12 @@ class PoseAnalyzer(
         }
 
         if (world != null) {
-            val pts = world.map { floatArrayOf(it.x(), it.y(), it.z()) }
-            onSkeleton(timestampMs, pts)
+            onSkeleton(timestampMs, world)
         }
 
-        val pts2d = landmarks.map { floatArrayOf(it.x(), it.y()) }
         onHud(
             Hud(
-                zone, bodyOk, force.liveForce, pts2d, latency, delegateLabel,
+                zone, bodyOk, force.liveForce, landmarks, latency, label,
                 wristXMirrored = wristXMirrored,
                 liveSpeed = force.liveSpeed,
                 liveFoot = force.liveFoot,

@@ -1,0 +1,146 @@
+{
+    "model_id": "mediapipe_pose",
+    "model_name": "MediaPipe-Pose-Estimation",
+    "runtime": "precompiled_qnn_onnx",
+    "precision": "w8a8",
+    "tool_versions": {
+        "qairt": "2.45.0.260326154327",
+        "onnx_runtime": "1.27.1"
+    },
+    "model_files": {
+        "pose_detector.onnx": {
+            "inputs": {
+                "image": {
+                    "shape": [
+                        1,
+                        128,
+                        128,
+                        3
+                    ],
+                    "dtype": "uint8",
+                    "quantization_parameters": {
+                        "scale": 0.003921568859368563,
+                        "zero_point": 0
+                    },
+                    "io_type": "image",
+                    "image_metadata": {},
+                    "value_range": [
+                        0.0,
+                        1.0
+                    ]
+                }
+            },
+            "outputs": {
+                "box_coords_1": {
+                    "shape": [
+                        1,
+                        512,
+                        12
+                    ],
+                    "dtype": "uint8",
+                    "quantization_parameters": {
+                        "scale": 0.7927474975585938,
+                        "zero_point": 89
+                    }
+                },
+                "box_coords_2": {
+                    "shape": [
+                        1,
+                        384,
+                        12
+                    ],
+                    "dtype": "uint8",
+                    "quantization_parameters": {
+                        "scale": 1.2209054231643677,
+                        "zero_point": 99
+                    }
+                },
+                "box_scores_1": {
+                    "shape": [
+                        1,
+                        512,
+                        1
+                    ],
+                    "dtype": "uint8",
+                    "quantization_parameters": {
+                        "scale": 5.552783966064453,
+                        "zero_point": 255
+                    }
+                },
+                "box_scores_2": {
+                    "shape": [
+                        1,
+                        384,
+                        1
+                    ],
+                    "dtype": "uint8",
+                    "quantization_parameters": {
+                        "scale": 4.833410263061523,
+                        "zero_point": 254
+                    }
+                }
+            }
+        },
+        "pose_landmark_detector.onnx": {
+            "inputs": {
+                "image": {
+                    "shape": [
+                        1,
+                        256,
+                        256,
+                        3
+                    ],
+                    "dtype": "uint8",
+                    "quantization_parameters": {
+                        "scale": 0.003921568859368563,
+                        "zero_point": 0
+                    },
+                    "io_type": "image",
+                    "image_metadata": {},
+                    "value_range": [
+                        0.0,
+                        1.0
+                    ]
+                }
+            },
+            "outputs": {
+                "scores": {
+                    "shape": [
+                        1
+                    ],
+                    "dtype": "uint8",
+                    "quantization_parameters": {
+                        "scale": 0.00390625,
+                        "zero_point": 0
+                    }
+                },
+                "landmarks": {
+                    "shape": [
+                        1,
+                        25,
+                        4
+                    ],
+                    "dtype": "uint8",
+                    "quantization_parameters": {
+                        "scale": 0.006140740588307381,
+                        "zero_point": 112
+                    }
+                }
+            }
+        }
+    },
+    "chipset_attributes": {
+        "aliases": [
+            "qualcomm-snapdragon-8-elite-for-galaxy",
+            "sm8750-ac"
+        ],
+        "marketing_name": "qualcomm-snapdragon-8-elite-for-galaxy",
+        "world": "Mobile",
+        "supports_fp16": true,
+        "htp_version": 79,
+        "soc_model": 69,
+        "reference_device": "Samsung Galaxy S25",
+        "supports_weight_sharing": true,
+        "name": "qualcomm-snapdragon-8-elite-for-galaxy"
+    }
+}
