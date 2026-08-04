@@ -267,11 +267,15 @@ class PoseAnalyzer(
         fun x(i: Int) = landmarks[i][0]
         fun y(i: Int) = landmarks[i][1]
 
-        val bodyOk = vis(L_SHO) > 0.45f && vis(R_SHO) > 0.45f &&
-            (vis(L_ANK) > 0.35f || vis(L_FOOT) > 0.35f) &&
-            (vis(R_ANK) > 0.35f || vis(R_FOOT) > 0.35f)
+        val torsoOk = BodyGuide.hasTorso(landmarks, vis)
+        val bodyOk = torsoOk && (
+            (vis(L_ANK) > 0.30f || vis(L_FOOT) > 0.30f) &&
+                (vis(R_ANK) > 0.30f || vis(R_FOOT) > 0.30f) ||
+                // NPU synthesises feet at vis=1; treat torso+guide as full body too.
+                BodyGuide.contains(landmarks, vis)
+            )
         val inGuide = BodyGuide.contains(landmarks, vis)
-        bodyOkStreak = if (bodyOk || inGuide) bodyOkStreak + 1 else 0
+        bodyOkStreak = if (bodyOk || inGuide || torsoOk) bodyOkStreak + 1 else 0
         lastPoseMs = latency
         delegateLabel = label
 

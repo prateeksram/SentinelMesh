@@ -558,10 +558,13 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 if (framed) R.color.green else R.color.red
             )
         )
+        val guideOk = hud.inGuide || (
+            calibrating && hud.landmarks != null && hud.bodyOkStreak >= 3
+            )
         binding.overlay.setBodyGuide(
             show = calibrating && calib?.step != CalibrationSession.Step.BIOMETRICS &&
                 calib?.step != CalibrationSession.Step.DONE,
-            ok = hud.inGuide,
+            ok = guideOk,
         )
         binding.forceBadge.text = if (hud.liveForce > 5f)
             "FORCEPOSE · ${hud.liveForce.roundToInt()} N"
@@ -573,11 +576,14 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             val session = calib ?: return
             val kick = pendingCalibKick
             pendingCalibKick = null
+            val lm = hud.landmarks
+            val torsoSeen = lm != null && lm.size > PoseAnalyzer.R_HIP
             val advanced = session.onPose(
                 nowMs = System.currentTimeMillis(),
-                // Prefer stand-here guide; fall back to classic ankle visibility.
-                bodyOk = hud.inGuide || hud.bodyOk,
-                landmarks = hud.landmarks,
+                // Calibration: guide hit, classic bodyOk, or stable torso for a few frames.
+                bodyOk = hud.inGuide || hud.bodyOk ||
+                    (torsoSeen && hud.bodyOkStreak >= 3),
+                landmarks = lm,
                 wristXMirrored = hud.wristXMirrored,
                 liveForce = hud.liveForce,
                 kick = kick,

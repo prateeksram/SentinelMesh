@@ -1,6 +1,7 @@
 package com.sentinelmesh.gesturefootball.calibrate
 
 import com.sentinelmesh.gesturefootball.forcepose.ForcePoseEngine
+import com.sentinelmesh.gesturefootball.pose.BodyGuide
 import com.sentinelmesh.gesturefootball.pose.PoseAnalyzer
 import com.sentinelmesh.gesturefootball.profile.PlayerProfile
 import kotlin.math.abs
@@ -230,7 +231,8 @@ class CalibrationSession {
     }
 
     private fun tickTpose(dt: Long, landmarks: List<FloatArray>): Boolean {
-        lastGestureOk = isTpose(landmarks)
+        // Prefer loose guide T-pose; fall back to stricter classic check.
+        lastGestureOk = BodyGuide.isLooseTpose(landmarks) || isTpose(landmarks)
         if (!lastGestureOk) {
             holdMs = 0
             return false
