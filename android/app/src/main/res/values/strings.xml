@@ -5,4 +5,10 @@
     <string name="role_banner">⚽ YOU vs THE WALL</string>
     <string name="hint_default">Prop the phone 2–3 m away, full body in frame.</string>
     <string name="server_hint">ws://127.0.0.1:8080/ws</string>
+    <string name="calib_btn">CALIBRATE</string>
+    <string name="calib_hint">Private biomechanical profile — never uploaded.</string>
+    <string name="calib_next">NEXT</string>
+    <string name="calib_skip">SKIP AIM</string>
+    <string name="calib_done">PLAY</string>
+    <string name="calib_confirm_swing">USE THIS SWING</string>
 </resources>

@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/calibPanel"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="#E607131C"
+    android:padding="14dp"
+    android:visibility="gone">
+
+    <TextView
+        android:id="@+id/calibTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:text="CALIBRATE"
+        android:textColor="@color/amber"
+        android:textStyle="bold"
+        android:textSize="20sp"
+        android:letterSpacing="0.06" />
+
+    <TextView
+        android:id="@+id/calibHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:gravity="center"
+        android:text="@string/calib_hint"
+        android:textColor="@color/muted"
+        android:textStyle="bold"
+        android:textSize="13sp" />
+
+    <ProgressBar
+        android:id="@+id/calibProgress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="6dp"
+        android:layout_marginTop="10dp"
+        android:max="100"
+        android:progress="0"
+        android:progressTint="@color/cyan"
+        android:progressBackgroundTint="@color/zone_border" />
+
+    <LinearLayout
+        android:id="@+id/calibBioRow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/calibHeight"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:background="@drawable/zone_off"
+            android:gravity="center"
+            android:hint="Height cm"
+            android:inputType="number"
+            android:text="175"
+            android:textColor="@color/chalk"
+            android:textColorHint="@color/muted"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/calibWeight"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/zone_off"
+            android:gravity="center"
+            android:hint="Weight kg"
+            android:inputType="numberDecimal"
+            android:text="75"
+            android:textColor="@color/chalk"
+            android:textColorHint="@color/muted"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/calibSkip"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:background="@drawable/zone_off"
+            android:gravity="center"
+            android:text="@string/calib_skip"
+            android:textColor="@color/muted"
+            android:textStyle="bold"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/calibNext"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/zone_on"
+            android:gravity="center"
+            android:text="@string/calib_next"
+            android:textColor="@color/ink"
+            android:textStyle="bold"
+            android:textSize="14sp" />
+    </LinearLayout>
+</LinearLayout>

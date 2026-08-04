@@ -10,6 +10,7 @@ import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
 import com.sentinelmesh.gesturefootball.forcepose.ForcePoseEngine
+import com.sentinelmesh.gesturefootball.profile.PlayerProfile
 
 /**
  * Runs MediaPipe PoseLandmarker (GPU by default) + ForcePose / aim / kick.
@@ -28,6 +29,9 @@ class PoseAnalyzer(
         val landmarks: List<FloatArray>?,
         val latencyMs: Long,
         val delegateLabel: String,
+        val wristXMirrored: Float? = null,
+        val liveSpeed: Float = 0f,
+        val liveFoot: String = "R",
     )
 
     companion object {
@@ -49,10 +53,16 @@ class PoseAnalyzer(
     var zone: String = "C"
         private set
     var phase: String = "lobby"
-    private var lastAimSent = 0L
+    /** When true, kicks are armed outside the match shoot window (calibration). */
+    var calibrationSwing: Boolean = false
     private var lastKickAt = 0L
     private var lastShootPhase = false
     val delegateLabel = "GPU"
+
+    private var aimLMax = 0.34f
+    private var aimCMin = 0.40f
+    private var aimCMax = 0.60f
+    private var aimRMin = 0.66f
 
     init {
         val base = BaseOptions.builder()
@@ -65,6 +75,18 @@ class PoseAnalyzer(
             .setNumPoses(1)
             .build()
         landmarker = PoseLandmarker.createFromOptions(context, options)
+    }
+
+    fun applyProfile(profile: PlayerProfile) {
+        force.applyProfile(profile)
+        aimLMax = profile.aimLMax
+        aimCMin = profile.aimCMin
+        aimCMax = profile.aimCMax
+        aimRMin = profile.aimRMin
+    }
+
+    fun setKickThreshold(ms: Float) {
+        force.setKickThreshold(ms)
     }
 
     fun close() {
@@ -93,30 +115,32 @@ class PoseAnalyzer(
         val bodyOk = vis(L_SHO) > 0.5f && vis(R_SHO) > 0.5f &&
             vis(L_ANK) > 0.5f && vis(R_ANK) > 0.5f
 
-        // Aim: highest wrist above hips
+        // Aim: highest wrist above hips (mirrored → user's left = L)
         val hipY = (y(L_HIP) + y(R_HIP)) / 2f
         val wrists = listOf(L_WRI, R_WRI)
             .filter { y(it) < hipY && vis(it) > 0.4f }
             .minByOrNull { y(it) }
+        var wristXMirrored: Float? = null
         if (wrists != null) {
-            val wx = 1f - x(wrists) // mirror → user's left = L
+            val wx = 1f - x(wrists)
+            wristXMirrored = wx
             zone = when {
-                zone != "L" && wx < 0.34f -> "L"
-                zone != "R" && wx > 0.66f -> "R"
-                zone != "C" && wx > 0.40f && wx < 0.60f -> "C"
+                zone != "L" && wx < aimLMax -> "L"
+                zone != "R" && wx > aimRMin -> "R"
+                zone != "C" && wx > aimCMin && wx < aimCMax -> "C"
                 else -> zone
             }
         }
 
         val shoot = phase == "shoot"
-        if (shoot && !lastShootPhase) force.resetSwing()
-        lastShootPhase = shoot
+        if ((shoot || calibrationSwing) && !lastShootPhase) force.resetSwing()
+        lastShootPhase = shoot || calibrationSwing
 
         val lfX = (x(L_ANK) + x(L_FOOT)) / 2f
         val lfY = (y(L_ANK) + y(L_FOOT)) / 2f
         val rfX = (x(R_ANK) + x(R_FOOT)) / 2f
         val rfY = (y(R_ANK) + y(R_FOOT)) / 2f
-        val canKick = shoot && bodyOk && timestampMs - lastKickAt > 900
+        val canKick = (shoot || calibrationSwing) && bodyOk && timestampMs - lastKickAt > 900
 
         val kick = force.update(
             nowMs = timestampMs,
@@ -140,6 +164,13 @@ class PoseAnalyzer(
         }
 
         val pts2d = landmarks.map { floatArrayOf(it.x(), it.y()) }
-        onHud(Hud(zone, bodyOk, force.liveForce, pts2d, latency, delegateLabel))
+        onHud(
+            Hud(
+                zone, bodyOk, force.liveForce, pts2d, latency, delegateLabel,
+                wristXMirrored = wristXMirrored,
+                liveSpeed = force.liveSpeed,
+                liveFoot = force.liveFoot,
+            )
+        )
     }
 }

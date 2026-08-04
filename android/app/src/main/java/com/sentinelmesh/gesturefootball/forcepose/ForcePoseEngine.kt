@@ -1,5 +1,6 @@
 package com.sentinelmesh.gesturefootball.forcepose
 
+import com.sentinelmesh.gesturefootball.profile.PlayerProfile
 import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.max
@@ -12,11 +13,13 @@ import kotlin.math.roundToInt
  */
 class ForcePoseEngine(
     bodyKg: Float = 70f,
-    private val kickMs: Float = 3.0f,
+    kickMs: Float = 3.0f,
+    torsoM: Float = 0.52f,
     private val fMax: Float = 380f,
 ) {
-    private val legKg = 0.0618f * bodyKg
-    private val torsoM = 0.52f
+    private var legKg = 0.0618f * bodyKg
+    private var torsoM = torsoM
+    private var kickMs = kickMs
     private val sg = floatArrayOf(-2f, 3f, 6f, 7f, 6f, 3f, -2f).map { it / 21f }
 
     data class Sample(val t: Double, val x: Float, val y: Float)
@@ -25,6 +28,8 @@ class ForcePoseEngine(
         val power: Float,
         val forceN: Int,
         val dirDeg: Int,
+        val foot: String = "R",
+        val peakSpeed: Float = 0f,
     )
 
     private val footL = ArrayDeque<Sample>()
@@ -33,6 +38,22 @@ class ForcePoseEngine(
         private set
     var liveForce = 0f
         private set
+    /** Latest foot speed (m/s) — used by calibration practice swing. */
+    var liveSpeed = 0f
+        private set
+    var liveFoot: String = "R"
+        private set
+
+    fun applyProfile(profile: PlayerProfile) {
+        legKg = 0.0618f * profile.weightKg
+        torsoM = profile.torsoM
+        kickMs = profile.kickMs
+    }
+
+    /** Temporary threshold (e.g. sensitive practice swing during calibration). */
+    fun setKickThreshold(ms: Float) {
+        kickMs = ms
+    }
 
     fun resetSwing() {
         swingPeak = 0f
@@ -52,9 +73,11 @@ class ForcePoseEngine(
         val mPerUnit = torsoM / torsoLen
         val now = nowMs / 1000.0
         var live = 0f
+        var speedLive = 0f
+        var footLive = liveFoot
         var event: KickEvent? = null
 
-        for ((_, fx, fy, vis, buf) in listOf(
+        for ((side, fx, fy, vis, buf) in listOf(
             Quad("L", leftFootX, leftFootY, leftVis, footL),
             Quad("R", rightFootX, rightFootY, rightVis, footR),
         )) {
@@ -71,6 +94,10 @@ class ForcePoseEngine(
             val accel = hypot(v1.first - v0.first, v1.second - v0.second) / dt
             val force = legKg * accel
             live = max(live, force)
+            if (speed > speedLive) {
+                speedLive = speed
+                footLive = side
+            }
             if (canKick) swingPeak = max(swingPeak, force)
 
             if (canKick && speed > kickMs) {
@@ -78,10 +105,12 @@ class ForcePoseEngine(
                 val power = min(1f, f / fMax)
                 val dirDeg = (atan2(-v1.second.toDouble(), kotlin.math.abs(v1.first).toDouble())
                     * 180.0 / Math.PI).roundToInt()
-                event = KickEvent(zone, power, f, dirDeg)
+                event = KickEvent(zone, power, f, dirDeg, foot = side, peakSpeed = speed)
             }
         }
         liveForce = live
+        liveSpeed = speedLive
+        liveFoot = footLive
         return event
     }
 

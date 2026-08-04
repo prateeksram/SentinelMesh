@@ -85,6 +85,21 @@
         android:textSize="14sp"
         app:layout_constraintTop_toBottomOf="@id/big"
         app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/calibBtn" />
+
+    <TextView
+        android:id="@+id/calibBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="10dp"
+        android:paddingVertical="6dp"
+        android:background="@drawable/zone_off"
+        android:text="@string/calib_btn"
+        android:textColor="@color/cyan"
+        android:textStyle="bold"
+        android:textSize="11sp"
+        app:layout_constraintTop_toTopOf="@id/hint"
+        app:layout_constraintBottom_toBottomOf="@id/hint"
         app:layout_constraintEnd_toEndOf="parent" />
 
     <LinearLayout
@@ -102,6 +117,16 @@
         <TextView android:id="@+id/zR" style="@style/ZoneChip" android:text="R" />
     </LinearLayout>
 
+    <include
+        android:id="@+id/calibration"
+        layout="@layout/include_calibration"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        app:layout_constraintTop_toBottomOf="@id/zones"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <androidx.camera.view.PreviewView
         android:id="@+id/preview"
         android:layout_width="0dp"
@@ -110,7 +135,7 @@
         android:background="#000000"
         app:implementationMode="compatible"
         app:scaleType="fillCenter"
-        app:layout_constraintTop_toBottomOf="@id/zones"
+        app:layout_constraintTop_toBottomOf="@id/calibration"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
