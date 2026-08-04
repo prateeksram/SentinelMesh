@@ -112,6 +112,11 @@ class PoseAnalyzer(
         force.setKickThreshold(ms)
     }
 
+    /** Voice / UI override for aim zone. */
+    fun forceZone(z: String) {
+        if (z == "L" || z == "C" || z == "R") zone = z
+    }
+
     fun close() {
         npu?.close()
         npu = null

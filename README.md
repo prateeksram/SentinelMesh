@@ -50,7 +50,7 @@ It only sends tiny JSON (`aim`, `kick`, optional extras). No video leaves the ph
 | Model | Runtime | Status |
 |---|---|---|
 | MediaPipe Pose (8 Elite Galaxy) | QNN / precompiled ONNX | **Wired into app** (NPU path) |
-| Whisper Tiny | QNN / precompiled ONNX | On phone (`~/gf/models`) — not wired yet |
+| Whisper Tiny | QNN / precompiled ONNX | **Verified on S25** — push via `tools/push_whisper_models.ps1` |
 | Qwen3 0.6B | GenieX QAIRT w4a16 | On phone — not wired yet |
 
 ---

@@ -10,8 +10,12 @@ import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.util.Log
 import android.view.View
 import android.widget.TextView
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -26,6 +30,9 @@ import com.sentinelmesh.gesturefootball.net.GameClient
 import com.sentinelmesh.gesturefootball.pose.PoseAnalyzer
 import com.sentinelmesh.gesturefootball.profile.PlayerProfile
 import com.sentinelmesh.gesturefootball.profile.PlayerProfileStore
+import com.sentinelmesh.gesturefootball.voice.VoiceCoach
+import com.sentinelmesh.gesturefootball.voice.VoiceListener
+import com.sentinelmesh.gesturefootball.voice.WhisperEngine
 import java.util.concurrent.Executors
 import kotlin.math.ceil
 import kotlin.math.max
@@ -36,6 +43,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private lateinit var binding: ActivityMainBinding
     private lateinit var game: GameClient
     private var pose: PoseAnalyzer? = null
+    private var voice: VoiceListener? = null
+    private var coach: VoiceCoach? = null
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -49,9 +58,12 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private var pendingCalibKick: ForcePoseEngine.KickEvent? = null
 
     private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) startCamera() else binding.hint.text = "Camera permission required"
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        if (result[Manifest.permission.CAMERA] == true) startCamera()
+        else binding.hint.text = "Camera permission required"
+        if (result[Manifest.permission.RECORD_AUDIO] == true) startVoice()
+        else binding.voiceBadge.text = "VOICE · NO MIC"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -89,13 +101,109 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
         if (profile == null) startCalibration()
 
+        val need = mutableListOf<String>()
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-            == PackageManager.PERMISSION_GRANTED
-        ) {
-            startCamera()
-        } else {
-            permissionLauncher.launch(Manifest.permission.CAMERA)
+            != PackageManager.PERMISSION_GRANTED
+        ) need += Manifest.permission.CAMERA
+        else startCamera()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) need += Manifest.permission.RECORD_AUDIO
+        else startVoice()
+        if (need.isNotEmpty()) permissionLauncher.launch(need.toTypedArray())
+    }
+
+    private fun startVoice() {
+        if (voice != null) return
+        binding.voiceBadge.text = "VOICE · LOADING"
+        Executors.newSingleThreadExecutor().execute {
+            val engine = WhisperEngine.create(this)
+            val smoke = if (engine != null) smokeWhisper(engine) else null
+            mainHandler.post {
+                if (engine == null) {
+                    binding.voiceBadge.text = "VOICE · NO MODEL"
+                    return@post
+                }
+                coach = VoiceCoach(this)
+                if (smoke != null) handleVoice(smoke)
+                voice = VoiceListener(
+                    engine = engine,
+                    onResult = { r -> handleVoice(r) },
+                    onStatus = { s -> binding.voiceBadge.text = s },
+                )
+                voice?.start()
+            }
         }
+    }
+
+    /**
+     * One-shot ASR if smoke assets were pushed:
+     * - whisper/smoke.mel = float32 [80×3000] gold log-mel, or
+     * - whisper/smoke.pcm = 16 kHz s16le PCM
+     */
+    private fun smokeWhisper(engine: WhisperEngine): WhisperEngine.Result? {
+        val melFile = File(filesDir, "whisper/smoke.mel")
+        val pcmFile = File(filesDir, "whisper/smoke.pcm")
+        return try {
+            val r = when {
+                melFile.isFile -> {
+                    val bytes = melFile.readBytes()
+                    val mel = FloatArray(bytes.size / 4)
+                    ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(mel)
+                    melFile.delete()
+                    engine.transcribeMel(mel)
+                }
+                pcmFile.isFile -> {
+                    val bytes = pcmFile.readBytes()
+                    val pcm = ShortArray(bytes.size / 2)
+                    ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(pcm)
+                    pcmFile.delete()
+                    engine.transcribe(pcm)
+                }
+                else -> null
+            }
+            if (r != null) Log.i("VoiceSmoke", "smoke → \"${r.text}\" · ${r.latencyMs} ms")
+            r
+        } catch (e: Exception) {
+            Log.e("VoiceSmoke", "smoke failed", e)
+            null
+        }
+    }
+
+    private fun handleVoice(result: WhisperEngine.Result) {
+        val cmd = coach?.parse(result.text) ?: return
+        when (cmd.intent) {
+            VoiceCoach.Intent.READY -> {
+                binding.big.text = "READY"
+                binding.hint.text = "Heard: \"${result.text}\""
+                vibrate(60)
+            }
+            VoiceCoach.Intent.LEFT -> {
+                pose?.forceZone("L")
+                setZone("L")
+                binding.hint.text = "Voice aim · L · \"${result.text}\""
+            }
+            VoiceCoach.Intent.CENTER -> {
+                pose?.forceZone("C")
+                setZone("C")
+                binding.hint.text = "Voice aim · C · \"${result.text}\""
+            }
+            VoiceCoach.Intent.RIGHT -> {
+                pose?.forceZone("R")
+                setZone("R")
+                binding.hint.text = "Voice aim · R · \"${result.text}\""
+            }
+            VoiceCoach.Intent.TRASH -> {
+                binding.hint.text = "Trash talk · \"${result.text}\""
+                vibrate(40)
+            }
+            VoiceCoach.Intent.UNKNOWN -> {
+                if (result.text.isNotBlank()) {
+                    binding.hint.text = "Heard: \"${result.text}\""
+                }
+            }
+        }
+        if (cmd.reply.isNotBlank()) coach?.speak(cmd.reply)
     }
 
     private fun updateProfileHint() {
@@ -414,6 +522,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     override fun onDestroy() {
         super.onDestroy()
+        voice?.close()
+        voice = null
+        coach?.close()
+        coach = null
         pose?.close()
         game.close()
         cameraExecutor.shutdown()
