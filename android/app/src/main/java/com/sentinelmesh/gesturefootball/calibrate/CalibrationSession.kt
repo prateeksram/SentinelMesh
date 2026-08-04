@@ -55,6 +55,7 @@ class CalibrationSession {
 
     private var holdMs = 0L
     private var lastTs = 0L
+    private var lastHasPose = false
     private var lastBodyOk = false
     private var lastGestureOk = false
     private val wristSamples = ArrayList<Float>(48)
@@ -74,36 +75,24 @@ class CalibrationSession {
         Step.TPOSE -> holdUi(
             step = Step.TPOSE,
             needMs = TPOSE_HOLD_MS,
-            lookingTitle = "FIND YOU",
-            lookingHint = "Step back — full body in the camera frame",
-            readyTitle = "PERSON DETECTED",
             readyHint = "Stand still, arms out like a T. Hold ${secs(TPOSE_HOLD_MS)}s",
             holdingTitle = "HOLD T-POSE",
         )
         Step.AIM_L -> holdUi(
             step = Step.AIM_L,
             needMs = AIM_HOLD_MS,
-            lookingTitle = "FIND YOU",
-            lookingHint = "Full body in frame, then raise your hand",
-            readyTitle = "PERSON DETECTED",
             readyHint = "Raise your hand to YOUR left corner",
             holdingTitle = "AIM LEFT",
         )
         Step.AIM_C -> holdUi(
             step = Step.AIM_C,
             needMs = AIM_HOLD_MS,
-            lookingTitle = "FIND YOU",
-            lookingHint = "Full body in frame, then raise your hand",
-            readyTitle = "PERSON DETECTED",
             readyHint = "Move your hand to the centre",
             holdingTitle = "AIM CENTRE",
         )
         Step.AIM_R -> holdUi(
             step = Step.AIM_R,
             needMs = AIM_HOLD_MS,
-            lookingTitle = "FIND YOU",
-            lookingHint = "Full body in frame, then raise your hand",
-            readyTitle = "PERSON DETECTED",
             readyHint = "Raise your hand to YOUR right corner",
             holdingTitle = "AIM RIGHT",
         )
@@ -128,21 +117,28 @@ class CalibrationSession {
     private fun holdUi(
         step: Step,
         needMs: Long,
-        lookingTitle: String,
-        lookingHint: String,
-        readyTitle: String,
         readyHint: String,
         holdingTitle: String,
     ): Ui {
         val leftMs = (needMs - holdMs).coerceAtLeast(0L)
         val leftSec = leftMs / 1000f
         return when {
+            !lastHasPose -> Ui(
+                step,
+                "FIND YOU",
+                "Step into the outline — head to feet inside STAND HERE",
+                progress = 0f, showBiometrics = false, holding = false,
+            )
             !lastBodyOk -> Ui(
-                step, lookingTitle, lookingHint,
+                step,
+                "FIT THE FRAME",
+                "Seen you — step back until the outline turns green",
                 progress = 0f, showBiometrics = false, holding = false,
             )
             !lastGestureOk -> Ui(
-                step, readyTitle, readyHint,
+                step,
+                "PERSON DETECTED",
+                readyHint,
                 progress = 0f, showBiometrics = false, holding = false,
             )
             else -> Ui(
@@ -209,7 +205,8 @@ class CalibrationSession {
         kickFoot: String?,
         footSpeed: Float,
     ): Boolean {
-        lastBodyOk = landmarks != null && bodyOk
+        lastHasPose = landmarks != null
+        lastBodyOk = lastHasPose && bodyOk
         if (!lastBodyOk) {
             holdMs = 0
             lastGestureOk = false

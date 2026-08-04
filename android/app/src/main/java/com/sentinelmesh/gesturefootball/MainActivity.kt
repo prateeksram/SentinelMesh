@@ -394,6 +394,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         calib = null
         pendingCalibKick = null
         pose?.calibrationSwing = false
+        binding.overlay.setBodyGuide(show = false, ok = false)
         binding.calibration.calibPanel.visibility = View.GONE
         binding.calibBtn.visibility = View.VISIBLE
         updateProfileHint()
@@ -543,17 +544,24 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         binding.overlay.setLandmarks(hud.landmarks)
         setZone(hud.zone)
         noteZone(hud.zone)
+        val framed = hud.inGuide || (
+            hud.bodyOk && hud.bodyOkStreak >= PoseAnalyzer.BODY_OK_FRAMES
+            )
         binding.bodyBadge.text = when {
-            hud.bodyOk && hud.bodyOkStreak >= PoseAnalyzer.BODY_OK_FRAMES -> "FULL BODY ✓"
-            hud.bodyOk -> "HOLD FRAME…"
+            framed -> "FULL BODY ✓"
+            hud.landmarks != null -> "FIT THE OUTLINE"
             else -> "HOLD LIKE A MIRROR"
         }
         binding.bodyBadge.setTextColor(
             ContextCompat.getColor(
                 this,
-                if (hud.bodyOk && hud.bodyOkStreak >= PoseAnalyzer.BODY_OK_FRAMES)
-                    R.color.green else R.color.red
+                if (framed) R.color.green else R.color.red
             )
+        )
+        binding.overlay.setBodyGuide(
+            show = calibrating && calib?.step != CalibrationSession.Step.BIOMETRICS &&
+                calib?.step != CalibrationSession.Step.DONE,
+            ok = hud.inGuide,
         )
         binding.forceBadge.text = if (hud.liveForce > 5f)
             "FORCEPOSE · ${hud.liveForce.roundToInt()} N"
@@ -567,7 +575,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             pendingCalibKick = null
             val advanced = session.onPose(
                 nowMs = System.currentTimeMillis(),
-                bodyOk = hud.bodyOk,
+                // Prefer stand-here guide; fall back to classic ankle visibility.
+                bodyOk = hud.inGuide || hud.bodyOk,
                 landmarks = hud.landmarks,
                 wristXMirrored = hud.wristXMirrored,
                 liveForce = hud.liveForce,
