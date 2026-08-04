@@ -408,6 +408,27 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         panel.calibTitle.text = ui.title
         panel.calibHint.text = ui.hint
         panel.calibProgress.progress = (ui.progress * 100).roundToInt()
+        panel.calibProgress.visibility =
+            if (ui.showBiometrics) View.GONE else View.VISIBLE
+        panel.calibProgress.progressTintList = ContextCompat.getColorStateList(
+            this,
+            when {
+                ui.holding -> R.color.green
+                ui.title.contains("DETECTED") -> R.color.cyan
+                else -> R.color.amber
+            }
+        )
+        panel.calibHint.setTextColor(
+            ContextCompat.getColor(
+                this,
+                when {
+                    ui.holding -> R.color.green
+                    ui.title.contains("DETECTED") -> R.color.cyan
+                    ui.title.contains("FIND") -> R.color.amber
+                    else -> R.color.muted
+                }
+            )
+        )
         panel.calibBioRow.visibility = if (ui.showBiometrics) View.VISIBLE else View.GONE
 
         when (ui.step) {
@@ -439,7 +460,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 pose?.calibrationSwing = false
                 panel.calibSkip.visibility = View.VISIBLE
                 panel.calibSkip.text = getString(R.string.calib_skip)
-                panel.calibNext.text = "…"
+                panel.calibNext.text = if (ui.holding) "HOLD…" else "AUTO"
                 panel.calibNext.isEnabled = false
                 panel.calibNext.alpha = 0.45f
                 binding.big.text = ui.title
@@ -560,6 +581,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 session.step == CalibrationSession.Step.AIM_C ||
                 session.step == CalibrationSession.Step.AIM_R
             ) {
+                if (advanced) vibrate(40)
                 refreshCalibUi()
             }
             return
