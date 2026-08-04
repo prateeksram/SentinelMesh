@@ -7,11 +7,15 @@ Kotlin app that replaces the browser `phone.html` on the Snapdragon phone.
 - CameraX front camera
 - MediaPipe PoseLandmarker (GPU delegate in Phase 1)
 - ForcePose engine (Newtons) — same math as the browser
+- **On-device calibration** → `player_profile.json` (height/weight, T-pose torso scale, aim envelope, practice-swing kick threshold, dominant foot)
 - Hand aim + leg-kick → WebSocket JSON identical to `phone.html`
 - Bullet-time skeleton frames for the TV orbit replay
 
 Phase 2 will load the Hexagon QNN pose binaries already on the phone at
 `~/gf/models/`.
+
+### Calibration flow
+First launch (or tap **CALIBRATE**): height/weight → T-pose hold → aim L/C/R holds → practice swing → **PLAY**. Profile never leaves the phone.
 
 ## Build (this machine)
 

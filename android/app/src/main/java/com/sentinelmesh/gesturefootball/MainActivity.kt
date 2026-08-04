@@ -10,6 +10,7 @@ import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.view.View
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -18,10 +19,13 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
+import com.sentinelmesh.gesturefootball.calibrate.CalibrationSession
 import com.sentinelmesh.gesturefootball.databinding.ActivityMainBinding
 import com.sentinelmesh.gesturefootball.forcepose.ForcePoseEngine
 import com.sentinelmesh.gesturefootball.net.GameClient
 import com.sentinelmesh.gesturefootball.pose.PoseAnalyzer
+import com.sentinelmesh.gesturefootball.profile.PlayerProfile
+import com.sentinelmesh.gesturefootball.profile.PlayerProfileStore
 import java.util.concurrent.Executors
 import kotlin.math.ceil
 import kotlin.math.max
@@ -38,6 +42,11 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private var lastZoneSent = 0L
     private val skelBuf = ArrayDeque<Pair<Long, List<FloatArray>>>()
     private var lastPhase: String? = null
+
+    private var calibrating = false
+    private var calib: CalibrationSession? = null
+    private var profile: PlayerProfile? = null
+    private var pendingCalibKick: ForcePoseEngine.KickEvent? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -70,12 +79,143 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             binding.hint.text = "Model missing or GPU delegate failed: ${e.message}"
         }
 
+        profile = PlayerProfileStore.load(this)
+        profile?.let { pose?.applyProfile(it) }
+        updateProfileHint()
+
+        binding.calibBtn.setOnClickListener { startCalibration() }
+        binding.calibration.calibNext.setOnClickListener { onCalibNext() }
+        binding.calibration.calibSkip.setOnClickListener { onCalibSkip() }
+
+        if (profile == null) startCalibration()
+
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             == PackageManager.PERMISSION_GRANTED
         ) {
             startCamera()
         } else {
             permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun updateProfileHint() {
+        val p = profile
+        if (p == null) {
+            binding.hint.text = "Calibrate once — private profile on this phone."
+        } else if (!calibrating) {
+            binding.hint.text =
+                "Profile · ${p.weightKg.roundToInt()} kg · torso ${"%.2f".format(p.torsoM)} m · ${p.dominantFoot} foot"
+        }
+    }
+
+    private fun startCalibration() {
+        calibrating = true
+        calib = CalibrationSession()
+        pendingCalibKick = null
+        pose?.calibrationSwing = false
+        binding.calibration.calibPanel.visibility = View.VISIBLE
+        binding.calibBtn.visibility = View.GONE
+        refreshCalibUi()
+    }
+
+    private fun finishCalibration(save: Boolean) {
+        val session = calib
+        if (save && session != null && session.step == CalibrationSession.Step.DONE) {
+            val p = session.buildProfile()
+            PlayerProfileStore.save(this, p)
+            profile = p
+            pose?.applyProfile(p)
+            vibrate(80)
+        }
+        calibrating = false
+        calib = null
+        pendingCalibKick = null
+        pose?.calibrationSwing = false
+        binding.calibration.calibPanel.visibility = View.GONE
+        binding.calibBtn.visibility = View.VISIBLE
+        updateProfileHint()
+        if (lastPhase == null || lastPhase == "lobby") {
+            binding.big.text = "READY?"
+        }
+    }
+
+    private fun refreshCalibUi() {
+        val ui = calib?.ui() ?: return
+        val panel = binding.calibration
+        panel.calibTitle.text = ui.title
+        panel.calibHint.text = ui.hint
+        panel.calibProgress.progress = (ui.progress * 100).roundToInt()
+        panel.calibBioRow.visibility = if (ui.showBiometrics) View.VISIBLE else View.GONE
+
+        when (ui.step) {
+            CalibrationSession.Step.BIOMETRICS -> {
+                panel.calibNext.text = getString(R.string.calib_next)
+                panel.calibSkip.visibility = View.INVISIBLE
+                pose?.calibrationSwing = false
+            }
+            CalibrationSession.Step.PRACTICE -> {
+                pose?.calibrationSwing = true
+                // Sensitive so a hard swing always registers; final threshold is 55% of peak.
+                pose?.setKickThreshold(1.8f)
+                panel.calibSkip.visibility = View.VISIBLE
+                panel.calibSkip.text = "RESTART"
+                panel.calibNext.text = getString(R.string.calib_confirm_swing)
+                panel.calibNext.isEnabled = ui.canFinishSwing
+                panel.calibNext.alpha = if (ui.canFinishSwing) 1f else 0.45f
+                binding.big.text = "KICK!"
+                binding.hint.text = ui.hint
+            }
+            CalibrationSession.Step.DONE -> {
+                pose?.calibrationSwing = false
+                panel.calibSkip.visibility = View.INVISIBLE
+                panel.calibNext.text = getString(R.string.calib_done)
+                panel.calibNext.isEnabled = true
+                panel.calibNext.alpha = 1f
+                binding.big.text = "LOCKED IN"
+            }
+            else -> {
+                pose?.calibrationSwing = false
+                panel.calibSkip.visibility = View.VISIBLE
+                panel.calibSkip.text = getString(R.string.calib_skip)
+                panel.calibNext.text = "…"
+                panel.calibNext.isEnabled = false
+                panel.calibNext.alpha = 0.45f
+                binding.big.text = ui.title
+                binding.hint.text = ui.hint
+            }
+        }
+    }
+
+    private fun onCalibNext() {
+        val session = calib ?: return
+        when (session.step) {
+            CalibrationSession.Step.BIOMETRICS -> {
+                val h = binding.calibration.calibHeight.text.toString().toFloatOrNull() ?: 175f
+                val w = binding.calibration.calibWeight.text.toString().toFloatOrNull() ?: 75f
+                session.submitBiometrics(h, w)
+                refreshCalibUi()
+            }
+            CalibrationSession.Step.PRACTICE -> {
+                session.confirmPractice()
+                refreshCalibUi()
+            }
+            CalibrationSession.Step.DONE -> finishCalibration(save = true)
+            else -> Unit
+        }
+    }
+
+    private fun onCalibSkip() {
+        val session = calib ?: return
+        when (session.step) {
+            CalibrationSession.Step.PRACTICE -> startCalibration()
+            CalibrationSession.Step.AIM_L,
+            CalibrationSession.Step.AIM_C,
+            CalibrationSession.Step.AIM_R,
+            -> {
+                session.skipAimDefaults()
+                refreshCalibUi()
+            }
+            else -> Unit
         }
     }
 
@@ -128,6 +268,31 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         else "FORCEPOSE · — N"
         binding.npuBadge.text = "DELEGATE · ${hud.delegateLabel} · ${hud.latencyMs} ms"
 
+        if (calibrating) {
+            val session = calib ?: return
+            val kick = pendingCalibKick
+            pendingCalibKick = null
+            val advanced = session.onPose(
+                nowMs = System.currentTimeMillis(),
+                bodyOk = hud.bodyOk,
+                landmarks = hud.landmarks,
+                wristXMirrored = hud.wristXMirrored,
+                liveForce = hud.liveForce,
+                kick = kick,
+                kickFoot = kick?.foot ?: hud.liveFoot,
+                footSpeed = max(hud.liveSpeed, kick?.peakSpeed ?: 0f),
+            )
+            if (advanced || session.step == CalibrationSession.Step.PRACTICE ||
+                session.step == CalibrationSession.Step.TPOSE ||
+                session.step == CalibrationSession.Step.AIM_L ||
+                session.step == CalibrationSession.Step.AIM_C ||
+                session.step == CalibrationSession.Step.AIM_R
+            ) {
+                refreshCalibUi()
+            }
+            return
+        }
+
         val now = System.currentTimeMillis()
         if (now - lastZoneSent > 200) {
             game.sendAim(hud.zone)
@@ -148,6 +313,12 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     }
 
     private fun handleKick(kick: ForcePoseEngine.KickEvent) {
+        if (calibrating) {
+            pendingCalibKick = kick
+            binding.big.text = "SWING ${kick.forceN} N"
+            vibrate(100)
+            return
+        }
         game.sendKick(kick.zone, kick.power, kick.forceN, kick.dirDeg)
         binding.big.text = "SHOT AWAY! ${kick.forceN} N"
         vibrate(120)
@@ -174,12 +345,16 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     override fun onState(state: GameClient.MatchState) {
         mainHandler.post {
+            if (calibrating) {
+                lastPhase = state.phase
+                return@post
+            }
             pose?.phase = state.phase
             binding.big.setTextColor(ContextCompat.getColor(this, R.color.chalk))
             when (state.phase) {
                 "lobby" -> {
                     binding.big.text = "READY?"
-                    binding.hint.text = "Start the match on the TV."
+                    updateProfileHint()
                 }
                 "announce" -> {
                     binding.big.text = "KICK ${state.kick} OF ${state.kicksTotal}"
