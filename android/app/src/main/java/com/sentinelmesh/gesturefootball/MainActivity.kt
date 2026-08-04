@@ -1,6 +1,7 @@
 package com.sentinelmesh.gesturefootball
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
@@ -12,10 +13,8 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.widget.TextView
-import java.io.File
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -30,9 +29,13 @@ import com.sentinelmesh.gesturefootball.net.GameClient
 import com.sentinelmesh.gesturefootball.pose.PoseAnalyzer
 import com.sentinelmesh.gesturefootball.profile.PlayerProfile
 import com.sentinelmesh.gesturefootball.profile.PlayerProfileStore
+import com.sentinelmesh.gesturefootball.voice.QwenCoach
 import com.sentinelmesh.gesturefootball.voice.VoiceCoach
 import com.sentinelmesh.gesturefootball.voice.VoiceListener
 import com.sentinelmesh.gesturefootball.voice.WhisperEngine
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.Executors
 import kotlin.math.ceil
 import kotlin.math.max
@@ -45,17 +48,25 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private var pose: PoseAnalyzer? = null
     private var voice: VoiceListener? = null
     private var coach: VoiceCoach? = null
+    private var qwen: QwenCoach? = null
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var lastZoneSent = 0L
     private val skelBuf = ArrayDeque<Pair<Long, List<FloatArray>>>()
     private var lastPhase: String? = null
+    private var lastResultSpoken: String? = null
 
     private var calibrating = false
     private var calib: CalibrationSession? = null
     private var profile: PlayerProfile? = null
     private var pendingCalibKick: ForcePoseEngine.KickEvent? = null
+
+    private var lastAsrMs: Long = -1
+    private var lastLlmMs: Long = -1
+    private val zoneHistory = ArrayDeque<String>()
+    private var lastNotedZone: String? = null
+    private var lastKickMeta: ForcePoseEngine.KickEvent? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -71,8 +82,20 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        game = GameClient(listener = this)
+        val prefs = getSharedPreferences(GameClient.PREFS, Context.MODE_PRIVATE)
+        val savedUrl = prefs.getString(GameClient.PREF_URL, GameClient.DEFAULT_URL)
+            ?: GameClient.DEFAULT_URL
+        binding.hostUrl.setText(savedUrl.removePrefix("ws://").removeSuffix("/ws").let {
+            if (savedUrl == GameClient.DEFAULT_URL) "127.0.0.1:8080" else it
+        })
+        game = GameClient(url = GameClient.normalizeUrl(savedUrl), listener = this)
         game.connect()
+        binding.hostConnect.setOnClickListener { connectHost() }
+        binding.hostUrl.setOnEditorActionListener { _, action, _ ->
+            if (action == EditorInfo.IME_ACTION_DONE) {
+                connectHost(); true
+            } else false
+        }
 
         try {
             pose = PoseAnalyzer(
@@ -85,7 +108,12 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 },
             )
             binding.aiBadge.text = "BODY AI · ON-DEVICE"
-            binding.npuBadge.text = "DELEGATE · ${pose?.delegateLabel}"
+            binding.npuBadge.text = "DELEGATE · ${pose?.delegateLabel} · tap"
+            binding.npuBadge.setOnClickListener {
+                val label = pose?.cycleDelegate() ?: return@setOnClickListener
+                binding.npuBadge.text = "DELEGATE · $label · …"
+                vibrate(25)
+            }
         } catch (e: Exception) {
             binding.aiBadge.text = "AI FAILED"
             binding.hint.text = "Model missing or GPU delegate failed: ${e.message}"
@@ -93,7 +121,9 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
         profile = PlayerProfileStore.load(this)
         profile?.let { pose?.applyProfile(it) }
+        qwen = QwenCoach(this).also { it.setProfile(profile) }
         updateProfileHint()
+        refreshNeuralLoad()
 
         binding.calibBtn.setOnClickListener { startCalibration() }
         binding.calibration.calibNext.setOnClickListener { onCalibNext() }
@@ -113,6 +143,16 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         if (need.isNotEmpty()) permissionLauncher.launch(need.toTypedArray())
     }
 
+    private fun connectHost() {
+        val raw = binding.hostUrl.text?.toString().orEmpty()
+        val url = GameClient.normalizeUrl(raw)
+        getSharedPreferences(GameClient.PREFS, Context.MODE_PRIVATE)
+            .edit().putString(GameClient.PREF_URL, url).apply()
+        binding.hint.text = "Connecting $url …"
+        game.reconnect(url)
+        vibrate(30)
+    }
+
     private fun startVoice() {
         if (voice != null) return
         binding.voiceBadge.text = "VOICE · LOADING"
@@ -128,7 +168,11 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 if (smoke != null) handleVoice(smoke)
                 voice = VoiceListener(
                     engine = engine,
-                    onResult = { r -> handleVoice(r) },
+                    onResult = { r ->
+                        lastAsrMs = r.latencyMs
+                        refreshNeuralLoad()
+                        handleVoice(r)
+                    },
                     onStatus = { s -> binding.voiceBadge.text = s },
                 )
                 voice?.start()
@@ -136,11 +180,6 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         }
     }
 
-    /**
-     * One-shot ASR if smoke assets were pushed:
-     * - whisper/smoke.mel = float32 [80×3000] gold log-mel, or
-     * - whisper/smoke.pcm = 16 kHz s16le PCM
-     */
     private fun smokeWhisper(engine: WhisperEngine): WhisperEngine.Result? {
         val melFile = File(filesDir, "whisper/smoke.mel")
         val pcmFile = File(filesDir, "whisper/smoke.pcm")
@@ -162,7 +201,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 }
                 else -> null
             }
-            if (r != null) Log.i("VoiceSmoke", "smoke → \"${r.text}\" · ${r.latencyMs} ms")
+            if (r != null) {
+                lastAsrMs = r.latencyMs
+                Log.i("VoiceSmoke", "smoke → \"${r.text}\" · ${r.latencyMs} ms")
+            }
             r
         } catch (e: Exception) {
             Log.e("VoiceSmoke", "smoke failed", e)
@@ -177,6 +219,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 binding.big.text = "READY"
                 binding.hint.text = "Heard: \"${result.text}\""
                 vibrate(60)
+                askQwen("ready")
             }
             VoiceCoach.Intent.LEFT -> {
                 pose?.forceZone("L")
@@ -196,6 +239,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             VoiceCoach.Intent.TRASH -> {
                 binding.hint.text = "Trash talk · \"${result.text}\""
                 vibrate(40)
+                askQwen("trash talk")
             }
             VoiceCoach.Intent.UNKNOWN -> {
                 if (result.text.isNotBlank()) {
@@ -204,6 +248,43 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             }
         }
         if (cmd.reply.isNotBlank()) coach?.speak(cmd.reply)
+    }
+
+    private fun askQwen(event: String) {
+        val q = qwen ?: return
+        q.adviseAsync(event) { reply ->
+            mainHandler.post {
+                lastLlmMs = reply.latencyMs
+                refreshNeuralLoad()
+                if (reply.text.isNotBlank()) {
+                    coach?.speak(reply.text)
+                    if (!calibrating) {
+                        binding.hint.text = "Coach · ${reply.text}"
+                    }
+                }
+            }
+        }
+    }
+
+    private fun refreshNeuralLoad() {
+        val poseMs = pose?.lastPoseMs?.takeIf { it >= 0 }?.toString() ?: "—"
+        val asr = if (lastAsrMs >= 0) "${lastAsrMs}" else "—"
+        val llm = if (lastLlmMs >= 0) "${lastLlmMs}" else "—"
+        val backend = qwen?.backendLabel ?: "—"
+        binding.neuralLoad.text = "NEURAL LOAD · POSE ${poseMs}ms · ASR ${asr}ms · LLM ${llm}ms ($backend)"
+    }
+
+    private fun noteZone(zone: String) {
+        if (zone == lastNotedZone) return
+        lastNotedZone = zone
+        zoneHistory.addLast(zone)
+        while (zoneHistory.size > 6) zoneHistory.removeFirst()
+        if (zoneHistory.size >= 4) {
+            val last4 = zoneHistory.takeLast(4)
+            if (last4.distinct().size == 1 && !calibrating) {
+                binding.hint.text = "You're predictable — mix it. Stop looping $zone."
+            }
+        }
     }
 
     private fun updateProfileHint() {
@@ -233,6 +314,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             PlayerProfileStore.save(this, p)
             profile = p
             pose?.applyProfile(p)
+            qwen?.setProfile(p)
             vibrate(80)
         }
         calibrating = false
@@ -263,7 +345,6 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             }
             CalibrationSession.Step.PRACTICE -> {
                 pose?.calibrationSwing = true
-                // Sensitive so a hard swing always registers; final threshold is 55% of peak.
                 pose?.setKickThreshold(1.8f)
                 panel.calibSkip.visibility = View.VISIBLE
                 panel.calibSkip.text = "RESTART"
@@ -367,14 +448,24 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private fun applyHud(hud: PoseAnalyzer.Hud) {
         binding.overlay.setLandmarks(hud.landmarks)
         setZone(hud.zone)
-        binding.bodyBadge.text = if (hud.bodyOk) "FULL BODY ✓" else "STEP BACK"
+        noteZone(hud.zone)
+        binding.bodyBadge.text = when {
+            hud.bodyOk && hud.bodyOkStreak >= PoseAnalyzer.BODY_OK_FRAMES -> "FULL BODY ✓"
+            hud.bodyOk -> "HOLD FRAME…"
+            else -> "HOLD LIKE A MIRROR"
+        }
         binding.bodyBadge.setTextColor(
-            ContextCompat.getColor(this, if (hud.bodyOk) R.color.green else R.color.red)
+            ContextCompat.getColor(
+                this,
+                if (hud.bodyOk && hud.bodyOkStreak >= PoseAnalyzer.BODY_OK_FRAMES)
+                    R.color.green else R.color.red
+            )
         )
         binding.forceBadge.text = if (hud.liveForce > 5f)
             "FORCEPOSE · ${hud.liveForce.roundToInt()} N"
         else "FORCEPOSE · — N"
         binding.npuBadge.text = "DELEGATE · ${hud.delegateLabel} · ${hud.latencyMs} ms"
+        refreshNeuralLoad()
 
         if (calibrating) {
             val session = calib ?: return
@@ -427,8 +518,18 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             vibrate(100)
             return
         }
-        game.sendKick(kick.zone, kick.power, kick.forceN, kick.dirDeg)
-        binding.big.text = "SHOT AWAY! ${kick.forceN} N"
+        lastKickMeta = kick
+        game.sendKick(
+            zone = kick.zone,
+            power = kick.power,
+            force = kick.forceN,
+            dirDeg = kick.dirDeg,
+            height = kick.height,
+            spin = kick.spin,
+            strike = kick.strike,
+            foot = kick.foot,
+        )
+        binding.big.text = "SHOT ${kick.height}/${kick.strike} ${kick.forceN} N"
         vibrate(120)
         val kickAt = System.currentTimeMillis()
         val kickNo = game.kick
@@ -463,15 +564,22 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 "lobby" -> {
                     binding.big.text = "READY?"
                     updateProfileHint()
+                    lastResultSpoken = null
                 }
                 "announce" -> {
                     binding.big.text = "KICK ${state.kick} OF ${state.kicksTotal}"
                     binding.hint.text = "Raise a hand to aim — THE WALL is watching…"
+                    if (lastPhase != "announce") {
+                        coach?.speak("Kick ${state.kick} of ${state.kicksTotal}. Pick a corner.")
+                    }
                 }
                 "countdown" -> {
                     binding.big.text = ceil(state.timerMs / 1000.0).toInt().toString()
                     binding.hint.text = "Hold your fake… switch late!"
-                    if (lastPhase != "countdown") vibrate(30)
+                    if (lastPhase != "countdown") {
+                        vibrate(30)
+                        coach?.speak("Ready")
+                    }
                 }
                 "shoot" -> {
                     binding.big.text = "KICK!"
@@ -497,11 +605,34 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                         if (f != null && f > 0) append("$f N — ")
                         append(state.line)
                     }
+                    val key = "${state.kick}:$r"
+                    if (r != null && key != lastResultSpoken) {
+                        lastResultSpoken = key
+                        val meta = lastKickMeta
+                        qwen?.remember(
+                            zone = meta?.zone ?: pose?.zone ?: "C",
+                            result = r,
+                            forceN = f ?: meta?.forceN ?: 0,
+                            height = meta?.height ?: "L",
+                            foot = meta?.foot ?: "R",
+                        )
+                        val line = when (r) {
+                            "goal" -> "Goal!"
+                            "save" -> "Saved."
+                            "post" -> "Off the post."
+                            else -> "Missed."
+                        }
+                        coach?.speak(line)
+                        askQwen(r)
+                    }
                 }
                 "end" -> {
                     binding.big.text = "${state.score} / ${state.kicksTotal}"
                     binding.big.setTextColor(ContextCompat.getColor(this, R.color.amber))
                     binding.hint.text = state.line
+                    if (lastPhase != "end") {
+                        coach?.speak("Final ${state.score} of ${state.kicksTotal}.")
+                    }
                 }
             }
             lastPhase = state.phase
@@ -526,6 +657,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         voice = null
         coach?.close()
         coach = null
+        qwen?.close()
+        qwen = null
         pose?.close()
         game.close()
         cameraExecutor.shutdown()

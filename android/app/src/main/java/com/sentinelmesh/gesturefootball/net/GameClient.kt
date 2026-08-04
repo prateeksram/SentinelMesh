@@ -8,10 +8,11 @@ import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** WebSocket client speaking the same JSON protocol as phone.html. */
 class GameClient(
-    private val url: String = DEFAULT_URL,
+    url: String = DEFAULT_URL,
     private val listener: Listener,
 ) {
     interface Listener {
@@ -36,16 +37,24 @@ class GameClient(
         .retryOnConnectionFailure(true)
         .build()
 
+    @Volatile var url: String = url
+        private set
     private var ws: WebSocket? = null
+    private val open = AtomicBoolean(false)
+    private val allowReconnect = AtomicBoolean(true)
+
     @Volatile var phase: String = "lobby"
         private set
     @Volatile var kick: Int = 0
         private set
 
     fun connect() {
-        val req = Request.Builder().url(url).build()
+        allowReconnect.set(true)
+        ws?.cancel()
+        val req = Request.Builder().url(this.url).build()
         ws = client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                open.set(true)
                 listener.onConnected(true)
                 webSocket.send(JSONObject().put("type", "hello").put("client", "phone").toString())
             }
@@ -79,21 +88,37 @@ class GameClient(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                open.set(false)
                 listener.onConnected(false)
                 scheduleReconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                open.set(false)
                 listener.onConnected(false)
                 scheduleReconnect()
             }
         })
     }
 
+    /** Switch host (e.g. laptop IP) and reconnect. */
+    fun reconnect(newUrl: String) {
+        url = newUrl
+        allowReconnect.set(false)
+        ws?.cancel()
+        ws = null
+        open.set(false)
+        Thread {
+            try { Thread.sleep(200) } catch (_: InterruptedException) {}
+            connect()
+        }.start()
+    }
+
     private fun scheduleReconnect() {
+        if (!allowReconnect.get()) return
         Thread {
             try { Thread.sleep(1500) } catch (_: InterruptedException) {}
-            connect()
+            if (allowReconnect.get() && !open.get()) connect()
         }.start()
     }
 
@@ -101,7 +126,16 @@ class GameClient(
         ws?.send(JSONObject().put("type", "aim").put("zone", zone).toString())
     }
 
-    fun sendKick(zone: String, power: Float, force: Int, dirDeg: Int) {
+    fun sendKick(
+        zone: String,
+        power: Float,
+        force: Int,
+        dirDeg: Int,
+        height: String = "L",
+        spin: Float = 0f,
+        strike: String = "drive",
+        foot: String = "R",
+    ) {
         ws?.send(
             JSONObject()
                 .put("type", "kick")
@@ -109,6 +143,10 @@ class GameClient(
                 .put("power", power.toDouble())
                 .put("force", force)
                 .put("dirDeg", dirDeg)
+                .put("height", height)
+                .put("spin", spin.toDouble())
+                .put("strike", strike)
+                .put("foot", foot)
                 .toString()
         )
     }
@@ -126,12 +164,26 @@ class GameClient(
     }
 
     fun close() {
+        allowReconnect.set(false)
         ws?.close(1000, "bye")
         ws = null
     }
 
     companion object {
-        /** USB adb reverse / Termux server on the same phone. */
         const val DEFAULT_URL = "ws://127.0.0.1:8080/ws"
+        const val PREFS = "gf_net"
+        const val PREF_URL = "host_url"
+
+        fun normalizeUrl(raw: String): String {
+            var u = raw.trim()
+            if (u.isEmpty()) return DEFAULT_URL
+            if (!u.startsWith("ws://") && !u.startsWith("wss://")) {
+                u = "ws://$u"
+            }
+            if (!u.contains("/ws")) {
+                u = u.trimEnd('/') + "/ws"
+            }
+            return u
+        }
     }
 }

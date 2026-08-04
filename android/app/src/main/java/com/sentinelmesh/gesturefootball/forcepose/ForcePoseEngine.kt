@@ -10,6 +10,7 @@ import kotlin.math.roundToInt
 /**
  * ForcePose pipeline (arXiv:2503.22363) — pose-only port.
  * Savitzky–Golay → torso-normalized metres → F = m_leg × a_peak.
+ * Also derives height / spin / strike for the richer kick wire.
  */
 class ForcePoseEngine(
     bodyKg: Float = 70f,
@@ -30,6 +31,12 @@ class ForcePoseEngine(
         val dirDeg: Int,
         val foot: String = "R",
         val peakSpeed: Float = 0f,
+        /** High / Low aim band. */
+        val height: String = "L",
+        /** Lateral spin cue ∈ [-1, 1]. */
+        val spin: Float = 0f,
+        /** chip | drive */
+        val strike: String = "drive",
     )
 
     private val footL = ArrayDeque<Sample>()
@@ -38,7 +45,6 @@ class ForcePoseEngine(
         private set
     var liveForce = 0f
         private set
-    /** Latest foot speed (m/s) — used by calibration practice swing. */
     var liveSpeed = 0f
         private set
     var liveFoot: String = "R"
@@ -50,7 +56,6 @@ class ForcePoseEngine(
         kickMs = profile.kickMs
     }
 
-    /** Temporary threshold (e.g. sensitive practice swing during calibration). */
     fun setKickThreshold(ms: Float) {
         kickMs = ms
     }
@@ -67,6 +72,7 @@ class ForcePoseEngine(
         hipMidX: Float, hipMidY: Float,
         zone: String,
         canKick: Boolean,
+        aimHandY: Float? = null,
     ): KickEvent? {
         val torsoLen = hypot(shoulderMidX - hipMidX, shoulderMidY - hipMidY)
         if (torsoLen < 0.05f) return null
@@ -105,7 +111,26 @@ class ForcePoseEngine(
                 val power = min(1f, f / fMax)
                 val dirDeg = (atan2(-v1.second.toDouble(), kotlin.math.abs(v1.first).toDouble())
                     * 180.0 / Math.PI).roundToInt()
-                event = KickEvent(zone, power, f, dirDeg, foot = side, peakSpeed = speed)
+                // Screen Y grows downward — high hand / upward foot path → height H.
+                val height = when {
+                    aimHandY != null && aimHandY < 0.38f -> "H"
+                    v1.second < -1.2f -> "H"
+                    else -> "L"
+                }
+                val spin = (v1.first / max(0.5f, speed)).coerceIn(-1f, 1f)
+                val strike = if (v1.second < -2.0f && kotlin.math.abs(v1.first) < speed * 0.55f)
+                    "chip" else "drive"
+                event = KickEvent(
+                    zone = zone,
+                    power = power,
+                    forceN = f,
+                    dirDeg = dirDeg,
+                    foot = side,
+                    peakSpeed = speed,
+                    height = height,
+                    spin = spin,
+                    strike = strike,
+                )
             }
         }
         liveForce = live
