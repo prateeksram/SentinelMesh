@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Gesture Football — Striker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Barlow:wght@600;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{--night:#0B1D2A;--ink:#07131C;--chalk:#F4F7F1;--amber:#FFC400;--cyan:#3EC7F4;--red:#FF4438;--green:#3ddc74}
+  *{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{background:var(--night);color:var(--chalk);font-family:Barlow,system-ui,sans-serif;
+       display:flex;flex-direction:column;overflow:hidden;user-select:none}
+
+  header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px}
+  .brand{font-family:"Archivo Black",sans-serif;letter-spacing:1px}
+  .brand em{font-style:normal;color:var(--amber)}
+  .link{display:flex;align-items:center;gap:8px;font-weight:700;color:#8fa8ba;font-size:14px}
+  .led{width:10px;height:10px;border-radius:50%;background:var(--red)}
+  .led.on{background:var(--green)}
+
+  .role{margin:0 16px;padding:8px;text-align:center;border-radius:10px;
+        font-family:"Archivo Black",sans-serif;font-size:20px;letter-spacing:2px;
+        background:var(--amber);color:var(--ink)}
+
+  main{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:8px 16px}
+  #big{font-family:"Archivo Black",sans-serif;font-size:clamp(38px,14vw,80px);line-height:1;text-align:center}
+  #big.goal{color:var(--amber)} #big.save{color:var(--cyan)} #big.warn{color:var(--red)}
+  #hint{font-weight:700;color:#9db4c6;text-align:center;min-height:1.4em;font-size:15px}
+
+  .zones{display:flex;gap:10px;margin:4px 16px}
+  .z{flex:1;height:48px;border:3px solid #2c4356;border-radius:12px;display:flex;
+     align-items:center;justify-content:center;font-family:"Archivo Black",sans-serif;
+     font-size:20px;color:#5d7a8f}
+  .z.on{border-color:var(--amber);color:var(--chalk);background:#233c50}
+
+  .cam{position:relative;flex:1;margin:8px 16px 12px;border-radius:14px;overflow:hidden;
+       border:2px solid #23415a;min-height:0;background:#000}
+  video,#ov{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+  .ai{position:absolute;left:10px;top:8px;font-size:12px;font-weight:800;letter-spacing:1px;
+      background:rgba(7,19,28,.75);padding:4px 8px;border-radius:6px;color:var(--amber)}
+  .body{position:absolute;right:10px;top:8px;font-size:12px;font-weight:800;letter-spacing:1px;
+        background:rgba(7,19,28,.75);padding:4px 8px;border-radius:6px;color:var(--red)}
+  .body.ok{color:var(--green)}
+  .force{position:absolute;left:10px;bottom:8px;font-size:13px;font-weight:800;letter-spacing:1px;
+         background:rgba(7,19,28,.75);padding:4px 10px;border-radius:6px;color:var(--cyan)}
+  .force b{color:var(--amber)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">GESTURE <em>FOOTBALL</em></div>
+  <div class="link"><span class="led" id="led"></span><span>STRIKER</span></div>
+</header>
+
+<div class="role">⚽ YOU vs THE WALL</div>
+
+<main>
+  <div id="big">—</div>
+  <div id="hint">Prop the phone up 2–3 m away, full body in frame.</div>
+</main>
+
+<div class="zones">
+  <div class="z" id="zL">L</div><div class="z" id="zC">C</div><div class="z" id="zR">R</div>
+</div>
+
+<div class="cam">
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="ov"></canvas>
+  <div class="ai" id="ai">LOADING BODY AI…</div>
+  <div class="body" id="bodyChk">NO BODY</div>
+  <div class="force" id="forceHud">FORCEPOSE · — N</div>
+</div>
+
+<script type="module">
+import {FilesetResolver, PoseLandmarker} from
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const $ = id => document.getElementById(id);
+
+let S=null, ws=null;
+let zone="C", lastZoneSent=0, lastKick=0, bodyOK=false;
+
+/* ---------------- websocket ---------------- */
+function connect(){
+  ws = new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
+  ws.onopen  = ()=>{ $("led").classList.add("on"); ws.send(JSON.stringify({type:"hello",client:"phone"})); };
+  ws.onclose = ()=>{ $("led").classList.remove("on"); setTimeout(connect,1500); };
+  ws.onmessage = ev => onState(JSON.parse(ev.data));
+}
+function send(o){ if(ws && ws.readyState===1) ws.send(JSON.stringify(o)); }
+
+function onState(st){
+  const prev = S; S = st;
+  const big=$("big"), hint=$("hint");
+  big.className="";
+  switch(st.phase){
+    case "lobby":     big.textContent="READY?"; hint.textContent="Start the match on the TV."; break;
+    case "announce":  big.textContent=`KICK ${st.kick} OF ${st.kicksTotal}`;
+                      hint.textContent="Raise a hand to aim — THE WALL is watching it…"; break;
+    case "countdown": big.textContent=Math.ceil(st.timerMs/1000);
+                      hint.textContent="Hold your fake… switch late!";
+                      if(prev?.timerMs!==st.timerMs) navigator.vibrate?.(30); break;
+    case "shoot":     big.textContent="KICK!"; hint.textContent="Swing your leg — your hand picks the corner!";
+                      if(prev?.phase!=="shoot"){ swingPeak=0; navigator.vibrate?.([70,40,70]); } break;
+    case "resolve":{
+      const r=st.last?.result;
+      big.textContent = r==="goal"?"GOAL!":r==="save"?"SAVED!":r==="post"?"POST!":"SKIED!";
+      big.className = r==="goal"?"goal":r==="save"?"warn":"warn";
+      hint.textContent = (st.last?.force?st.last.force+" N — ":"")+(st.line||""); break;}
+    case "end":       big.textContent=`${st.score} / ${st.kicksTotal}`;
+                      big.className="goal"; hint.textContent=st.line||""; break;
+  }
+}
+
+/* ---------------- body AI ---------------- */
+const video=$("video"), ov=$("ov"), octx=ov.getContext("2d");
+let lm=null;
+
+// pose landmark indices
+const L_SHO=11,R_SHO=12,L_WRI=15,R_WRI=16,L_HIP=23,R_HIP=24,
+      L_ANK=27,R_ANK=28,L_FOOT=31,R_FOOT=32;
+
+async function boot(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:640,height:480}});
+    video.srcObject = stream;
+    await new Promise(r=>video.onloadedmetadata=r);
+    ov.width=video.videoWidth; ov.height=video.videoHeight;
+  }catch(e){
+    $("ai").textContent="CAMERA BLOCKED";
+    $("hint").textContent="Allow the camera. On plain HTTP most phones refuse — use the https:// link (see README).";
+    return;
+  }
+  try{
+    const files = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    lm = await PoseLandmarker.createFromOptions(files,{
+      baseOptions:{modelAssetPath:
+        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+        delegate:"GPU"},
+      runningMode:"VIDEO", numPoses:1});
+    $("ai").textContent="BODY AI · ON-DEVICE";
+  }catch(e){
+    $("ai").textContent="AI FAILED TO LOAD";
+    $("hint").textContent="Check the phone's internet connection, then reload.";
+    return;
+  }
+  try{ await navigator.wakeLock?.request("screen"); }catch(_){}
+  requestAnimationFrame(loop);
+}
+
+/* ---------------- ForcePose engine (after arXiv:2503.22363) ----------------
+   Pose-only port of the ForcePose pipeline: Savitzky-Golay smoothing ->
+   torso-normalized metric scale -> velocity/acceleration features ->
+   force magnitude (N) + direction. The paper's trained BiLSTM head and
+   force-plate dataset are not public, so the regression head is replaced
+   with rigid-body dynamics: F = m_leg × a_peak (leg mass from Winter's
+   anthropometric tables). Runs entirely on-device, every frame.          */
+const BODY_KG = parseFloat(new URLSearchParams(location.search).get("kg")) || 70;
+const LEG_KG  = 0.0618 * BODY_KG;            // shank+foot ≈ 6.18% of body mass
+const TORSO_M = 0.52;                        // assumed shoulder→hip length (m)
+const KICK_MS = 3.0;                         // foot speed that counts as a kick (m/s)
+const F_MAX   = 380;                         // Newtons that map to power 1.0
+const SG = [-2,3,6,7,6,3,-2].map(c=>c/21);   // 7-point Savitzky-Golay kernel
+
+const footBuf={L:[],R:[]};                   // recent metric foot samples per side
+let swingPeak=0;                             // peak force seen this shoot window
+let lastVT=-1;
+
+/* Bullet-time: rolling buffer of 3D world skeletons (metres, origin at hips).
+   On a kick we wait 450 ms so the follow-through is captured, then ship
+   ~1.3 s of frames to the server for the TV's orbit replay. */
+const skelBuf=[];
+function sendReplay(kickAt, kickNo){
+  setTimeout(()=>{
+    const frames=skelBuf.filter(f=>f.t>=kickAt-850)
+                        .map(f=>({t:Math.round(f.t-kickAt), p:f.p}));
+    const step=Math.max(1, Math.ceil(frames.length/26));
+    send({type:"skel", kick:kickNo, frames:frames.filter((_,i)=>i%step===0)});
+  }, 450);
+}
+
+function sgAt(buf,i,k){                      // S-G smoothed coordinate at index i
+  let s=0;
+  for(let j=-3;j<=3;j++){
+    const b=buf[Math.min(buf.length-1,Math.max(0,i+j))];
+    s+=SG[j+3]*b[k];
+  }
+  return s;
+}
+function velAt(buf,i){                       // central-difference velocity (m/s)
+  const dt=buf[i+1].t-buf[i-1].t || 1/15;
+  return {vx:(sgAt(buf,i+1,"x")-sgAt(buf,i-1,"x"))/dt,
+          vy:(sgAt(buf,i+1,"y")-sgAt(buf,i-1,"y"))/dt};
+}
+
+function loop(now){
+  requestAnimationFrame(loop);
+  if(!lm || video.readyState<2 || video.currentTime===lastVT) return;
+  lastVT=video.currentTime;
+  const res = lm.detectForVideo(video, now);
+  octx.clearRect(0,0,ov.width,ov.height);
+  const p = res.landmarks && res.landmarks[0];
+  const w = res.worldLandmarks && res.worldLandmarks[0];
+  if(w){
+    skelBuf.push({t:now, p:w.map(q=>[+q.x.toFixed(2),+q.y.toFixed(2),+q.z.toFixed(2)])});
+    while(skelBuf.length && now-skelBuf[0].t>1400) skelBuf.shift();
+  }
+  if(!p){
+    bodyOK=false; setBody(false);
+    if(S&&["announce","countdown","shoot"].includes(S.phase)) $("hint").textContent="Step into frame!";
+    return;
+  }
+
+  // frame check: shoulders + ankles must be visible
+  const vis = i => (p[i].visibility ?? 1) > 0.5;
+  bodyOK = vis(L_SHO)&&vis(R_SHO)&&vis(L_ANK)&&vis(R_ANK);
+  setBody(bodyOK);
+
+  drawPose(p);
+
+  /* --- aim: the raised wrist steers L/C/R (with hysteresis) --- */
+  const hipY = (p[L_HIP].y + p[R_HIP].y)/2;
+  const cand = [p[L_WRI],p[R_WRI]].filter(w => w.y < hipY && (w.visibility??1)>0.4);
+  if(cand.length){
+    const wrist = cand.reduce((a,b)=>a.y<b.y?a:b);       // highest hand
+    const wx = 1-wrist.x;                                 // mirror → user's left = L
+    if (zone!=="L" && wx< .34) zone="L";
+    else if (zone!=="R" && wx> .66) zone="R";
+    else if (zone!=="C" && wx>.40 && wx<.60) zone="C";
+  } else if(S&&["announce","countdown","shoot"].includes(S.phase) && bodyOK){
+    $("hint").textContent="Raise a hand to aim!";
+  }
+  ["zL","zC","zR"].forEach(id=>$(id).classList.toggle("on", id==="z"+zone));
+  if (now-lastZoneSent>200){ send({type:"aim",zone}); lastZoneSent=now; }
+
+  /* --- kick: ForcePose watches both feet, a fast swing fires the shot --- */
+  // metric scale: metres per normalized unit, from the torso length
+  const torsoLen=Math.hypot(
+    (p[L_SHO].x+p[R_SHO].x)/2-(p[L_HIP].x+p[R_HIP].x)/2,
+    (p[L_SHO].y+p[R_SHO].y)/2-(p[L_HIP].y+p[R_HIP].y)/2);
+  const mPerUnit = torsoLen>0.05 ? TORSO_M/torsoLen : 0;
+
+  let liveF=0;
+  for(const [side, ankIdx, footIdx] of [["L",L_ANK,L_FOOT],["R",R_ANK,R_FOOT]]){
+    const a=p[ankIdx], f=p[footIdx];
+    if((a.visibility??1)<0.4 || !mPerUnit) continue;
+    const buf=footBuf[side];
+    buf.push({t:now/1000, x:(a.x+f.x)/2*mPerUnit, y:(a.y+f.y)/2*mPerUnit});
+    if(buf.length>12) buf.shift();
+    if(buf.length<9) continue;
+
+    const i=buf.length-3;                    // leave room for ±1 central differences
+    const v1=velAt(buf,i), v0=velAt(buf,i-1);
+    const speed=Math.hypot(v1.vx,v1.vy);
+    const dt=buf[i].t-buf[i-1].t || 1/30;
+    const accel=Math.hypot(v1.vx-v0.vx,v1.vy-v0.vy)/dt;
+    const force=LEG_KG*accel;
+    liveF=Math.max(liveF,force);
+    if(S?.phase==="shoot") swingPeak=Math.max(swingPeak,force);
+
+    if(speed>KICK_MS && now-lastKick>900 && S?.phase==="shoot" && bodyOK){
+      lastKick=now;
+      const F=Math.round(Math.min(F_MAX*1.5, Math.max(swingPeak,force)));
+      const power=Math.min(1, F/F_MAX);
+      const dirDeg=Math.round(Math.atan2(-v1.vy,Math.abs(v1.vx))*180/Math.PI);
+      send({type:"kick",zone,power,force:F,dirDeg});
+      sendReplay(now, S.kick);
+      navigator.vibrate?.(120);
+      $("big").textContent=`SHOT AWAY! ${F} N`;
+    }
+  }
+  $("forceHud").innerHTML = liveF>5
+    ? `FORCEPOSE · <b>${Math.round(liveF)} N</b>` : "FORCEPOSE · — N";
+}
+
+function setBody(ok){
+  const el=$("bodyChk");
+  el.className="body"+(ok?" ok":"");
+  el.textContent=ok?"FULL BODY ✓":"STEP BACK";
+}
+
+function drawPose(p){
+  octx.fillStyle="rgba(244,247,241,.6)";
+  for(const pt of p){ octx.beginPath(); octx.arc(pt.x*ov.width,pt.y*ov.height,3,0,7); octx.fill(); }
+  // highlight the game limbs: wrists amber, feet cyan
+  octx.fillStyle="#FFC400";
+  for(const i of [L_WRI,R_WRI]){ octx.beginPath(); octx.arc(p[i].x*ov.width,p[i].y*ov.height,7,0,7); octx.fill(); }
+  octx.fillStyle="#3EC7F4";
+  for(const i of [L_FOOT,R_FOOT]){ octx.beginPath(); octx.arc(p[i].x*ov.width,p[i].y*ov.height,7,0,7); octx.fill(); }
+}
+
+connect();
+boot();
+</script>
+</body>
+</html>

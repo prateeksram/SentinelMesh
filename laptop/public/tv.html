@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gesture Football — Stadium</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Barlow:wght@600;700;900&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--night:#0B1D2A;--night2:#143049;--ink:#07131C;--panel:#0f2436;
+        --chalk:#F4F7F1;--mut:#9db4c6;--amber:#FFC400;--cyan:#3EC7F4;--red:#FF4438;--green:#3ddc74}
+  *{box-sizing:border-box;margin:0}
+  html,body{height:100%}
+  body{background:radial-gradient(120% 90% at 50% 0%,var(--night2) 0%,var(--night) 55%,var(--ink) 100%);
+       color:var(--chalk);font-family:Barlow,system-ui,sans-serif;overflow:hidden;
+       display:flex;flex-direction:column;user-select:none}
+
+  /* ---------------- scoreboard ---------------- */
+  .board{display:flex;align-items:stretch;justify-content:center;gap:14px;padding:18px 20px 6px}
+  .team{display:flex;align-items:center;gap:14px;background:var(--panel);
+        border:1px solid #1e3b52;border-radius:14px;padding:10px 18px;min-width:290px}
+  .team.right{flex-direction:row-reverse}
+  .team.you{outline:3px solid var(--amber)}
+  .team.wall{outline:3px solid var(--cyan)}
+  .tname{font-family:"Archivo Black",sans-serif;font-size:20px;letter-spacing:1px}
+  .tname small{display:block;font-family:"Barlow Condensed",sans-serif;font-weight:700;
+               letter-spacing:2px;font-size:12px;color:var(--mut)}
+  .score{font-family:"Archivo Black",sans-serif;font-size:44px;line-height:1;color:var(--amber);min-width:52px;text-align:center}
+  .team.right .score{color:var(--cyan)}
+  .dots{display:flex;gap:6px}
+  .dot{width:14px;height:14px;border-radius:50%;border:2px solid #2c4356;background:transparent}
+  .dot.goal{background:var(--green);border-color:var(--green)}
+  .dot.save{background:var(--cyan);border-color:var(--cyan)}
+  .dot.post{background:var(--amber);border-color:var(--amber)}
+  .dot.over{background:var(--red);border-color:var(--red)}
+  .dot.now{border-color:var(--chalk);box-shadow:0 0 8px rgba(244,247,241,.7)}
+  .mid{display:flex;flex-direction:column;align-items:center;justify-content:center;
+       font-family:"Barlow Condensed",sans-serif;font-weight:700;letter-spacing:2px;
+       color:var(--mut);font-size:14px;min-width:120px;text-align:center}
+  .mid b{color:var(--chalk);font-size:17px;letter-spacing:3px}
+
+  /* ---------------- pitch ---------------- */
+  .stage{position:relative;flex:1;display:flex;align-items:center;justify-content:center;min-height:0}
+  canvas{width:min(96vw,1150px);height:100%;max-height:62vh;display:block}
+  .overlay{position:absolute;inset:0;display:flex;flex-direction:column;
+           align-items:center;justify-content:center;pointer-events:none;text-align:center;padding:0 4vw}
+  #big{font-family:"Archivo Black",sans-serif;font-size:clamp(48px,11vw,150px);line-height:.95;
+       text-shadow:0 6px 40px rgba(0,0,0,.65);transition:transform .12s}
+  #big.goal{color:var(--amber)} #big.save{color:var(--cyan)}
+  #big.warn{color:var(--red)} #big.pop{transform:scale(1.12)}
+  #sub{font-weight:900;color:var(--mut);letter-spacing:2px;margin-top:8px;
+       font-family:"Barlow Condensed",sans-serif;font-size:clamp(14px,2vw,22px)}
+  #startBtn{pointer-events:auto;margin-top:26px;font-family:"Archivo Black",sans-serif;
+            font-size:clamp(20px,3vw,30px);letter-spacing:2px;color:var(--ink);
+            background:var(--amber);border:none;border-radius:14px;padding:16px 44px;cursor:pointer;
+            box-shadow:0 8px 0 #b98d00;transition:transform .08s,box-shadow .08s}
+  #startBtn:active{transform:translateY(6px);box-shadow:0 2px 0 #b98d00}
+  #startBtn:disabled{background:#31506a;color:#7d95a8;box-shadow:0 8px 0 #22374a;cursor:default}
+  #startBtn.hide{display:none}
+
+  /* ---------------- ticker ---------------- */
+  .ticker{display:flex;align-items:center;gap:0;margin:0 20px 18px;border-radius:12px;
+          overflow:hidden;border:1px solid #1e3b52;background:var(--ink);min-height:58px}
+  .desk{display:flex;align-items:center;gap:10px;background:var(--amber);color:var(--ink);
+        font-family:"Archivo Black",sans-serif;font-size:15px;letter-spacing:1px;
+        padding:0 18px;height:58px;white-space:nowrap}
+  .desk.tmpl{background:#31506a;color:var(--chalk)}
+  .desk .pulse{width:10px;height:10px;border-radius:50%;background:var(--ink)}
+  .desk.live .pulse{background:var(--red);animation:blink 1.1s infinite}
+  @keyframes blink{50%{opacity:.25}}
+  #line{flex:1;padding:8px 18px;font-weight:700;font-size:clamp(15px,2vw,21px);color:var(--chalk)}
+  .links{display:flex;gap:14px;padding:0 16px;font-family:"Barlow Condensed",sans-serif;
+         font-weight:700;letter-spacing:1.5px;font-size:13px;color:var(--mut);align-items:center}
+  .led{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--red);margin-right:6px;vertical-align:1px}
+  .led.on{background:var(--green)}
+</style>
+</head>
+<body>
+
+<div class="board">
+  <div class="team you">
+    <div class="tname">YOU<small>STRIKER</small></div>
+    <div class="score" id="sYou">0</div>
+    <div class="dots" id="dYou"></div>
+  </div>
+  <div class="mid"><b id="midTop">LOBBY</b><span id="midBot">GESTURE FOOTBALL</span></div>
+  <div class="team right wall">
+    <div class="tname">THE&nbsp;WALL<small>AI&nbsp;KEEPER</small></div>
+    <div class="score" id="sWall">0</div>
+    <div class="dots" id="dWall"></div>
+  </div>
+</div>
+
+<div class="stage">
+  <canvas id="pitch" width="1150" height="640"></canvas>
+  <div class="overlay">
+    <div id="big">GESTURE FOOTBALL</div>
+    <div id="sub">waiting for the striker…</div>
+    <button id="startBtn" disabled>START MATCH</button>
+  </div>
+</div>
+
+<div class="ticker">
+  <div class="desk tmpl" id="desk"><span class="pulse"></span><span id="deskName">TEMPLATE DESK</span></div>
+  <div id="line">Open phone.html on your phone, prop it up so it sees your whole body.</div>
+  <div class="links">
+    <span><span class="led" id="ledP"></span>PHONE</span>
+    <span><span class="led on"></span>THE WALL</span>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let S=null, prev=null, ws=null;
+
+/* ============================ websocket ============================ */
+function connect(){
+  ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
+  ws.onopen =()=>ws.send(JSON.stringify({type:"hello",client:"tv"}));
+  ws.onclose=()=>setTimeout(connect,1500);
+  ws.onmessage=ev=>onState(JSON.parse(ev.data));
+}
+$("startBtn").onclick=()=>{ if(!S)return;
+  ws.send(JSON.stringify({type:S.phase==="end"?"again":"start"})); };
+
+/* ============================ HUD ============================ */
+function dots(el, forKeeper){
+  el.innerHTML="";
+  const shots=S.shotmap||[];
+  for(let i=0;i<S.kicksTotal;i++){
+    const d=document.createElement("div"); d.className="dot";
+    if(shots[i]){
+      if(forKeeper){ if(shots[i].result!=="goal") d.classList.add("save"); }
+      else d.classList.add(shots[i].result);
+    }
+    if(!forKeeper && shots.length===i &&
+       ["announce","countdown","shoot"].includes(S.phase)) d.classList.add("now");
+    el.appendChild(d);
+  }
+}
+function onState(st){
+  prev=S; S=st;
+  $("sYou").textContent=st.score; $("sWall").textContent=st.saves;
+  dots($("dYou"),false); dots($("dWall"),true);
+
+  $("midTop").textContent = st.phase==="lobby"?"LOBBY":st.phase==="end"?"FULL TIME":"SHOOTOUT";
+  $("midBot").textContent = st.phase==="end"||st.phase==="lobby"?"GESTURE FOOTBALL":
+    `KICK ${st.kick} OF ${st.kicksTotal}`;
+
+  $("ledP").classList.toggle("on",!!st.connected?.phone);
+
+  const desk=$("desk");
+  desk.className="desk "+(st.llm?"live":"tmpl");
+  $("deskName").textContent=st.llm==="cloud"?"CLAUDE DESK":st.llm==="local"?"LOCAL AI DESK":"TEMPLATE DESK";
+  if(st.line) $("line").textContent=st.line;
+
+  const big=$("big"), sub=$("sub"), btn=$("startBtn");
+  big.className=""; btn.classList.add("hide");
+  switch(st.phase){
+    case "lobby":
+      big.textContent="GESTURE FOOTBALL";
+      sub.textContent=st.connected?.phone?"striker ready — THE WALL awaits":"waiting for the striker…";
+      btn.classList.remove("hide"); btn.disabled=!st.connected?.phone;
+      btn.textContent="START MATCH"; break;
+    case "announce":
+      big.textContent=`KICK ${st.kick}`;
+      sub.textContent="aim with your hand — THE WALL is watching it"; break;
+    case "countdown":
+      big.textContent=Math.max(1,Math.ceil(st.timerMs/1000));
+      sub.textContent="…"; pop(); break;
+    case "shoot":
+      big.textContent="KICK!"; big.className="goal";
+      sub.textContent="swing your leg — feint with your hand";
+      if(prev?.phase!=="shoot") pop(); break;
+    case "resolve":{
+      const r=st.last?.result;
+      big.textContent=r==="goal"?"GOAL!":r==="save"?"SAVED!":r==="post"?"POST!":"SKIED!";
+      big.className=r==="goal"?"goal":r==="save"?"save":"warn";
+      sub.textContent=st.last?.force?`${st.last.force} N STRIKE · FORCEPOSE`:"";
+      if(prev?.phase!=="resolve"){pop(); shoot(st.last);} break;}
+    case "end":{
+      big.textContent=`${st.score} / ${st.kicksTotal}`;
+      big.className=st.score>st.kicksTotal/2?"goal":"save";
+      sub.textContent=st.score>st.kicksTotal/2?"YOU BEAT THE WALL":"THE WALL STANDS";
+      btn.classList.remove("hide"); btn.disabled=false; btn.textContent="PLAY AGAIN"; break;}
+  }
+}
+function pop(){ const b=$("big"); b.classList.add("pop"); setTimeout(()=>b.classList.remove("pop"),130); }
+
+/* ============================ pitch ============================ */
+const cv=$("pitch"), cx=cv.getContext("2d");
+const W=cv.width, H=cv.height;
+const GOAL={x:W*0.5,w:W*0.62,top:H*0.16,bot:H*0.60};       // goal mouth
+const SPOT={x:W*0.5,y:H*0.88};
+const ZX=z=>GOAL.x+(z==="L"?-1:z==="R"?1:0)*GOAL.w*0.335;   // zone → x in the goal
+
+let keeperX=ZX("C"), ball={x:SPOT.x,y:SPOT.y,r:13,anim:null};
+
+function shoot(last){                                        // launch ball animation
+  if(!last) return;
+  const z=last.zone;
+  let tx,ty;
+  if(last.result==="over"||!z){ tx=SPOT.x+(Math.random()*2-1)*60; ty=-60; }
+  else{
+    tx=ZX(z); ty=GOAL.top+ (GOAL.bot-GOAL.top)*(0.35+Math.random()*0.3);
+    if(last.result==="post") tx=GOAL.x+(z==="L"?-1:1)*GOAL.w/2*(z==="C"?0.1:1.0);
+  }
+  ball.anim={x0:SPOT.x,y0:SPOT.y,tx,ty,t0:performance.now(),
+             dur:380-140*(last.power||0.5),res:last.result};
+}
+
+function draw(now){
+  requestAnimationFrame(draw);
+  cx.clearRect(0,0,W,H);
+
+  // turf
+  const g=cx.createLinearGradient(0,H*0.55,0,H);
+  g.addColorStop(0,"#123322"); g.addColorStop(1,"#0b2417");
+  cx.fillStyle=g; cx.fillRect(0,H*0.58,W,H);
+  cx.strokeStyle="rgba(244,247,241,.25)"; cx.lineWidth=3;
+  cx.beginPath(); cx.moveTo(W*0.06,H*0.62); cx.lineTo(W*0.94,H*0.62); cx.stroke();
+  cx.beginPath(); cx.arc(SPOT.x,SPOT.y,6,0,7); cx.fillStyle="rgba(244,247,241,.5)"; cx.fill();
+
+  // goal frame + net
+  const gl=GOAL.x-GOAL.w/2, gr=GOAL.x+GOAL.w/2;
+  cx.strokeStyle="rgba(157,180,198,.28)"; cx.lineWidth=1;
+  for(let i=1;i<12;i++){ const x=gl+GOAL.w*i/12;
+    cx.beginPath(); cx.moveTo(x,GOAL.top); cx.lineTo(x,GOAL.bot); cx.stroke(); }
+  for(let i=1;i<7;i++){ const y=GOAL.top+(GOAL.bot-GOAL.top)*i/7;
+    cx.beginPath(); cx.moveTo(gl,y); cx.lineTo(gr,y); cx.stroke(); }
+  cx.strokeStyle="#F4F7F1"; cx.lineWidth=9; cx.lineCap="round";
+  cx.beginPath(); cx.moveTo(gl,GOAL.bot); cx.lineTo(gl,GOAL.top);
+  cx.lineTo(gr,GOAL.top); cx.lineTo(gr,GOAL.bot); cx.stroke();
+
+  const inPlay = S && ["announce","countdown","shoot"].includes(S.phase);
+
+  // zone letters + live aim reticle (your hand steers this)
+  if(inPlay){
+    cx.font="700 26px 'Barlow Condensed'"; cx.textAlign="center";
+    cx.fillStyle="rgba(157,180,198,.5)";
+    for(const z of ["L","C","R"]) cx.fillText(z,ZX(z),GOAL.top-14);
+
+    const ax=ZX(S.aimLive||"C"), ay=(GOAL.top+GOAL.bot)/2;
+    cx.strokeStyle="rgba(255,196,0,.85)"; cx.lineWidth=3;
+    cx.beginPath(); cx.arc(ax,ay,26,0,7); cx.stroke();
+    cx.beginPath(); cx.moveTo(ax-38,ay); cx.lineTo(ax-14,ay); cx.moveTo(ax+14,ay); cx.lineTo(ax+38,ay);
+    cx.moveTo(ax,ay-38); cx.lineTo(ax,ay-14); cx.moveTo(ax,ay+14); cx.lineTo(ax,ay+38); cx.stroke();
+  }
+
+  // THE WALL — idles centre with a sway, dives on the resolve
+  let targetX;
+  if(S?.phase==="resolve"||S?.phase==="end"){
+    targetX=ZX(S.last?.keeperZone||"C");
+    keeperX+=(targetX-keeperX)*0.30;                        // fast dive
+  }else{
+    targetX=ZX("C")+Math.sin(now/600)*14;                   // menacing idle sway
+    keeperX+=(targetX-keeperX)*0.10;
+  }
+  const ky=GOAL.bot-64;
+  cx.fillStyle="#3EC7F4";
+  cx.beginPath(); cx.roundRect(keeperX-26,ky-8,52,66,14); cx.fill();  // body
+  cx.beginPath(); cx.arc(keeperX,ky-26,17,0,7); cx.fill();            // head
+  cx.fillStyle="#0B1D2A"; cx.font="900 11px Barlow"; cx.textAlign="center";
+  cx.fillText("WALL",keeperX,ky+28);
+
+  // ball
+  if(ball.anim){
+    const a=ball.anim, t=Math.min(1,(now-a.t0)/a.dur);
+    ball.x=a.x0+(a.tx-a.x0)*t;
+    ball.y=a.y0+(a.ty-a.y0)*t - Math.sin(t*Math.PI)*60;
+    if(t>=1){
+      if(a.res==="post"){ a.tx=a.x0+(a.tx>GOAL.x?-1:1)*120; a.ty=SPOT.y-40; a.x0=ball.x; a.y0=ball.y;
+                          a.t0=now; a.dur=420; a.res="done"; }
+      else ball.anim=null;
+    }
+  } else if(!S || ["lobby","announce","countdown","shoot"].includes(S?.phase)){
+    ball.x=SPOT.x; ball.y=SPOT.y;
+  }
+  cx.fillStyle="#F4F7F1";
+  cx.beginPath(); cx.arc(ball.x,ball.y,ball.r,0,7); cx.fill();
+  cx.strokeStyle="#0B1D2A"; cx.lineWidth=2;
+  cx.beginPath(); cx.arc(ball.x,ball.y,ball.r*0.45,0,7); cx.stroke();
+
+  // resolve flash in the scored corner
+  if(S?.phase==="resolve" && S.last?.zone && S.last.result==="goal" && !ball.anim){
+    cx.fillStyle="rgba(255,196,0,.14)";
+    const zx=ZX(S.last.zone);
+    cx.fillRect(zx-GOAL.w/6,GOAL.top,GOAL.w/3,GOAL.bot-GOAL.top);
+  }
+
+  // bullet-time orbit replay (3D skeleton captured by the phone)
+  if(S?.phase==="resolve" && S.replay?.frames?.length>1) drawReplay(now);
+  else replayKick=-1;
+}
+
+/* ============ bullet-time: orbiting slow-mo 3D skeleton ============ */
+const BONES=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],
+             [23,24],[23,25],[25,27],[27,31],[24,26],[26,28],[28,32]];
+let replayKick=-1, replayT0=0;
+
+function drawReplay(now){
+  const fr=S.replay.frames;
+  if(S.replay.kick!==replayKick){ replayKick=S.replay.kick; replayT0=now; }
+  const span=fr[fr.length-1].t-fr[0].t || 1;
+  const SLOWMO=3.5;
+  const playT=fr[0].t+((now-replayT0)%(span*SLOWMO))/SLOWMO;
+  let f=fr[0];
+  for(const g of fr){ if(g.t<=playT) f=g; else break; }
+
+  // panel on the empty left turf
+  const px=W*0.135, py=H*0.42, R=150;
+  cx.save();
+  cx.fillStyle="rgba(7,19,28,.72)";
+  cx.beginPath(); cx.roundRect(px-R,py-R*1.15,R*2,R*2.35,18); cx.fill();
+  cx.strokeStyle="rgba(62,199,244,.35)"; cx.lineWidth=1.5; cx.stroke();
+  cx.font="800 15px 'Barlow Condensed'"; cx.textAlign="center";
+  cx.fillStyle="#3EC7F4";
+  cx.fillText("BULLET TIME · ON-DEVICE 3D",px,py-R*1.15+22);
+  if(S.last?.force){ cx.fillStyle="#FFC400";
+    cx.fillText(`${S.last.force} N`,px,py+R*1.2-14); }
+
+  // orbiting camera projection (world coords are metres, origin at the hips)
+  const th=(now-replayT0)/1400, f3=210, d=2.6;
+  const proj=q=>{
+    const x=q[0]*Math.cos(th)-q[2]*Math.sin(th);
+    const z=q[0]*Math.sin(th)+q[2]*Math.cos(th);
+    const s=f3/(z+d);
+    return [px+x*s, py+q[1]*s];
+  };
+  cx.strokeStyle="#3EC7F4"; cx.lineWidth=3; cx.lineCap="round";
+  cx.shadowColor="#3EC7F4"; cx.shadowBlur=8;
+  for(const [a,b] of BONES){
+    if(!f.p[a]||!f.p[b]) continue;
+    const [ax,ay]=proj(f.p[a]), [bx,by]=proj(f.p[b]);
+    cx.beginPath(); cx.moveTo(ax,ay); cx.lineTo(bx,by); cx.stroke();
+  }
+  cx.shadowBlur=0;
+  cx.fillStyle="#F4F7F1";
+  if(f.p[0]){ const [hx,hy]=proj(f.p[0]);
+    cx.beginPath(); cx.arc(hx,hy,7,0,7); cx.fill(); }     // head
+  cx.fillStyle="#FFC400";
+  for(const i of [31,32]){ if(!f.p[i]) continue;
+    const [fx,fy]=proj(f.p[i]);
+    cx.beginPath(); cx.arc(fx,fy,5,0,7); cx.fill(); }     // feet
+  cx.restore();
+}
+requestAnimationFrame(draw);
+connect();
+</script>
+</body>
+</html>

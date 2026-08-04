@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="night">#0B1D2A</color>
+    <color name="ink">#07131C</color>
+    <color name="chalk">#F4F7F1</color>
+    <color name="amber">#FFC400</color>
+    <color name="cyan">#3EC7F4</color>
+    <color name="red">#FF4438</color>
+    <color name="green">#3DDC74</color>
+    <color name="muted">#9DB4C6</color>
+    <color name="zone_border">#2C4356</color>
+</resources>
