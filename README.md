@@ -31,26 +31,27 @@ It only sends tiny JSON (`aim`, `kick`, optional extras). No video leaves the ph
 | Match server + AI keeper + WebSocket hub | `laptop/server.py` | Done (solo / THE WALL) |
 | TV stadium | `laptop/public/tv.html` | Done |
 | Browser striker (fallback) | `laptop/public/phone.html` | Done |
-| **Native Android striker** | `android/` → `com.sentinelmesh.gesturefootball` | Done (GPU pose) |
+| **Native Android striker** | `android/` → `com.sentinelmesh.gesturefootball` | Done (NPU pose + GPU fallback) |
 | ForcePose (arXiv:2503.22363) — Newtons | Browser + `ForcePoseEngine.kt` | Done |
 | Bullet-time 3D skeleton → TV orbit | Phone world landmarks | Done |
 | Headless match test | `laptop/test_match.py` | Done |
 
-### Native app (Phase 1 — on the S25 now)
+### Native app (on the S25 now)
 - CameraX front camera
-- MediaPipe PoseLandmarker (**GPU**, ~30–40 ms/frame)
+- **Hexagon NPU pose** — AI Hub `pose_landmark_detector` via ONNX Runtime QNN HTP (assets in `android/app/src/main/assets/npu/`)
+- MediaPipe PoseLandmarker **GPU fallback** if QNN/HTP fails
+- On-device calibration → `player_profile.json`
 - Hand aim + leg-kick ForcePose → same JSON as `phone.html`
-- HUD: `BODY AI · ON-DEVICE` · `FORCEPOSE · N` · `DELEGATE · GPU · xx ms`
+- HUD: `BODY AI · ON-DEVICE` · `FORCEPOSE · N` · `DELEGATE · NPU · xx ms`
 - Default server URL: `ws://127.0.0.1:8080/ws` (change to laptop IP for final host)
 
-### AI Hub models already on the phone (`~/gf/models`, ~1 GB)
-**On disk — not wired into the app yet:**
+### AI Hub models
 
-| Model | Runtime | Use |
+| Model | Runtime | Status |
 |---|---|---|
-| MediaPipe Pose (8 Elite Galaxy) | QNN context + precompiled ONNX | Hexagon NPU pose |
-| Whisper Tiny | QNN / precompiled ONNX | On-device ASR |
-| Qwen3 0.6B | GenieX QAIRT w4a16 | On-device LLM coach / voice |
+| MediaPipe Pose (8 Elite Galaxy) | QNN / precompiled ONNX | **Wired into app** (NPU path) |
+| Whisper Tiny | QNN / precompiled ONNX | On phone (`~/gf/models`) — not wired yet |
+| Qwen3 0.6B | GenieX QAIRT w4a16 | On phone — not wired yet |
 
 ---
 
@@ -115,7 +116,7 @@ Work on the **provided laptop** if disk is tight; app lives in `android/`. Deplo
 |---|---|---|
 | 0 | Pull `prateek`, open `android/`, confirm app installs and joins laptop `server.py` | LED green, match starts from TV |
 | 1 | **Calibration screen** — height/weight + T-pose + practice swing → `player_profile.json` | ForcePose uses profile scale/mass; kick threshold personal |
-| 2 | **NPU pose swap** — load QNN pose from phone storage / pushed assets | Badge shows `NPU` + ms; fallback GPU if load fails |
+| 2 | **NPU pose swap** — load QNN pose from phone storage / pushed assets | Badge shows `NPU` + ms; fallback GPU if load fails | ✅ wired (ORT QNN HTP + AI Hub assets; GPU fallback) |
 | 3 | **Latency HUD** — toggle CPU / GPU / NPU on same frame | Side-by-side numbers for judges |
 
 ### Afternoon — skill + voice
