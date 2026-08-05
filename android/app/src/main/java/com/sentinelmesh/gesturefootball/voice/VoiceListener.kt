@@ -23,11 +23,17 @@ class VoiceListener(
     private val exec = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val running = AtomicBoolean(false)
+    private val muted = AtomicBoolean(false)
     private var record: AudioRecord? = null
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
         exec.execute { loop() }
+    }
+
+    /** Drop mic audio while the coach TTS speaks, so it never transcribes itself. */
+    fun setMuted(m: Boolean) {
+        muted.set(m)
     }
 
     fun stop() {
@@ -77,6 +83,16 @@ class VoiceListener(
         while (running.get()) {
             val n = ar.read(chunk, 0, chunk.size)
             if (n <= 0) continue
+            if (muted.get()) {
+                // Keep draining the mic but discard everything heard during TTS.
+                if (speaking) {
+                    speaking = false
+                    utterance.clear()
+                    silenceMs = 0
+                    main.post { onStatus("VOICE · LISTENING") }
+                }
+                continue
+            }
             val rms = rms(chunk, n)
             if (!speaking) {
                 if (rms > START_RMS) {

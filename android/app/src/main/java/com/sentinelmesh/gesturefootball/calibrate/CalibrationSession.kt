@@ -37,6 +37,8 @@ class CalibrationSession {
         val canFinishSwing: Boolean = false,
         /** True while a hold timer is actively filling the bar. */
         val holding: Boolean = false,
+        /** Spoken instruction for this state — empty means stay quiet. */
+        val voice: String = "",
     )
 
     var step: Step = Step.BIOMETRICS
@@ -72,30 +74,36 @@ class CalibrationSession {
             "Enter height & weight — stays on this phone only.",
             0f,
             showBiometrics = true,
+            voice = "Let's calibrate. Type your height and weight on the phone, " +
+                "or just say skip to use defaults.",
         )
         Step.TPOSE -> holdUi(
             step = Step.TPOSE,
             needMs = TPOSE_HOLD_MS,
             readyHint = "Stand still, arms out like a T. Hold ${secs(TPOSE_HOLD_MS)}s",
             holdingTitle = "HOLD T-POSE",
+            readyVoice = "Got you. Arms straight out like a T, and hold still.",
         )
         Step.AIM_L -> holdUi(
             step = Step.AIM_L,
             needMs = AIM_HOLD_MS,
             readyHint = "Raise your hand to YOUR left corner",
             holdingTitle = "AIM LEFT",
+            readyVoice = "T pose locked. Now point your hand to your left corner and hold.",
         )
         Step.AIM_C -> holdUi(
             step = Step.AIM_C,
             needMs = AIM_HOLD_MS,
             readyHint = "Move your hand to the centre",
             holdingTitle = "AIM CENTRE",
+            readyVoice = "Left locked. Move your hand to the center and hold.",
         )
         Step.AIM_R -> holdUi(
             step = Step.AIM_R,
             needMs = AIM_HOLD_MS,
             readyHint = "Raise your hand to YOUR right corner",
             holdingTitle = "AIM RIGHT",
+            readyVoice = "Center locked. Now your right corner, and hold.",
         )
         Step.PRACTICE -> Ui(
             Step.PRACTICE,
@@ -104,6 +112,10 @@ class CalibrationSession {
             if (practicePeakSpeed > 0f) 1f else 0f,
             showBiometrics = false,
             canFinishSwing = practicePeakSpeed > 1.5f,
+            voice = if (practicePeakSpeed > 1.5f)
+                "Swing captured. Say done to save your profile, or swing again."
+            else
+                "All corners locked. Now take one hard practice swing.",
         )
         Step.DONE -> Ui(
             Step.DONE,
@@ -112,6 +124,7 @@ class CalibrationSession {
                 "torso ${"%.2f".format(torsoM)} m · kick ≥ ${"%.1f".format(kickMs)} m/s · $dominantFoot",
             1f,
             showBiometrics = false,
+            voice = "Calibration complete.",
         )
     }
 
@@ -120,6 +133,7 @@ class CalibrationSession {
         needMs: Long,
         readyHint: String,
         holdingTitle: String,
+        readyVoice: String,
     ): Ui {
         val leftMs = (needMs - holdMs).coerceAtLeast(0L)
         val leftSec = leftMs / 1000f
@@ -129,18 +143,21 @@ class CalibrationSession {
                 "FIND YOU",
                 "Step into the outline — head to feet inside STAND HERE",
                 progress = 0f, showBiometrics = false, holding = false,
+                voice = "Step back so I can see your whole body, head to feet.",
             )
             !lastBodyOk -> Ui(
                 step,
                 "FIT THE FRAME",
                 "Seen you — step back until the outline turns green",
                 progress = 0f, showBiometrics = false, holding = false,
+                voice = "I can see you. Step back until the outline turns green.",
             )
             !lastGestureOk -> Ui(
                 step,
                 "PERSON DETECTED",
                 readyHint,
                 progress = 0f, showBiometrics = false, holding = false,
+                voice = readyVoice,
             )
             else -> Ui(
                 step,
@@ -170,6 +187,11 @@ class CalibrationSession {
         if (step == Step.AIM_L || step == Step.AIM_C || step == Step.AIM_R) {
             advance(Step.PRACTICE)
         }
+    }
+
+    /** Skip T-pose hold (still keeps height-based torso estimate). */
+    fun skipTpose() {
+        if (step == Step.TPOSE) advance(Step.AIM_L)
     }
 
     fun confirmPractice() {
@@ -340,22 +362,7 @@ class CalibrationSession {
         const val TPOSE_HOLD_MS = 2500L
         const val AIM_HOLD_MS = 1500L
 
-        fun isTpose(lm: List<FloatArray>): Boolean {
-            fun x(i: Int) = lm[i][0]
-            fun y(i: Int) = lm[i][1]
-            val lSho = PoseAnalyzer.L_SHO
-            val rSho = PoseAnalyzer.R_SHO
-            val lWri = PoseAnalyzer.L_WRI
-            val rWri = PoseAnalyzer.R_WRI
-            val lHip = PoseAnalyzer.L_HIP
-            val rHip = PoseAnalyzer.R_HIP
-            // Wrists roughly at shoulder height and outside shoulders.
-            val shoulderY = (y(lSho) + y(rSho)) / 2f
-            val lOk = abs(y(lWri) - shoulderY) < 0.12f && x(lWri) < x(lSho) - 0.05f
-            val rOk = abs(y(rWri) - shoulderY) < 0.12f && x(rWri) > x(rSho) + 0.05f
-            val upright = abs(((x(lSho) + x(rSho)) / 2f) - ((x(lHip) + x(rHip)) / 2f)) < 0.12f
-            return lOk && rOk && upright
-        }
+        fun isTpose(lm: List<FloatArray>): Boolean = BodyGuide.isLooseTpose(lm)
 
         fun torsoLenUnits(lm: List<FloatArray>): Float {
             val sx = (lm[PoseAnalyzer.L_SHO][0] + lm[PoseAnalyzer.R_SHO][0]) / 2f

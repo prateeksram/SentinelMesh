@@ -1,5 +1,6 @@
 package com.sentinelmesh.gesturefootball.net
 
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -70,7 +71,15 @@ class GameClient(
         ws?.cancel()
         // Connecting is emitted from reconnect() (user HOST tap) so auto-reconnect
         // does not overwrite a Failed hint.
-        val req = Request.Builder().url(this.url).build()
+        val req = try {
+            Request.Builder().url(this.url).build()
+        } catch (e: IllegalArgumentException) {
+            listener.onConnected(false)
+            listener.onConnectStatus(
+                ConnectStatus.Failed(url, "bad host URL — enter laptop IP:8080")
+            )
+            return
+        }
         ws = client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 open.set(true)
@@ -193,6 +202,11 @@ class GameClient(
         ws?.send(JSONObject().put("type", "aim").put("zone", zone).toString())
     }
 
+    /** Ask the server to start the match (works while it's in the lobby). */
+    fun sendStart() {
+        ws?.send(JSONObject().put("type", "start").toString())
+    }
+
     fun sendKick(
         zone: String,
         power: Float,
@@ -251,7 +265,25 @@ class GameClient(
             if (!u.contains("/ws")) {
                 u = u.trimEnd('/') + "/ws"
             }
-            return u
+            return if (isValidWsUrl(u)) u else DEFAULT_URL
+        }
+
+        /** Reject mangled prefs like ws://192.168.1.65:8080172.20.10.2:8080/ws */
+        fun isValidWsUrl(u: String): Boolean {
+            return try {
+                val http = u
+                    .replaceFirst("ws://", "http://")
+                    .replaceFirst("wss://", "https://")
+                    .toHttpUrlOrNull()
+                    ?: return false
+                val host = http.host
+                val port = http.port
+                host.isNotBlank() && port in 1..65535 &&
+                    // Single host:port before path — no glued second IP.
+                    Regex("""^wss?://[^/:]+:\d+/ws/?$""").matches(u)
+            } catch (_: Exception) {
+                false
+            }
         }
 
         fun humanizeFailure(t: Throwable, response: Response?): String {

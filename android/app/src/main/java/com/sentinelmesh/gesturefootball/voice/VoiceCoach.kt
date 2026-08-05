@@ -2,12 +2,16 @@ package com.sentinelmesh.gesturefootball.voice
 
 import android.content.Context
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 
 /** Map ASR text → game actions + speak a short private coach line. */
-class VoiceCoach(context: Context) : TextToSpeech.OnInitListener {
+class VoiceCoach(
+    context: Context,
+    private val onSpeaking: (Boolean) -> Unit = {},
+) : TextToSpeech.OnInitListener {
     enum class Intent {
-        READY, LEFT, CENTER, RIGHT, TRASH, UNKNOWN
+        READY, LEFT, CENTER, RIGHT, NEXT, SKIP, TRASH, UNKNOWN
     }
 
     data class Command(val intent: Intent, val reply: String)
@@ -20,14 +24,21 @@ class VoiceCoach(context: Context) : TextToSpeech.OnInitListener {
         if (ready) {
             tts?.language = Locale.US
             tts?.setSpeechRate(1.05f)
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) = onSpeaking(true)
+                override fun onDone(utteranceId: String?) = onSpeaking(false)
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) = onSpeaking(false)
+                override fun onStop(utteranceId: String?, interrupted: Boolean) = onSpeaking(false)
+            })
         }
     }
 
     fun parse(text: String): Command {
         val t = text.lowercase(Locale.US)
         return when {
-            Regex("\\b(ready|redvee|redd?y|let'?s go|lock in|i'?m ready)\\b").containsMatchIn(t) ->
-                Command(Intent.READY, "Locked in. Pick a corner.")
+            Regex("\\b(ready|redvee|redd?y|let'?s go|lock in|i'?m ready|start( the)? (match|game)|yes)\\b").containsMatchIn(t) ->
+                Command(Intent.READY, "")
             Regex("\\b(left|go left|far left)\\b").containsMatchIn(t) ->
                 Command(Intent.LEFT, "Aiming left.")
             Regex("\\b(right|go right|far right)\\b").containsMatchIn(t) ->
@@ -39,6 +50,10 @@ class VoiceCoach(context: Context) : TextToSpeech.OnInitListener {
                     Intent.TRASH,
                     trashReplies.random(),
                 )
+            Regex("\\b(skip|skip it|pass)\\b").containsMatchIn(t) ->
+                Command(Intent.SKIP, "")
+            Regex("\\b(next|done|continue|finish|okay|ok)\\b").containsMatchIn(t) ->
+                Command(Intent.NEXT, "")
             else -> Command(Intent.UNKNOWN, "")
         }
     }

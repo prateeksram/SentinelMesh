@@ -60,7 +60,11 @@ object BodyGuide {
         return inHoriz && shouldersPlausible && hipsBelow && notTiny && upright
     }
 
-    /** Soft T-pose: wrists near shoulder height and outside the shoulders. */
+    /**
+     * Soft T-pose: wrists near shoulder height and clearly out from the torso.
+     * Front-camera frames are usually unmirrored, so anatomical L can sit on the
+     * right of the image — accept either left/right orientation.
+     */
     fun isLooseTpose(landmarks: List<FloatArray>): Boolean {
         if (landmarks.size <= PoseAnalyzer.R_WRI) return false
         fun x(i: Int) = landmarks[i][0]
@@ -70,12 +74,17 @@ object BodyGuide {
         val lWri = PoseAnalyzer.L_WRI
         val rWri = PoseAnalyzer.R_WRI
         val shoulderY = (y(lSho) + y(rSho)) / 2f
-        val lOk = abs(y(lWri) - shoulderY) < 0.20f && x(lWri) < x(lSho) - 0.02f
-        val rOk = abs(y(rWri) - shoulderY) < 0.20f && x(rWri) > x(rSho) + 0.02f
+        val shoulderSpan = abs(x(lSho) - x(rSho)).coerceAtLeast(0.04f)
+        val heightOkL = abs(y(lWri) - shoulderY) < 0.22f
+        val heightOkR = abs(y(rWri) - shoulderY) < 0.22f
+        val outL = abs(x(lWri) - x(lSho)) > shoulderSpan * 0.35f
+        val outR = abs(x(rWri) - x(rSho)) > shoulderSpan * 0.35f
+        val armSpan = abs(x(lWri) - x(rWri))
+        val armsWide = armSpan > shoulderSpan * 1.35f
         val upright = abs(
             ((x(lSho) + x(rSho)) / 2f) -
                 ((landmarks[PoseAnalyzer.L_HIP][0] + landmarks[PoseAnalyzer.R_HIP][0]) / 2f)
-        ) < 0.18f
-        return lOk && rOk && upright
+        ) < 0.20f
+        return heightOkL && heightOkR && outL && outR && armsWide && upright
     }
 }
