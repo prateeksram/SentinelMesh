@@ -88,6 +88,10 @@
   #startBtn:active{transform:translateY(6px);box-shadow:0 2px 0 #b98d00,0 8px 24px rgba(0,0,0,.5)}
   #startBtn:disabled{background:#31506a;color:#7d95a8;box-shadow:0 8px 0 #22374a;cursor:default}
   #startBtn.hide{display:none}
+  #abortBtn{font:inherit;color:var(--chalk);background:#5a2230;border:1px solid #8a3040;
+            border-radius:8px;padding:5px 10px;cursor:pointer;letter-spacing:1.5px}
+  #abortBtn.hide{display:none}
+  #abortBtn:hover{background:#7a2a3a}
 
   /* ---------------- lower-third ticker ---------------- */
   .ticker{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:6;
@@ -153,6 +157,7 @@
     <span><span class="led" id="ledP"></span>PHONE</span>
     <span><span class="led on"></span>THE WALL</span>
     <button id="soundBtn" title="Speak the keeper's lines">SOUND ON</button>
+    <button id="abortBtn" class="hide" title="End the match and return to lobby">END MATCH</button>
   </div>
 </div>
 
@@ -169,6 +174,11 @@ function connect(){
 }
 $("startBtn").onclick=()=>{ if(!S)return;
   ws.send(JSON.stringify({type:S.phase==="end"?"again":"start"})); };
+$("abortBtn").onclick=()=>{
+  if(!S||S.phase==="lobby"||!ws||ws.readyState!==1) return;
+  if(!confirm("End this match and return to the lobby?")) return;
+  ws.send(JSON.stringify({type:"abort"}));
+};
 
 /* ============================ HUD ============================ */
 function dots(el, forKeeper){
@@ -201,8 +211,10 @@ function onState(st){
   $("deskName").textContent=st.llm==="cloud"?"CLAUDE DESK":st.llm==="local"?"LOCAL AI DESK":"TEMPLATE DESK";
   if(st.line) $("line").textContent=st.line;
 
-  const big=$("big"), sub=$("sub"), btn=$("startBtn");
+  const big=$("big"), sub=$("sub"), btn=$("startBtn"), abort=$("abortBtn");
   big.className=""; btn.classList.add("hide");
+  // END MATCH visible for any live / full-time phase (not lobby).
+  abort.classList.toggle("hide", st.phase==="lobby");
   switch(st.phase){
     case "lobby":
       big.textContent="GESTURE FOOTBALL";
@@ -359,6 +371,27 @@ const Z2X=z=>z==="L"?-M.GW/3:z==="R"?M.GW/3:0;    // zone → lateral metres
 /* offscreen layers */
 let LBG=null,LCA=null,LCB=null,LPITCH=null,LVIG=null,LBRD=null,LBRDW=0;
 const mk=(w,h)=>{const c=document.createElement("canvas");c.width=Math.max(2,w|0);c.height=Math.max(2,h|0);return c;};
+
+/* photoreal plates (AI-generated) — progressive enhancement over vector scene */
+const PHOTO={stadium:null,idle:null,crouch:null,diveL:null,diveR:null,jump:null,ready:false};
+(function loadPhoto(){
+  const load=(k,src)=>{const im=new Image(); im.onload=()=>{PHOTO[k]=im; PHOTO.ready=!!PHOTO.stadium;}; im.onerror=()=>{}; im.src=src;};
+  load("stadium","img/stadium_bg.png");
+  load("idle","img/keeper_idle.png");
+  load("crouch","img/keeper_crouch.png");
+  load("diveL","img/keeper_dive_L.png");
+  load("diveR","img/keeper_dive_R.png");
+  load("jump","img/keeper_jump.png");
+})();
+function coverDraw(img,x,y,w,h){
+  if(!img) return false;
+  const ir=img.width/img.height, rr=w/h;
+  let sx=0,sy=0,sw=img.width,sh=img.height;
+  if(ir>rr){ sw=img.height*rr; sx=(img.width-sw)/2; }
+  else { sh=img.width/rr; sy=(img.height-sh)/2; }
+  cx.drawImage(img,sx,sy,sw,sh,x,y,w,h);
+  return true;
+}
 
 /* crowd sections */
 const NC=26; let colW=0;
@@ -1014,6 +1047,35 @@ function diveTargets(T,now){
   T.frx=x+fdx*0.92+0.13*Math.abs(Math.cos(sp)); T.fry=Math.max(0.03,hy+fdy*0.94);
   if(Math.abs(sp)<0.35&&hy>0.8){ T.fly=0; T.fry=0; T.flx=x-0.22; T.frx=x+0.22; }
 }
+function pickKeeperPhoto(now){
+  const ph=S?.phase||"lobby";
+  if(ph==="resolve"&&dive){
+    if(dive.watch) return PHOTO.idle;
+    if(dive.dir===0) return PHOTO.jump||PHOTO.crouch;
+    return dive.dir<0?(PHOTO.diveL||PHOTO.crouch):(PHOTO.diveR||PHOTO.crouch);
+  }
+  if(ph==="announce"||ph==="countdown"||ph==="shoot") return PHOTO.crouch||PHOTO.idle;
+  if(ph==="end") return (S&&S.score>S.kicksTotal/2)?(PHOTO.crouch||PHOTO.idle):(PHOTO.jump||PHOTO.idle);
+  return PHOTO.idle||PHOTO.crouch;
+}
+function drawKeeperPhoto(X,Y,s,now){
+  const img=pickKeeperPhoto(now);
+  if(!img) return false;
+  // Place the plate at the keeper's hip/chest with dive lean from KS.sp.
+  const cx0=X(KS.x), cy0=Y(KS.hy+0.55);
+  const h=s*2.15, w=h*(img.width/img.height);
+  const diving=Math.abs(KS.sp)>0.6;
+  cx.save();
+  cx.translate(cx0, cy0);
+  cx.rotate(KS.sp*0.55);
+  // Soft contact shadow
+  cx.fillStyle="rgba(4,12,6,.32)";
+  cx.beginPath(); cx.ellipse(0, h*0.48, w*0.32, h*0.06, 0,0,7); cx.fill();
+  cx.globalAlpha=diving?0.92:1;
+  cx.drawImage(img, -w/2, -h*0.72, w, h);
+  cx.restore();
+  return true;
+}
 function drawKeeper(now,dt){
   const T=keeperTargets(now);
   const r=clamp((T.r||0.14)*dt*60,0,1);
@@ -1021,6 +1083,8 @@ function drawKeeper(now,dt){
     KS[k]+=((T[k]!==undefined?T[k]:KS[k])-KS[k])*r;
   const s=sc(M.DK), gk=gy(M.DK);
   const X=v=>W/2+v*s, Y=v=>gk-v*s;
+  // Photoreal keeper plate when available — vector stays as fallback.
+  if(drawKeeperPhoto(X,Y,s,now)) return;
   const sp=KS.sp, dirx=Math.sin(sp), diry=Math.cos(sp);
   const hip=[KS.x,KS.hy];
   const chest=[hip[0]+dirx*0.50,hip[1]+diry*0.50];
@@ -1201,10 +1265,21 @@ function draw(now){
   updateCrowd(now,dt); updateBall(now,dt);
   cx.save();
   const sh=shakeOff(now); cx.translate(sh[0],sh[1]);
-  cx.drawImage(LBG,0,0);
+  if(PHOTO.stadium){
+    // Photoreal stadium plate as the base; procedural crowd FX still draw over it.
+    coverDraw(PHOTO.stadium,0,0,W,H);
+    // Soften the lower pitch so grass markings / ball read cleanly.
+    cx.fillStyle="rgba(8,28,18,.28)"; cx.fillRect(0,H*0.55,W,H*0.45);
+  } else {
+    cx.drawImage(LBG,0,0);
+  }
   drawCrowd(now);
   drawBoards(now);
-  cx.drawImage(LPITCH,0,0);
+  if(!PHOTO.stadium) cx.drawImage(LPITCH,0,0);
+  else {
+    // Light pitch overlay (markings + grass tint) without wiping the photo.
+    cx.globalAlpha=0.55; cx.drawImage(LPITCH,0,0); cx.globalAlpha=1;
+  }
   drawGoalShadow();
   drawNet(now);
   if(B.d>M.DG+0.05) drawBall();          // ball inside the goal sits behind the frame
