@@ -577,12 +577,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             val kick = pendingCalibKick
             pendingCalibKick = null
             val lm = hud.landmarks
-            val torsoSeen = lm != null && lm.size > PoseAnalyzer.R_HIP
             val advanced = session.onPose(
                 nowMs = System.currentTimeMillis(),
-                // Calibration: guide hit, classic bodyOk, or stable torso for a few frames.
-                bodyOk = hud.inGuide || hud.bodyOk ||
-                    (torsoSeen && hud.bodyOkStreak >= 3),
+                // Any pose mesh is enough to leave FIND YOU; T-pose/aim gates the hold.
+                bodyOk = lm != null,
                 landmarks = lm,
                 wristXMirrored = hud.wristXMirrored,
                 liveForce = hud.liveForce,
