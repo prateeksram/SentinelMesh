@@ -375,16 +375,13 @@ const Z2X=z=>z==="L"?-M.GW/3:z==="R"?M.GW/3:0;    // zone → lateral metres
 let LBG=null,LCA=null,LCB=null,LPITCH=null,LVIG=null,LBRD=null,LBRDW=0;
 const mk=(w,h)=>{const c=document.createElement("canvas");c.width=Math.max(2,w|0);c.height=Math.max(2,h|0);return c;};
 
-/* photoreal plates (AI-generated) — progressive enhancement over vector scene */
-const PHOTO={stadium:null,idle:null,crouch:null,diveL:null,diveR:null,jump:null,ready:false};
+/* Stadium plate only — keeper/striker are live vector people (no photo frames). */
+const PHOTO={stadium:null,ready:false};
 (function loadPhoto(){
-  const load=(k,src)=>{const im=new Image(); im.onload=()=>{PHOTO[k]=im; PHOTO.ready=!!PHOTO.stadium;}; im.onerror=()=>{}; im.src=src;};
-  load("stadium","img/stadium_bg.png");
-  load("idle","img/keeper_idle.png");
-  load("crouch","img/keeper_crouch.png");
-  load("diveL","img/keeper_dive_L.png");
-  load("diveR","img/keeper_dive_R.png");
-  load("jump","img/keeper_jump.png");
+  const im=new Image();
+  im.onload=()=>{PHOTO.stadium=im; PHOTO.ready=true;};
+  im.onerror=()=>{};
+  im.src="img/stadium_bg.png";
 })();
 function coverDraw(img,x,y,w,h){
   if(!img) return false;
@@ -748,26 +745,39 @@ function shoot(last){                       // called by the HUD on resolve entr
   const res=last.result, z=last.zone, kz=last.keeperZone||"C";
   const power=last.power??0.5;
   let tx,ty,td=M.DG;
-  const T=0.40+0.18*(1-power);
+  // Longer flight so the eye can track the ball into the goal.
+  const T=0.62+0.28*(1-power);
   if(res==="over"||!z){ tx=(Math.random()*2-1)*1.4; ty=3.1+Math.random()*0.8; }
   else if(res==="post"){
     if(z==="C"){ tx=(Math.random()<0.5?-1:1)*0.35; ty=M.GH; }
     else{ tx=(z==="L"?-1:1)*(M.GW/2); ty=0.9+Math.random()*1.1; }
   }else{
-    tx=Z2X(z)+(Math.random()*2-1)*0.4;
-    ty=z==="C"?0.45+Math.random()*0.8:0.6+Math.random()*1.1;
+    // Prefer height band from ForcePose when present.
+    const high=last.height==="H";
+    tx=Z2X(z)+(Math.random()*2-1)*0.28;
+    ty=high?(1.45+Math.random()*0.55):(z==="C"?0.45+Math.random()*0.7:0.55+Math.random()*0.95);
   }
   if(res==="save") td=M.DK; else if(res==="goal") td=M.DG+0.12;
   const t0=performance.now();
-  B={x:0,y:0.11,d:M.DSPOT,mode:"fly",rot:0,res,zone:z,t0,tImpact:t0+T*1000,trail:[],
-     curve:(Math.random()*2-1)*2.2,
-     katch:res==="save"&&power<0.62&&z===kz,netFrom:null,netTo:null};
+  // Plant/load first, then ball leaves at foot contact (~35% of kick anim).
+  const contact=0.17;
+  const kickT=contact/0.35;
+  // Curve from ForcePose swing direction (dirDeg).
+  const dirDeg=typeof last.dirDeg==="number"?last.dirDeg:0;
+  const spin=clamp(dirDeg/45,-1,1)*(Math.random()*0.35+0.65)+(Math.random()*2-1)*0.25;
+  const tFly=t0+contact*1000;
+  B={x:0,y:0.11,d:M.DSPOT,mode:"windup",rot:0,res,zone:z,t0,tFly,tImpact:tFly+T*1000,trail:[],
+     curve:spin*2.4,
+     katch:res==="save"&&power<0.62&&z===kz,netFrom:null,netTo:null,
+     tx,ty,td,T};
   B.vx=(tx-0-0.5*B.curve*T*T)/T;
   B.vy=(ty-0.11+4.9*T*T)/T;
   B.vd=(td-M.DSPOT)/T;
-  // keeper dive brief
+  // Striker plants and swings from the same kick packet.
+  strikerKick(last,t0,kickT);
+  // keeper dive brief — reacts as the ball leaves the boot
   const dz=res==="save"?(z||kz):kz;
-  dive={t0,dir:dz==="L"?-1:dz==="R"?1:0,zone:dz,res,
+  dive={t0:tFly,dir:dz==="L"?-1:dz==="R"?1:0,zone:dz,res,
         rx:res==="save"?tx:Z2X(dz)*1.12,
         ry:res==="save"?ty:(dz==="C"?1.9:1.2+Math.random()*0.5),
         short:res==="goal"&&dz===z, watch:res==="over",
@@ -805,6 +815,9 @@ function updateBall(now,dt){
     const t=ez((now-B.t0)/800);
     B.x=lerp(2.6,0,t); B.d=lerp(4.1,M.DSPOT,t); B.y=0.11; B.rot-=dt*9*(1-t*0.7);
     if(t>=1) B.mode="rest";
+  }else if(m==="windup"){
+    B.x=0; B.y=0.11; B.d=M.DSPOT;
+    if(now>=(B.tFly||B.t0)) B.mode="fly";
   }else if(m==="fly"){
     B.vx+=B.curve*dt; B.vy-=9.8*dt;
     B.x+=B.vx*dt; B.y+=B.vy*dt; B.d+=B.vd*dt; B.rot+=dt*14;
@@ -830,18 +843,52 @@ function updateBall(now,dt){
   }else if(m==="held"){
     B.x=(KS.hlx+KS.hrx)/2; B.y=Math.max(0.14,(KS.hly+KS.hry)/2); B.d=M.DK-0.3;
   }
-  // trail while moving fast
-  if((m==="fly"||m==="fly2"||(m==="free"&&Math.abs(B.vd)>3))){
+  // Long trail while the ball flies toward / past the goal.
+  if(m==="fly"||m==="fly2"||m==="net"||(m==="free"&&Math.hypot(B.vx,B.vd)>1.2)){
     const s=sc(B.d);
     B.trail.push({x:W/2+B.x*s,y:gy(B.d)-B.y*s,r:Math.max(4,0.11*s)});
-    if(B.trail.length>9) B.trail.shift();
+    if(B.trail.length>28) B.trail.shift();
   }else if(B.trail.length) B.trail.shift();
+}
+function drawFlightGuide(){
+  // Predicted path from spot → impact while the ball is flying.
+  if((B.mode!=="fly"&&B.mode!=="windup")||!B.T) return;
+  const n=18;
+  cx.save();
+  cx.setLineDash([6,8]);
+  cx.strokeStyle="rgba(255,196,0,.35)";
+  cx.lineWidth=Math.max(1.5,H*0.0025);
+  cx.beginPath();
+  for(let i=0;i<=n;i++){
+    const u=i/n, t=B.T*u;
+    const x=0+B.vx*t+0.5*B.curve*t*t;
+    const y=0.11+B.vy*t-4.9*t*t;
+    const d=M.DSPOT+B.vd*t;
+    const s=sc(d), px=W/2+x*s, py=gy(d)-Math.max(0.05,y)*s;
+    i?cx.lineTo(px,py):cx.moveTo(px,py);
+  }
+  cx.stroke();
+  cx.restore();
 }
 function drawBall(){
   if(B.mode==="gone") return;
   const s=sc(B.d), x=W/2+B.x*s, y=gy(B.d)-B.y*s, r=Math.max(4,0.11*s);
+  // Connected streak to the goal.
+  if(B.trail.length>1){
+    cx.save();
+    cx.lineCap="round"; cx.lineJoin="round";
+    cx.strokeStyle="rgba(255,220,120,.55)";
+    cx.lineWidth=Math.max(2,r*0.55);
+    cx.beginPath();
+    for(let i=0;i<B.trail.length;i++){
+      const p=B.trail[i];
+      i?cx.lineTo(p.x,p.y):cx.moveTo(p.x,p.y);
+    }
+    cx.stroke();
+    cx.restore();
+  }
   for(let i=0;i<B.trail.length;i++){                     // motion blur
-    const p=B.trail[i], a=(i+1)/B.trail.length*0.30;
+    const p=B.trail[i], a=(i+1)/B.trail.length*0.38;
     cx.fillStyle=`rgba(244,247,241,${a})`;
     cx.beginPath(); cx.arc(p.x,p.y,p.r*(0.45+0.5*(i+1)/B.trail.length),0,7); cx.fill();
   }
@@ -1050,134 +1097,378 @@ function diveTargets(T,now){
   T.frx=x+fdx*0.92+0.13*Math.abs(Math.cos(sp)); T.fry=Math.max(0.03,hy+fdy*0.94);
   if(Math.abs(sp)<0.35&&hy>0.8){ T.fly=0; T.fry=0; T.flx=x-0.22; T.frx=x+0.22; }
 }
-function pickKeeperPhoto(now){
+/* ============================== striker (penalty taker) ============================== */
+const SS={x:0.05,hy:0.92,sp:0.04,look:0,up:0,
+  hlx:-0.28,hly:1.22,hrx:0.30,hry:1.20,
+  flx:-0.18,fly:0,frx:0.20,fry:0,
+  foot:"R",phase:"idle",t0:0,T:0.7,zone:"C",power:0.5,dirDeg:0};
+function strikerKick(last,t0,T){
+  const z=last.zone||"C", power=last.power??0.5;
+  const dir=typeof last.dirDeg==="number"?last.dirDeg:0;
+  // Foot from swing direction / zone (ForcePose dirDeg: + = rightward).
+  const foot=(Math.abs(dir)>18?(dir>0?"L":"R"):(z==="L"?"R":"L"));
+  Object.assign(SS,{foot,phase:"kick",t0,T:Math.max(0.4,T),
+    zone:z,power,dirDeg:dir,look:z==="L"?-0.35:z==="R"?0.35:0});
+}
+function strikerReset(){
+  Object.assign(SS,{phase:"idle",foot:"R",look:0,up:0,x:0.05,hy:0.92,sp:0.04,
+    hlx:-0.28,hly:1.22,hrx:0.30,hry:1.20,flx:-0.18,fly:0,frx:0.20,fry:0});
+}
+function strikerTargets(now){
   const ph=S?.phase||"lobby";
-  if(ph==="resolve"&&dive){
-    if(dive.watch) return PHOTO.idle;
-    if(dive.dir===0) return PHOTO.jump||PHOTO.crouch;
-    return dive.dir<0?(PHOTO.diveL||PHOTO.crouch):(PHOTO.diveR||PHOTO.crouch);
+  const T={x:0.08,hy:0.90,sp:0.05,look:0,up:0,
+    hlx:-0.26,hly:1.18,hrx:0.28,hry:1.16,
+    flx:-0.16,fly:0,frx:0.18,fry:0,r:0.16};
+  if(ph==="lobby"||ph==="end"){
+    T.hy=0.93+Math.sin(now/520)*0.01; T.look=Math.sin(now/900)*0.08; return T;
   }
-  if(ph==="announce"||ph==="countdown"||ph==="shoot") return PHOTO.crouch||PHOTO.idle;
-  if(ph==="end") return (S&&S.score>S.kicksTotal/2)?(PHOTO.crouch||PHOTO.idle):(PHOTO.jump||PHOTO.idle);
-  return PHOTO.idle||PHOTO.crouch;
-}
-function drawKeeperPhoto(X,Y,s,now){
-  const img=pickKeeperPhoto(now);
-  if(!img) return false;
-  // Place the plate at the keeper's hip/chest with dive lean from KS.sp.
-  const cx0=X(KS.x), cy0=Y(KS.hy+0.55);
-  const h=s*2.15, w=h*(img.width/img.height);
-  const diving=Math.abs(KS.sp)>0.6;
-  cx.save();
-  cx.translate(cx0, cy0);
-  cx.rotate(KS.sp*0.55);
-  // Soft contact shadow
-  cx.fillStyle="rgba(4,12,6,.32)";
-  cx.beginPath(); cx.ellipse(0, h*0.48, w*0.32, h*0.06, 0,0,7); cx.fill();
-  cx.globalAlpha=diving?0.92:1;
-  cx.drawImage(img, -w/2, -h*0.72, w, h);
-  cx.restore();
-  return true;
-}
-function drawKeeper(now,dt){
-  const T=keeperTargets(now);
-  const r=clamp((T.r||0.14)*dt*60,0,1);
-  for(const k of ["x","hy","sp","hlx","hly","hrx","hry","flx","fly","frx","fry","look","up"])
-    KS[k]+=((T[k]!==undefined?T[k]:KS[k])-KS[k])*r;
-  const s=sc(M.DK), gk=gy(M.DK);
-  const X=v=>W/2+v*s, Y=v=>gk-v*s;
-  // Photoreal keeper plate when available — vector stays as fallback.
-  if(drawKeeperPhoto(X,Y,s,now)) return;
-  const sp=KS.sp, dirx=Math.sin(sp), diry=Math.cos(sp);
-  const hip=[KS.x,KS.hy];
-  const chest=[hip[0]+dirx*0.50,hip[1]+diry*0.50];
-  const head=[chest[0]+dirx*0.33+KS.look*0.07,chest[1]+diry*0.33+KS.up*0.05];
-  const px_=[diry,-dirx];
-  const shl=[chest[0]-px_[0]*0.25,chest[1]-px_[1]*0.25];
-  const shr=[chest[0]+px_[0]*0.25,chest[1]+px_[1]*0.25];
-  const hpl=[hip[0]-px_[0]*0.17,hip[1]-px_[1]*0.17];
-  const hpr=[hip[0]+px_[0]*0.17,hip[1]+px_[1]*0.17];
-  const sL=KS.hly>shl[1]+0.05?-1:1, sR=KS.hry>shr[1]+0.05?1:-1;
-  const armL=ik(shl[0],shl[1],KS.hlx,KS.hly,0.34,0.32,sL);
-  const armR=ik(shr[0],shr[1],KS.hrx,KS.hry,0.34,0.32,sR);
-  const kSign=Math.abs(sp)>0.5?(sp>0?1:-1):0;
-  const legL=ik(hpl[0],hpl[1],KS.flx,KS.fly+0.09,0.46,0.44,kSign||-1);
-  const legR=ik(hpr[0],hpr[1],KS.frx,KS.fry+0.09,0.46,0.44,kSign||1);
-  // shadow
-  const air=Math.max(0,Math.min(KS.fly,KS.fry));
-  cx.fillStyle=`rgba(4,12,6,${clamp(0.35-air*0.4,0.06,0.35)})`;
-  cx.beginPath();
-  cx.ellipse(X(hip[0]+dirx*0.3),gy(M.DK),(0.55+Math.abs(dirx)*0.55)*s,0.14*s,0,0,7);
-  cx.fill();
-  const limb=(a,m,b,wid,col,outline)=>{
-    if(outline){
-      cx.strokeStyle="rgba(5,14,20,.65)"; cx.lineWidth=Math.max(3,(wid+0.045)*s);
-      cx.lineCap="round"; cx.lineJoin="round";
-      cx.beginPath(); cx.moveTo(X(a[0]),Y(a[1])); cx.lineTo(X(m[0]),Y(m[1])); cx.lineTo(X(b[0]),Y(b[1])); cx.stroke();
+  // Approach / plant during countdown & shoot window.
+  if(ph==="announce"||ph==="countdown"||ph==="shoot"){
+    const run=ph==="announce"?0:ph==="countdown"?0.35:0.7;
+    T.x=lerp(0.55,0.06,run); T.hy=0.90; T.sp=0.08;
+    T.hlx=-0.22; T.hly=1.25; T.hrx=0.34; T.hry=1.10;
+    T.flx=-0.12; T.frx=0.22;
+    if(S?.aimLive==="L") T.look=-0.25; else if(S?.aimLive==="R") T.look=0.25;
+    return T;
+  }
+  if(SS.phase==="kick"){
+    const u=clamp((now-SS.t0)/(SS.T*1000),0,1);
+    const kickFoot=SS.foot==="R"?1:-1;
+    const aim=SS.zone==="L"?-1:SS.zone==="R"?1:0;
+    if(u<0.22){ // plant + load
+      const v=ez(u/0.22);
+      T.x=0.04; T.hy=lerp(0.90,0.78,v); T.sp=0.12*kickFoot;
+      T.look=aim*0.4; T.up=-0.05;
+      // plant foot stays; kicking foot draws back
+      if(SS.foot==="R"){
+        T.flx=-0.10; T.fly=0; T.frx=0.35; T.fry=0.35+0.15*v;
+        T.hlx=-0.35; T.hly=1.05; T.hrx=0.45; T.hry=1.35;
+      }else{
+        T.frx=0.10; T.fry=0; T.flx=-0.35; T.fly=0.35+0.15*v;
+        T.hrx=0.35; T.hry=1.05; T.hlx=-0.45; T.hly=1.35;
+      }
+      T.r=0.35; return T;
     }
-    cx.strokeStyle=col; cx.lineWidth=Math.max(2,wid*s); cx.lineCap="round"; cx.lineJoin="round";
-    cx.beginPath(); cx.moveTo(X(a[0]),Y(a[1])); cx.lineTo(X(m[0]),Y(m[1])); cx.lineTo(X(b[0]),Y(b[1])); cx.stroke();
-  };
-  // legs: dark shorts-leg then bright sock on the calf
-  limb(hpl,[legL[0],legL[1]],[legL[2],legL[3]],0.16,"#13273a",true);
-  limb(hpr,[legR[0],legR[1]],[legR[2],legR[3]],0.16,"#13273a",true);
-  cx.strokeStyle="#5ad6fa"; cx.lineWidth=Math.max(2,0.135*s); cx.lineCap="round";
-  cx.beginPath(); cx.moveTo(X(legL[0]),Y(legL[1])); cx.lineTo(X(legL[2]),Y(legL[3]));
-  cx.moveTo(X(legR[0]),Y(legR[1])); cx.lineTo(X(legR[2]),Y(legR[3])); cx.stroke();
-  // boots
-  for(const f of [legL,legR]){
-    cx.fillStyle="#0a0f14";
-    cx.beginPath(); cx.ellipse(X(f[2]),Y(f[3]+0.02),0.17*s,0.09*s,-sp*0.4,0,7); cx.fill();
+    if(u<0.48){ // swing through the ball
+      const v=ez((u-0.22)/0.26);
+      T.x=0.02; T.hy=lerp(0.78,0.86,v); T.sp=-0.18*kickFoot+aim*0.08;
+      T.look=aim*0.55; T.up=0.08*v;
+      if(SS.foot==="R"){
+        T.flx=-0.08; T.fly=0;
+        T.frx=lerp(0.35,-0.05,v); T.fry=lerp(0.50,0.08,v);
+        T.hlx=-0.40; T.hly=1.15; T.hrx=0.20; T.hry=1.40;
+      }else{
+        T.frx=0.08; T.fry=0;
+        T.flx=lerp(-0.35,0.05,v); T.fly=lerp(0.50,0.08,v);
+        T.hrx=0.40; T.hry=1.15; T.hlx=-0.20; T.hly=1.40;
+      }
+      T.r=0.55; return T;
+    }
+    // follow-through / hold
+    const v=ez(clamp((u-0.48)/0.52,0,1));
+    T.x=-0.02+aim*0.04; T.hy=lerp(0.86,0.92,v); T.sp=-0.10*kickFoot;
+    T.look=aim*0.3; T.up=0.04;
+    if(SS.foot==="R"){
+      T.flx=-0.05; T.fly=0; T.frx=-0.15; T.fry=0.55*(1-v*0.35);
+      T.hlx=-0.30; T.hly=1.25; T.hrx=0.15; T.hry=1.45;
+    }else{
+      T.frx=0.05; T.fry=0; T.flx=0.15; T.fly=0.55*(1-v*0.35);
+      T.hrx=0.30; T.hry=1.25; T.hlx=-0.15; T.hly=1.45;
+    }
+    T.r=0.22;
+    if(u>=1) SS.phase="hold";
+    return T;
   }
-  // torso
-  const tg=cx.createLinearGradient(X(shl[0]),Y(shl[1]),X(hpr[0]),Y(hpr[1]));
-  tg.addColorStop(0,"#8ae6ff"); tg.addColorStop(0.45,"#4fd0f8"); tg.addColorStop(1,"#2496c9");
-  cx.fillStyle=tg; cx.strokeStyle="rgba(5,14,20,.7)"; cx.lineWidth=Math.max(1.5,0.03*s);
+  // hold pose after kick
+  T.x=-0.02; T.hy=0.92; T.sp=SS.foot==="R"?-0.08:0.08;
+  T.look=SS.zone==="L"?-0.2:SS.zone==="R"?0.2:0;
+  if(SS.foot==="R"){ T.flx=-0.05; T.frx=-0.12; T.fry=0.35; }
+  else { T.frx=0.05; T.flx=0.12; T.fly=0.35; }
+  return T;
+}
+/* Solid stylized athlete — filled capsules/torso, not stroke sticks. */
+function drawCapsule(x0,y0,x1,y1,r0,r1,fill,stroke){
+  const dx=x1-x0, dy=y1-y0, len=Math.hypot(dx,dy)||1e-4;
+  const nx=-dy/len, ny=dx/len;
   cx.beginPath();
-  cx.moveTo(X(shl[0]-px_[0]*0.05),Y(shl[1]-px_[1]*0.05));
-  cx.lineTo(X(shr[0]+px_[0]*0.05),Y(shr[1]+px_[1]*0.05));
-  cx.lineTo(X(hpr[0]+px_[0]*0.04),Y(hpr[1]+px_[1]*0.04));
-  cx.lineTo(X(hpl[0]-px_[0]*0.04),Y(hpl[1]-px_[1]*0.04));
-  cx.closePath(); cx.fill(); cx.stroke();
-  // shorts
-  cx.fillStyle="#0e1c28";
+  cx.moveTo(x0+nx*r0,y0+ny*r0);
+  cx.lineTo(x1+nx*r1,y1+ny*r1);
+  cx.arc(x1,y1,r1,Math.atan2(ny,nx),Math.atan2(-ny,-nx),false);
+  cx.lineTo(x0-nx*r0,y0-ny*r0);
+  cx.arc(x0,y0,r0,Math.atan2(-ny,-nx),Math.atan2(ny,nx),false);
+  cx.closePath();
+  cx.fillStyle=fill; cx.fill();
+  if(stroke){ cx.strokeStyle=stroke; cx.lineWidth=Math.max(1,Math.min(r0,r1)*0.22); cx.stroke(); }
+}
+function drawPerson(now,dt,state,targets,depth,kit,opt){
+  const r=clamp((targets.r||0.14)*dt*60,0,1);
+  for(const k of ["x","hy","sp","hlx","hly","hrx","hry","flx","fly","frx","fry","look","up"])
+    state[k]+=((targets[k]!==undefined?targets[k]:state[k])-state[k])*r;
+  // World metres → px; cap on-screen height so near-camera figures don't eat the frame.
+  let s=sc(depth);
+  const maxH=(opt&&opt.maxH)||H*0.46;
+  if(1.85*s>maxH) s=maxH/1.85;
+  const gnd=gy(depth);
+  const X=v=>W/2+v*s, Y=v=>gnd-v*s;
+  const sp=state.sp, dirx=Math.sin(sp), diry=Math.cos(sp);
+  const hip=[state.x,state.hy];
+  const chest=[hip[0]+dirx*0.52,hip[1]+diry*0.52];
+  const neck=[chest[0]+dirx*0.18,chest[1]+diry*0.18];
+  const head=[chest[0]+dirx*0.36+state.look*0.07,chest[1]+diry*0.36+state.up*0.05];
+  const px_=[diry,-dirx];
+  const shl=[chest[0]-px_[0]*0.26,chest[1]-px_[1]*0.26];
+  const shr=[chest[0]+px_[0]*0.26,chest[1]+px_[1]*0.26];
+  const hpl=[hip[0]-px_[0]*0.15,hip[1]-px_[1]*0.15];
+  const hpr=[hip[0]+px_[0]*0.15,hip[1]+px_[1]*0.15];
+  const sL=state.hly>shl[1]+0.05?-1:1, sR=state.hry>shr[1]+0.05?1:-1;
+  const armL=ik(shl[0],shl[1],state.hlx,state.hly,0.34,0.32,sL);
+  const armR=ik(shr[0],shr[1],state.hrx,state.hry,0.34,0.32,sR);
+  const kSign=Math.abs(sp)>0.5?(sp>0?1:-1):0;
+  const legL=ik(hpl[0],hpl[1],state.flx,state.fly+0.08,0.46,0.44,kSign||-1);
+  const legR=ik(hpr[0],hpr[1],state.frx,state.fry+0.08,0.46,0.44,kSign||1);
+  const ink="rgba(8,16,24,.55)";
+  const air=Math.max(0,Math.min(state.fly,state.fry));
+  cx.fillStyle=`rgba(4,12,6,${clamp(0.40-air*0.4,0.10,0.40)})`;
   cx.beginPath();
-  cx.moveTo(X(hpl[0]-px_[0]*0.05),Y(hpl[1]-px_[1]*0.05));
-  cx.lineTo(X(hpr[0]+px_[0]*0.05),Y(hpr[1]+px_[1]*0.05));
-  cx.lineTo(X(hpr[0]+px_[0]*0.02-dirx*0.24),Y(hpr[1]+px_[1]*0.02-diry*0.24));
-  cx.lineTo(X(hpl[0]-px_[0]*0.02-dirx*0.24),Y(hpl[1]-px_[1]*0.02-diry*0.24));
-  cx.closePath(); cx.fill();
-  // jersey print
-  if(s>46){
+  cx.ellipse(X(hip[0]+dirx*0.2),gnd,(0.42+Math.abs(dirx)*0.4)*s,0.11*s,0,0,7);
+  cx.fill();
+
+  // Thighs (shorts) + calves (socks) as solid tapered capsules.
+  const thighW=0.11*s, kneeW=0.09*s, ankleW=0.07*s;
+  for(const L of [[hpl,legL],[hpr,legR]]){
+    const hipP=L[0], mid=[L[1][0],L[1][1]], foot=[L[1][2],L[1][3]];
+    drawCapsule(X(hipP[0]),Y(hipP[1]),X(mid[0]),Y(mid[1]),thighW,kneeW,kit.shortFill,ink);
+    drawCapsule(X(mid[0]),Y(mid[1]),X(foot[0]),Y(foot[1]),kneeW*0.95,ankleW,kit.sock,ink);
+    // boot
+    const ang=Math.atan2(Y(foot[1])-Y(mid[1]),X(foot[0])-X(mid[0]));
     cx.save();
-    cx.translate(X((chest[0]+hip[0])/2),Y((chest[1]+hip[1])/2+0.08));
-    cx.rotate(sp);
-    cx.fillStyle="#07202c"; cx.textAlign="center";
-    cx.font=`700 ${Math.max(5,0.085*s)}px ${FCND}`;
-    cx.fillText("THE WALL",0,-0.10*s);
-    cx.font=`900 ${Math.max(8,0.22*s)}px ${FBLK}`;
-    cx.fillText("1",0,0.14*s);
+    cx.translate(X(foot[0]),Y(foot[1])+0.02*s);
+    cx.rotate(ang*0.35-sp*0.25);
+    cx.fillStyle=kit.boot;
+    cx.beginPath(); cx.ellipse(0.04*s,0,0.15*s,0.07*s,0,0,7); cx.fill();
+    cx.fillStyle=kit.bootToe||"#2a3340";
+    cx.beginPath(); cx.ellipse(0.12*s,0.01*s,0.07*s,0.05*s,0,0,7); cx.fill();
     cx.restore();
   }
-  // arms (long sleeves)
-  limb(shl,[armL[0],armL[1]],[armL[2],armL[3]],0.12,"#3cbcea",true);
-  limb(shr,[armR[0],armR[1]],[armR[2],armR[3]],0.12,"#6adcff",true);
-  // gloves
-  for(const a of [armL,armR]){
-    cx.fillStyle="#ffffff";
-    cx.beginPath(); cx.arc(X(a[2]),Y(a[3]),0.105*s,0,7); cx.fill();
-    cx.strokeStyle="rgba(10,25,38,.6)"; cx.lineWidth=Math.max(1,0.02*s); cx.stroke();
-  }
-  // neck
-  cx.strokeStyle="#e6b184"; cx.lineWidth=Math.max(2,0.07*s);
-  cx.beginPath(); cx.moveTo(X(chest[0]),Y(chest[1])); cx.lineTo(X(head[0]),Y(head[1]-0.05)); cx.stroke();
-  // head
-  cx.strokeStyle="rgba(5,14,20,.6)"; cx.lineWidth=Math.max(1.5,0.02*s);
-  cx.fillStyle="#e6b184";
-  cx.beginPath(); cx.arc(X(head[0]),Y(head[1]),0.14*s,0,7); cx.fill(); cx.stroke();
-  cx.fillStyle="#11161b";                                 // hair
+
+  // Torso — rounded jersey body
+  const shoulderW=0.30, waistW=0.20;
+  const tUL=[shl[0]-px_[0]*0.08,shl[1]-px_[1]*0.08];
+  const tUR=[shr[0]+px_[0]*0.08,shr[1]+px_[1]*0.08];
+  const tLR=[hpr[0]+px_[0]*0.06-dirx*0.06,hpr[1]+px_[1]*0.06-diry*0.06];
+  const tLL=[hpl[0]-px_[0]*0.06-dirx*0.06,hpl[1]-px_[1]*0.06-diry*0.06];
+  const tg=cx.createLinearGradient(X(tUL[0]),Y(tUL[1]),X(tLR[0]),Y(tLR[1]));
+  tg.addColorStop(0,kit.jersey0); tg.addColorStop(0.55,kit.jersey1); tg.addColorStop(1,kit.jersey2);
   cx.beginPath();
-  cx.arc(X(head[0]),Y(head[1]),0.142*s,Math.PI+sp-0.55,2*Math.PI+sp+0.55); cx.fill();
+  cx.moveTo(X(tUL[0]),Y(tUL[1]));
+  cx.quadraticCurveTo(X(chest[0]+dirx*0.08),Y(chest[1]+diry*0.08)-0.02*s,X(tUR[0]),Y(tUR[1]));
+  cx.lineTo(X(tLR[0]),Y(tLR[1]));
+  cx.quadraticCurveTo(X(hip[0]-dirx*0.05),Y(hip[1]-diry*0.02),X(tLL[0]),Y(tLL[1]));
+  cx.closePath();
+  cx.fillStyle=tg; cx.fill();
+  cx.strokeStyle=ink; cx.lineWidth=Math.max(1.2,0.02*s); cx.stroke();
+
+  // Shorts overlay
+  cx.beginPath();
+  cx.moveTo(X(hpl[0]-px_[0]*0.08),Y(hpl[1]-px_[1]*0.02));
+  cx.lineTo(X(hpr[0]+px_[0]*0.08),Y(hpr[1]-px_[1]*0.02));
+  cx.lineTo(X(hpr[0]+px_[0]*0.04-dirx*0.28),Y(hpr[1]+px_[1]*0.04-diry*0.28));
+  cx.lineTo(X(hpl[0]-px_[0]*0.04-dirx*0.28),Y(hpl[1]-px_[1]*0.04-diry*0.28));
+  cx.closePath();
+  cx.fillStyle=kit.shortFill; cx.fill();
+
+  // Jersey number / label
+  if(kit.num&&s>28){
+    cx.save();
+    cx.translate(X((chest[0]+hip[0])/2),Y((chest[1]+hip[1])/2+0.04));
+    cx.rotate(sp);
+    cx.fillStyle=kit.labelCol; cx.textAlign="center"; cx.textBaseline="middle";
+    if(kit.label&&s>48){
+      cx.font=`700 ${Math.max(6,0.075*s)}px ${FCND}`;
+      cx.fillText(kit.label,0,-0.10*s);
+    }
+    cx.font=`900 ${Math.max(10,0.22*s)}px ${FBLK}`;
+    cx.fillText(kit.num,0,0.06*s);
+    cx.restore();
+  }
+
+  // Arms — upper sleeve + forearm
+  const armUW=0.085*s, armLW=0.065*s, wristW=0.055*s;
+  for(const [sh,arm,colU,colL] of [
+    [shl,armL,kit.sleeve,kit.skin],[shr,armR,kit.sleeveHi,kit.skin]
+  ]){
+    const mid=[arm[0],arm[1]], hand=[arm[2],arm[3]];
+    drawCapsule(X(sh[0]),Y(sh[1]),X(mid[0]),Y(mid[1]),armUW,armLW,colU,ink);
+    drawCapsule(X(mid[0]),Y(mid[1]),X(hand[0]),Y(hand[1]),armLW*0.9,wristW,colL,ink);
+    cx.fillStyle=kit.hand;
+    cx.beginPath(); cx.ellipse(X(hand[0]),Y(hand[1]),0.075*s,0.065*s,sp*0.3,0,7); cx.fill();
+    if(kit.gloveStroke){
+      cx.strokeStyle=kit.gloveStroke; cx.lineWidth=Math.max(1,0.015*s); cx.stroke();
+    }
+  }
+
+  // Neck + head
+  drawCapsule(X(neck[0]),Y(neck[1]),X(head[0]),Y(head[1]-0.06),0.045*s,0.05*s,kit.skin,ink);
+  const hx=X(head[0]), hy=Y(head[1]), hr=0.125*s;
+  cx.fillStyle=kit.skin;
+  cx.beginPath(); cx.ellipse(hx,hy,hr*0.92,hr,0,0,7); cx.fill();
+  cx.strokeStyle=ink; cx.lineWidth=Math.max(1,0.016*s); cx.stroke();
+  // hair cap
+  cx.fillStyle=kit.hair;
+  cx.beginPath();
+  cx.ellipse(hx-dirx*hr*0.05,hy-hr*0.15,hr*0.95,hr*0.72,sp*0.2,Math.PI*1.05,Math.PI*1.95);
+  cx.fill();
+  // simple ear hints
+  cx.fillStyle=kit.skin;
+  cx.beginPath(); cx.ellipse(hx-hr*0.85,hy+hr*0.05,hr*0.18,hr*0.28,0,0,7); cx.fill();
+  cx.beginPath(); cx.ellipse(hx+hr*0.85,hy+hr*0.05,hr*0.18,hr*0.28,0,0,7); cx.fill();
+}
+const KIT_STRIKER={
+  jersey0:"#f7faf6",jersey1:"#e4ebe3",jersey2:"#c5d0c4",
+  sleeve:"#e4ebe3",sleeveHi:"#f7faf6",short:"#1a2740",shortFill:"#152033",
+  sock:"#e8b84a",boot:"#141a22",bootToe:"#2c3544",
+  hand:"#d9a57a",skin:"#e0ad82",hair:"#2a1a12",
+  label:"",labelCol:"#1a2740",num:"9"
+};
+const KIT_KEEPER={
+  jersey0:"#7fe0ff",jersey1:"#3fc8f0",jersey2:"#1e8fbc",
+  sleeve:"#2eb4e0",sleeveHi:"#5ad4f8",short:"#13273a",shortFill:"#0e1c28",
+  sock:"#1a2740",boot:"#0a0f14",bootToe:"#1c2836",
+  hand:"#f4f7f1",skin:"#e0ad82",hair:"#11161b",gloveStroke:"rgba(10,25,38,.55)",
+  label:"THE WALL",labelCol:"#062028",num:"1"
+};
+/* ---- Option B: ForcePose skeleton → solid striker on the pitch ---- */
+const MP={NOSE:0,L_SHO:11,R_SHO:12,L_ELB:13,R_ELB:14,L_WRI:15,R_WRI:16,
+          L_HIP:23,R_HIP:24,L_KNE:25,R_KNE:26,L_ANK:27,R_ANK:28,L_FT:31,R_FT:32};
+let poseKick=-1, poseT0=0;
+function samplePoseFrame(now){
+  const fr=S?.replay?.frames;
+  if(!fr||fr.length<2) return null;
+  if(S.replay.kick!==poseKick){ poseKick=S.replay.kick; poseT0=now; }
+  const t0=fr[0].t, t1=fr[fr.length-1].t, span=t1-t0||1;
+  // Play once slightly slowed so the kick reads; hold the last frame.
+  const SLOW=1.65;
+  const playT=t0+Math.min((now-poseT0)/SLOW, span);
+  let f=fr[0];
+  for(const g of fr){ if(g.t<=playT) f=g; else break; }
+  return f;
+}
+function drawPoseStriker(now,frame){
+  const p=frame.p;
+  if(!p||!p[MP.L_HIP]||!p[MP.R_HIP]||!p[MP.L_ANK]||!p[MP.R_ANK]) return false;
+  const depth=M.DSPOT-0.2;
+  let s=sc(depth);
+  const maxH=H*0.38;
+  if(1.85*s>maxH) s=maxH/1.85;
+  const gnd=gy(depth);
+  // MediaPipe world: y down, x = person's right. TV sees their back → flip x.
+  const footY=Math.max(
+    p[MP.L_ANK][1], p[MP.R_ANK][1],
+    p[MP.L_FT]?p[MP.L_FT][1]:-1e9, p[MP.R_FT]?p[MP.R_FT][1]:-1e9
+  );
+  const hipY=(p[MP.L_HIP][1]+p[MP.R_HIP][1])*0.5;
+  const hipX=-(p[MP.L_HIP][0]+p[MP.R_HIP][0])*0.5;
+  // Lateral bias toward aimed zone so they sit on the spot line.
+  const aimBias=SS.zone==="L"?-0.12:SS.zone==="R"?0.12:0;
+  const P=i=>{
+    const q=p[i]; if(!q) return null;
+    const lx=-q[0]-hipX+aimBias;          // centred on hips, rear view
+    const ly=footY-q[1];                  // metres above planted feet
+    return [W/2+lx*s, gnd-ly*s];
+  };
+  const need=[MP.L_SHO,MP.R_SHO,MP.L_HIP,MP.R_HIP,MP.L_KNE,MP.R_KNE,MP.L_ANK,MP.R_ANK];
+  for(const i of need) if(!P(i)) return false;
+  const kit=KIT_STRIKER, ink="rgba(8,16,24,.55)";
+  // Ground shadow under ankles
+  const aL=P(MP.L_ANK), aR=P(MP.R_ANK);
+  cx.fillStyle="rgba(4,12,6,.35)";
+  cx.beginPath();
+  cx.ellipse((aL[0]+aR[0])/2,gnd,Math.max(18,0.38*s),Math.max(5,0.10*s),0,0,7);
+  cx.fill();
+
+  const seg=(ia,ib,r0,r1,col)=>{
+    const A=P(ia), B=P(ib); if(!A||!B) return;
+    drawCapsule(A[0],A[1],B[0],B[1],r0,r1,col,ink);
+  };
+  // Legs: thigh (shorts) + calf (sock)
+  seg(MP.L_HIP,MP.L_KNE,0.11*s,0.09*s,kit.shortFill);
+  seg(MP.R_HIP,MP.R_KNE,0.11*s,0.09*s,kit.shortFill);
+  seg(MP.L_KNE,MP.L_ANK,0.085*s,0.065*s,kit.sock);
+  seg(MP.R_KNE,MP.R_ANK,0.085*s,0.065*s,kit.sock);
+  // Boots
+  for(const [ia,ift] of [[MP.L_ANK,MP.L_FT],[MP.R_ANK,MP.R_FT]]){
+    const A=P(ia), F=ift!=null&&p[ift]?P(ift):null;
+    const tip=F||[A[0],A[1]+0.04*s];
+    cx.fillStyle=kit.boot;
+    cx.beginPath(); cx.ellipse((A[0]+tip[0])/2,(A[1]+tip[1])/2+0.01*s,0.12*s,0.065*s,0,0,7); cx.fill();
+  }
+  // Torso jersey from shoulders→hips
+  const LS=P(MP.L_SHO), RS=P(MP.R_SHO), LH=P(MP.L_HIP), RH=P(MP.R_HIP);
+  const tg=cx.createLinearGradient(LS[0],LS[1],RH[0],RH[1]);
+  tg.addColorStop(0,kit.jersey0); tg.addColorStop(0.55,kit.jersey1); tg.addColorStop(1,kit.jersey2);
+  cx.beginPath();
+  cx.moveTo(LS[0],LS[1]); cx.lineTo(RS[0],RS[1]);
+  cx.lineTo(RH[0],RH[1]); cx.lineTo(LH[0],LH[1]);
+  cx.closePath(); cx.fillStyle=tg; cx.fill();
+  cx.strokeStyle=ink; cx.lineWidth=Math.max(1.2,0.02*s); cx.stroke();
+  // Shorts band
+  cx.beginPath();
+  cx.moveTo(LH[0],LH[1]); cx.lineTo(RH[0],RH[1]);
+  const midH=[(LH[0]+RH[0])/2,(LH[1]+RH[1])/2];
+  const midK=P(MP.L_KNE), midK2=P(MP.R_KNE);
+  cx.lineTo(midK2[0]*0.35+RH[0]*0.65, midK2[1]*0.35+RH[1]*0.65);
+  cx.lineTo(midK[0]*0.35+LH[0]*0.65, midK[1]*0.35+LH[1]*0.65);
+  cx.closePath(); cx.fillStyle=kit.shortFill; cx.fill();
+  // Number
+  if(s>28){
+    cx.save();
+    cx.translate((LS[0]+RS[0]+LH[0]+RH[0])/4,(LS[1]+RS[1]+LH[1]+RH[1])/4);
+    cx.fillStyle=kit.labelCol; cx.textAlign="center"; cx.textBaseline="middle";
+    cx.font=`900 ${Math.max(10,0.20*s)}px ${FBLK}`;
+    cx.fillText(kit.num,0,0);
+    cx.restore();
+  }
+  // Arms
+  seg(MP.L_SHO,MP.L_ELB,0.08*s,0.065*s,kit.sleeve);
+  seg(MP.R_SHO,MP.R_ELB,0.08*s,0.065*s,kit.sleeveHi);
+  if(p[MP.L_WRI]) seg(MP.L_ELB,MP.L_WRI,0.06*s,0.05*s,kit.skin);
+  if(p[MP.R_WRI]) seg(MP.R_ELB,MP.R_WRI,0.06*s,0.05*s,kit.skin);
+  for(const iw of [MP.L_WRI,MP.R_WRI]){
+    const Hnd=P(iw); if(!Hnd) continue;
+    cx.fillStyle=kit.hand;
+    cx.beginPath(); cx.ellipse(Hnd[0],Hnd[1],0.07*s,0.06*s,0,0,7); cx.fill();
+  }
+  // Head from nose / mid-shoulder
+  const nose=P(MP.NOSE);
+  const midS=[(LS[0]+RS[0])/2,(LS[1]+RS[1])/2];
+  const hx=nose?nose[0]:midS[0], hy=nose?nose[1]:midS[1]-0.22*s;
+  const hr=0.12*s;
+  drawCapsule(midS[0],midS[1],hx,hy+hr*0.3,0.04*s,0.045*s,kit.skin,ink);
+  cx.fillStyle=kit.skin;
+  cx.beginPath(); cx.ellipse(hx,hy,hr*0.9,hr,0,0,7); cx.fill();
+  cx.strokeStyle=ink; cx.lineWidth=Math.max(1,0.015*s); cx.stroke();
+  cx.fillStyle=kit.hair;
+  cx.beginPath(); cx.ellipse(hx,hy-hr*0.2,hr*0.92,hr*0.65,0,Math.PI*1.05,Math.PI*1.95); cx.fill();
+  // Tiny "YOU" cue while pose-driven
+  cx.fillStyle="rgba(255,196,0,.85)";
+  cx.font=`800 ${Math.max(10,H*0.016)}px ${FCND}`;
+  cx.textAlign="center";
+  cx.fillText("YOUR KICK · FORCEPOSE",W/2,gnd+Math.max(14,H*0.022));
+  return true;
+}
+function drawStriker(now,dt){
+  const ph=S?.phase||"lobby";
+  if(ph==="lobby"||ph==="end") return;
+  // Option B: when bullet-time frames land, drive the pitch striker from your skeleton.
+  if(ph==="resolve"){
+    const f=samplePoseFrame(now);
+    if(f&&drawPoseStriker(now,f)) return;
+  }
+  // Fallback A: stylized approach / procedural kick until replay arrives.
+  drawPerson(now,dt,SS,strikerTargets(now),M.DSPOT-0.2,KIT_STRIKER,{maxH:H*0.38});
+}
+function drawKeeper(now,dt){
+  drawPerson(now,dt,KS,keeperTargets(now),M.DK,KIT_KEEPER,{maxH:H*0.34});
 }
 
 /* ============================== aim reticle ============================== */
@@ -1240,10 +1531,10 @@ function sceneOnState(st,p){
   if(p?.phase===st.phase) return;
   switch(st.phase){
     case "lobby":
-      ballReset(); dive=null; FX.flashRate=1.2; FX.confetti.length=0;
+      ballReset(); dive=null; strikerReset(); poseKick=-1; FX.flashRate=1.2; FX.confetti.length=0;
       rampAmb(0.045,1.2); break;
     case "announce":
-      ballRollIn(); dive=null; FX.flashRate=4; rampAmb(0.06,1); break;
+      ballRollIn(); dive=null; strikerReset(); poseKick=-1; FX.flashRate=4; rampAmb(0.06,1); break;
     case "countdown":
       FX.flashRate=6; rampAmb(0.075,1); break;
     case "shoot":
@@ -1288,7 +1579,9 @@ function draw(now){
   if(B.d>M.DG+0.05) drawBall();          // ball inside the goal sits behind the frame
   drawFrame(now);
   drawKeeper(now,dt);
-  if(B.d<=M.DG+0.05) drawBall();
+  if(B.d>M.DSPOT+0.2 && B.d<=M.DG+0.05){ drawFlightGuide(); drawBall(); }
+  drawStriker(now,dt);                   // taker at the spot — nearer than flight path
+  if(B.d<=M.DSPOT+0.2){ drawFlightGuide(); drawBall(); }
   drawReticle(now);                      // aim HUD floats over the scene
   drawFX(now,dt);
   cx.restore();
