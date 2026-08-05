@@ -102,20 +102,6 @@ class OverlayView @JvmOverloads constructor(
         guideLabel.textSize = height * 0.045f
         val label = if (guideOk) "IN FRAME ✓" else "STAND HERE"
         canvas.drawText(label, guideRect.centerX(), guideRect.top + height * 0.06f, guideLabel)
-
-        // Simple head + torso silhouette cues
-        val cx = guideRect.centerX()
-        val headR = guideRect.width() * 0.08f
-        val headCy = guideRect.top + guideRect.height() * 0.14f
-        guideStroke.strokeWidth = 3f
-        canvas.drawCircle(cx, headCy, headR, guideStroke)
-        val bodyTop = headCy + headR + 8f
-        val bodyBottom = guideRect.bottom - guideRect.height() * 0.08f
-        val bodyHalfW = guideRect.width() * 0.16f
-        canvas.drawRoundRect(
-            RectF(cx - bodyHalfW, bodyTop, cx + bodyHalfW, bodyBottom),
-            18f, 18f, guideStroke,
-        )
     }
 
     private fun drawCorners(canvas: Canvas, r: RectF, len: Float) {

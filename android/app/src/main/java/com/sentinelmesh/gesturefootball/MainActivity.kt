@@ -411,7 +411,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     binding.hint.text = "Voice · skip · \"${result.text}\""
                     vibrate(40)
                     if (calib?.step == CalibrationSession.Step.BIOMETRICS) onCalibNext()
-                    else onCalibSkip()
+                    else voiceSkipCalibStep()
                 }
                 else -> if (result.text.isNotBlank()) {
                     binding.hint.text = "Heard: \"${result.text}\""
@@ -684,11 +684,17 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         )
         panel.calibBioRow.visibility = if (ui.showBiometrics) View.VISIBLE else View.GONE
 
+        // Left button is always START OVER during calib (except DONE → only PLAY).
+        fun showStartOver() {
+            panel.calibSkip.visibility = View.VISIBLE
+            panel.calibSkip.text = getString(R.string.calib_start_over)
+        }
+
         when {
             ui.waitingConfirm -> {
-                pose?.calibrationSwing = ui.step == CalibrationSession.Step.PRACTICE
-                panel.calibSkip.visibility = View.VISIBLE
-                panel.calibSkip.text = getString(R.string.calib_skip)
+                // Don't arm kick detection while waiting for READY — avoids burning cooldown.
+                pose?.calibrationSwing = false
+                showStartOver()
                 panel.calibNext.text = "I'M READY"
                 panel.calibNext.isEnabled = true
                 panel.calibNext.alpha = 1f
@@ -696,15 +702,16 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 binding.hint.text = ui.hint
             }
             ui.step == CalibrationSession.Step.BIOMETRICS -> {
-                panel.calibNext.text = getString(R.string.calib_next)
-                panel.calibSkip.visibility = View.INVISIBLE
                 pose?.calibrationSwing = false
+                showStartOver()
+                panel.calibNext.text = getString(R.string.calib_next)
+                panel.calibNext.isEnabled = true
+                panel.calibNext.alpha = 1f
             }
             ui.step == CalibrationSession.Step.PRACTICE -> {
                 pose?.calibrationSwing = true
-                pose?.setKickThreshold(1.8f)
-                panel.calibSkip.visibility = View.VISIBLE
-                panel.calibSkip.text = "RESTART"
+                pose?.setKickThreshold(1.5f)
+                showStartOver()
                 panel.calibNext.text = if (ui.canFinishSwing) getString(R.string.calib_confirm_swing) else "SWING…"
                 panel.calibNext.isEnabled = ui.canFinishSwing
                 panel.calibNext.alpha = if (ui.canFinishSwing) 1f else 0.45f
@@ -713,7 +720,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             }
             ui.step == CalibrationSession.Step.DONE -> {
                 pose?.calibrationSwing = false
-                panel.calibSkip.visibility = View.INVISIBLE
+                showStartOver()
                 panel.calibNext.text = getString(R.string.calib_done)
                 panel.calibNext.isEnabled = true
                 panel.calibNext.alpha = 1f
@@ -721,8 +728,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             }
             else -> {
                 pose?.calibrationSwing = false
-                panel.calibSkip.visibility = View.VISIBLE
-                panel.calibSkip.text = getString(R.string.calib_skip)
+                showStartOver()
                 panel.calibNext.text = if (ui.holding) "HOLD…" else "AUTO"
                 panel.calibNext.isEnabled = false
                 panel.calibNext.alpha = 0.45f
@@ -757,10 +763,17 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         }
     }
 
+    /** Left calib button: always restart from scratch. */
     private fun onCalibSkip() {
+        if (!calibrating) return
+        coach?.speak("Starting over.")
+        startCalibration()
+    }
+
+    /** Voice "skip" still advances aim/tpose without a full restart. */
+    private fun voiceSkipCalibStep() {
         val session = calib ?: return
         when (session.step) {
-            CalibrationSession.Step.PRACTICE -> startCalibration()
             CalibrationSession.Step.TPOSE -> {
                 session.skipTpose()
                 refreshCalibUi()
@@ -772,6 +785,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 session.skipAimDefaults()
                 refreshCalibUi()
             }
+            CalibrationSession.Step.PRACTICE -> startCalibration()
             else -> Unit
         }
     }
@@ -875,6 +889,14 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 refreshCalibUi()
             }
             return
+        }
+
+        // Foot-only kicks: surface soft/short coaching during shoot (never "hand").
+        if (lastPhase == "shoot" && !hintHeldByHost()) {
+            when (hud.kickReject) {
+                "soft" -> binding.hint.text = "Harder — swing through the ball"
+                "short" -> binding.hint.text = "Follow through — kick the ball"
+            }
         }
 
         val now = System.currentTimeMillis()

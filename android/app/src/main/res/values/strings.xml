@@ -10,6 +10,7 @@
     <string name="calib_hint">Private biomechanical profile — never uploaded.</string>
     <string name="calib_next">NEXT</string>
     <string name="calib_skip">SKIP AIM</string>
+    <string name="calib_start_over">START OVER</string>
     <string name="calib_done">PLAY</string>
     <string name="calib_confirm_swing">USE THIS SWING</string>
 </resources>
