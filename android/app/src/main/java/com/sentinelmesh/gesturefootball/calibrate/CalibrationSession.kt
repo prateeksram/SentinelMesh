@@ -10,11 +10,12 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * On-device calibration state machine.
- * Steps: biometrics → T-pose → aim L/C/R → practice swing → profile.
+ * Conversational on-device calibration.
  *
- * Hold steps auto-advance once the progress bar fills
- * (T-pose [TPOSE_HOLD_MS], aim corners [AIM_HOLD_MS]).
+ * Flow: biometrics → (wait ready) T-pose → (wait) aim L/C/R → (wait) 3 practice
+ * swings → done. Each capture stage arms only after a spoken READY/NEXT, and
+ * never auto-accepts a wrong pose — the coach tells the player exactly what
+ * to fix until the hold fills.
  */
 class CalibrationSession {
 
@@ -35,10 +36,13 @@ class CalibrationSession {
         val progress: Float,
         val showBiometrics: Boolean,
         val canFinishSwing: Boolean = false,
-        /** True while a hold timer is actively filling the bar. */
         val holding: Boolean = false,
-        /** Spoken instruction for this state — empty means stay quiet. */
+        /** Spoken instruction / correction — empty means stay quiet. */
         val voice: String = "",
+        /** True while waiting for the player to say "ready" before capturing. */
+        val waitingConfirm: Boolean = false,
+        val swingIndex: Int = 0,
+        val swingTotal: Int = PRACTICE_SWINGS,
     )
 
     var step: Step = Step.BIOMETRICS
@@ -48,7 +52,7 @@ class CalibrationSession {
     var weightKg: Float = 75f
 
     private var torsoM: Float = PlayerProfile.torsoMetresFromHeight(175f)
-    private var kickMs: Float = PlayerProfile.DEFAULT_KICK_MS
+    private var kickMs: Float = ForcePoseEngine.FLOOR_MS
     private var dominantFoot: String = "R"
 
     private var aimLMax: Float = 0.34f
@@ -61,11 +65,21 @@ class CalibrationSession {
     private var lastHasPose = false
     private var lastBodyOk = false
     private var lastGestureOk = false
+    private var lastProblem: String? = null
     private val wristSamples = ArrayList<Float>(48)
-    private var practicePeakSpeed = 0f
-    private var practicePeakFoot = "R"
-    private var practicePeakForce = 0f
-    private var swingArmed = false
+
+    /** After advancing into an aim step, require the wrist OUT of the zone first. */
+    private var aimArmed = false
+    private var outOfZoneMs = 0L
+
+    /** Capture stages start gated — player must say ready / tap next. */
+    private var waitingConfirm = false
+    private var lastConfirmAskAt = 0L
+
+    // Practice: collect 3 validated swings, take median peak.
+    private val swingPeaks = ArrayList<Float>(PRACTICE_SWINGS)
+    private val swingFeet = ArrayList<String>(PRACTICE_SWINGS)
+    private var lastKickReject: String? = null
 
     fun ui(): Ui = when (step) {
         Step.BIOMETRICS -> Ui(
@@ -74,49 +88,41 @@ class CalibrationSession {
             "Enter height & weight — stays on this phone only.",
             0f,
             showBiometrics = true,
-            voice = "Let's calibrate. Type your height and weight on the phone, " +
-                "or just say skip to use defaults.",
+            voice = "Let's calibrate. Type your height and weight, then say next.",
         )
-        Step.TPOSE -> holdUi(
+        Step.TPOSE -> gatedHoldUi(
             step = Step.TPOSE,
             needMs = TPOSE_HOLD_MS,
             readyHint = "Stand still, arms out like a T. Hold ${secs(TPOSE_HOLD_MS)}s",
             holdingTitle = "HOLD T-POSE",
+            confirmAsk = "Ready for the T pose? Say ready.",
             readyVoice = "Got you. Arms straight out like a T, and hold still.",
         )
-        Step.AIM_L -> holdUi(
+        Step.AIM_L -> gatedHoldUi(
             step = Step.AIM_L,
             needMs = AIM_HOLD_MS,
-            readyHint = "Raise your hand to YOUR left corner",
+            readyHint = "Raise your hand ABOVE your shoulder to YOUR left",
             holdingTitle = "AIM LEFT",
-            readyVoice = "T pose locked. Now point your hand to your left corner and hold.",
+            confirmAsk = "Ready to aim left? Say ready.",
+            readyVoice = "Point your hand to your left corner, above your shoulder, and hold.",
         )
-        Step.AIM_C -> holdUi(
+        Step.AIM_C -> gatedHoldUi(
             step = Step.AIM_C,
             needMs = AIM_HOLD_MS,
-            readyHint = "Move your hand to the centre",
+            readyHint = "Raise your hand ABOVE your shoulder to the centre",
             holdingTitle = "AIM CENTRE",
-            readyVoice = "Left locked. Move your hand to the center and hold.",
+            confirmAsk = "Ready for centre? Say ready.",
+            readyVoice = "Left locked. Move your hand to the centre, above your shoulder, and hold.",
         )
-        Step.AIM_R -> holdUi(
+        Step.AIM_R -> gatedHoldUi(
             step = Step.AIM_R,
             needMs = AIM_HOLD_MS,
-            readyHint = "Raise your hand to YOUR right corner",
+            readyHint = "Raise your hand ABOVE your shoulder to YOUR right",
             holdingTitle = "AIM RIGHT",
-            readyVoice = "Center locked. Now your right corner, and hold.",
+            confirmAsk = "Ready to aim right? Say ready.",
+            readyVoice = "Centre locked. Now your right corner, above your shoulder, and hold.",
         )
-        Step.PRACTICE -> Ui(
-            Step.PRACTICE,
-            "PRACTICE SWING",
-            "On KICK — swing hard once. Sets your threshold.",
-            if (practicePeakSpeed > 0f) 1f else 0f,
-            showBiometrics = false,
-            canFinishSwing = practicePeakSpeed > 1.5f,
-            voice = if (practicePeakSpeed > 1.5f)
-                "Swing captured. Say done to save your profile, or swing again."
-            else
-                "All corners locked. Now take one hard practice swing.",
-        )
+        Step.PRACTICE -> practiceUi()
         Step.DONE -> Ui(
             Step.DONE,
             "PROFILE SAVED",
@@ -128,44 +134,93 @@ class CalibrationSession {
         )
     }
 
-    private fun holdUi(
+    private fun practiceUi(): Ui {
+        val n = swingPeaks.size
+        if (waitingConfirm) {
+            return Ui(
+                Step.PRACTICE,
+                "PRACTICE SWING",
+                "Say ready when you are set for swing ${n + 1} of $PRACTICE_SWINGS.",
+                progress = n / PRACTICE_SWINGS.toFloat(),
+                showBiometrics = false,
+                waitingConfirm = true,
+                swingIndex = n,
+                voice = "Ready to kick the real ball? Swing ${n + 1} of $PRACTICE_SWINGS. Say ready.",
+            )
+        }
+        val rejectHint = when (lastKickReject) {
+            "hand" -> "Keep your hands still — kick with your leg."
+            "soft" -> "Harder — swing like you mean it."
+            "short" -> "Follow through — kick the ball, don't just tap."
+            else -> null
+        }
+        return Ui(
+            Step.PRACTICE,
+            "SWING ${n + 1} OF $PRACTICE_SWINGS",
+            rejectHint ?: "Kick the real ball hard — swing ${n + 1} of $PRACTICE_SWINGS.",
+            progress = n / PRACTICE_SWINGS.toFloat(),
+            showBiometrics = false,
+            canFinishSwing = n >= PRACTICE_SWINGS,
+            swingIndex = n,
+            voice = rejectHint
+                ?: "Kick the real ball hard. Swing ${n + 1} of $PRACTICE_SWINGS.",
+        )
+    }
+
+    private fun gatedHoldUi(
         step: Step,
         needMs: Long,
         readyHint: String,
         holdingTitle: String,
+        confirmAsk: String,
         readyVoice: String,
     ): Ui {
+        if (waitingConfirm) {
+            return Ui(
+                step,
+                "READY?",
+                confirmAsk,
+                progress = 0f,
+                showBiometrics = false,
+                waitingConfirm = true,
+                voice = confirmAsk,
+            )
+        }
         val leftMs = (needMs - holdMs).coerceAtLeast(0L)
         val leftSec = leftMs / 1000f
+        val problem = lastProblem
         return when {
             !lastHasPose -> Ui(
-                step,
-                "FIND YOU",
+                step, "FIND YOU",
                 "Step into the outline — head to feet inside STAND HERE",
-                progress = 0f, showBiometrics = false, holding = false,
+                progress = 0f, showBiometrics = false,
                 voice = "Step back so I can see your whole body, head to feet.",
             )
             !lastBodyOk -> Ui(
-                step,
-                "FIT THE FRAME",
+                step, "FIT THE FRAME",
                 "Seen you — step back until the outline turns green",
-                progress = 0f, showBiometrics = false, holding = false,
+                progress = 0f, showBiometrics = false,
                 voice = "I can see you. Step back until the outline turns green.",
             )
+            problem != null -> Ui(
+                step, "ADJUST",
+                problem,
+                progress = 0f, showBiometrics = false,
+                voice = problem,
+            )
             !lastGestureOk -> Ui(
-                step,
-                "PERSON DETECTED",
+                step, "PERSON DETECTED",
                 readyHint,
-                progress = 0f, showBiometrics = false, holding = false,
+                progress = 0f, showBiometrics = false,
                 voice = readyVoice,
             )
             else -> Ui(
-                step,
-                holdingTitle,
+                step, holdingTitle,
                 "Hold still… ${"%.1f".format(leftSec)}s left",
                 progress = (holdMs / needMs.toFloat()).coerceIn(0f, 1f),
                 showBiometrics = false,
                 holding = true,
+                voice = "Good — hold it there.",
             )
         }
     }
@@ -179,27 +234,37 @@ class CalibrationSession {
         this.heightCm = heightCm.coerceIn(120f, 230f)
         this.weightKg = weightKg.coerceIn(35f, 160f)
         torsoM = PlayerProfile.torsoMetresFromHeight(this.heightCm)
-        advance(Step.TPOSE)
+        enterGated(Step.TPOSE)
+    }
+
+    /** Spoken READY / NEXT / button — arms the next capture stage. */
+    fun confirmReady() {
+        if (!waitingConfirm) return
+        waitingConfirm = false
+        lastConfirmAskAt = 0L
+        holdMs = 0
+        lastTs = 0
+        lastGestureOk = false
+        lastProblem = null
+        aimArmed = false
+        outOfZoneMs = 0
+        wristSamples.clear()
     }
 
     fun skipAimDefaults() {
-        // Keep defaults; jump to practice if needed mid-flow.
         if (step == Step.AIM_L || step == Step.AIM_C || step == Step.AIM_R) {
-            advance(Step.PRACTICE)
+            enterGated(Step.PRACTICE)
         }
     }
 
-    /** Skip T-pose hold (still keeps height-based torso estimate). */
     fun skipTpose() {
-        if (step == Step.TPOSE) advance(Step.AIM_L)
+        if (step == Step.TPOSE) enterGated(Step.AIM_L)
     }
 
+    /** Finish practice early only after at least one validated swing. */
     fun confirmPractice() {
-        if (step != Step.PRACTICE || practicePeakSpeed < 1.5f) return
-        // Threshold ≈ 55% of your hard swing so fidgets don't fire.
-        kickMs = max(1.6f, practicePeakSpeed * 0.55f)
-        dominantFoot = practicePeakFoot
-        advance(Step.DONE)
+        if (step != Step.PRACTICE || swingPeaks.isEmpty()) return
+        finalizePractice()
     }
 
     fun buildProfile(): PlayerProfile = PlayerProfile(
@@ -215,7 +280,7 @@ class CalibrationSession {
     )
 
     /**
-     * Feed pose each frame while calibrating (not BIOMETRICS / DONE).
+     * Feed pose each frame while calibrating (not BIOMETRICS / DONE / waitingConfirm).
      * @return true if step advanced this frame
      */
     fun onPose(
@@ -223,16 +288,34 @@ class CalibrationSession {
         bodyOk: Boolean,
         landmarks: List<FloatArray>?,
         wristXMirrored: Float?,
+        wristY: Float?,
+        shoulderY: Float?,
         liveForce: Float,
         kick: ForcePoseEngine.KickEvent?,
         kickFoot: String?,
         footSpeed: Float,
+        kickReject: String? = null,
     ): Boolean {
         lastHasPose = landmarks != null
         lastBodyOk = lastHasPose && bodyOk
-        if (!lastBodyOk) {
+        if (kickReject != null) lastKickReject = kickReject
+
+        if (waitingConfirm) {
+            holdMs = 0
+            lastTs = nowMs
+            // Soft re-prompt every ~12s of silence (MainActivity speaks on voice change).
+            if (nowMs - lastConfirmAskAt > 12_000L) lastConfirmAskAt = nowMs
+            return false
+        }
+
+        if (!lastBodyOk && step != Step.PRACTICE) {
             holdMs = 0
             lastGestureOk = false
+            lastProblem = if (!lastHasPose) {
+                "Step back so I can see your whole body."
+            } else {
+                "Step back until the outline turns green."
+            }
             lastTs = nowMs
             return false
         }
@@ -241,31 +324,33 @@ class CalibrationSession {
 
         return when (step) {
             Step.TPOSE -> tickTpose(dt, landmarks!!)
-            Step.AIM_L -> tickAim(dt, wristXMirrored, target = "L")
-            Step.AIM_C -> tickAim(dt, wristXMirrored, target = "C")
-            Step.AIM_R -> tickAim(dt, wristXMirrored, target = "R")
+            Step.AIM_L -> tickAim(dt, wristXMirrored, wristY, shoulderY, "L")
+            Step.AIM_C -> tickAim(dt, wristXMirrored, wristY, shoulderY, "C")
+            Step.AIM_R -> tickAim(dt, wristXMirrored, wristY, shoulderY, "R")
             Step.PRACTICE -> {
                 lastGestureOk = true
-                tickPractice(liveForce, kick, kickFoot, footSpeed)
+                lastProblem = null
+                tickPractice(kick, kickFoot, footSpeed)
             }
             else -> false
         }
     }
 
     private fun tickTpose(dt: Long, landmarks: List<FloatArray>): Boolean {
-        // Prefer loose guide T-pose; fall back to stricter classic check.
-        lastGestureOk = BodyGuide.isLooseTpose(landmarks) || isTpose(landmarks)
+        val problem = BodyGuide.tposeProblem(landmarks)
+        lastProblem = problem
+        lastGestureOk = problem == null && (
+            BodyGuide.isLooseTpose(landmarks) || isTpose(landmarks)
+            )
         if (!lastGestureOk) {
             holdMs = 0
             return false
         }
-        // Refine torso metres: stature × frac, nudged by arm-span ≈ height check.
         val heightM = heightCm / 100f
         val base = heightM * PlayerProfile.TORSO_FRAC
         val span = armSpanUnits(landmarks)
         val torso = torsoLenUnits(landmarks)
         if (span > 0.05f && torso > 0.05f) {
-            // arm span in image ≈ height; torso_m = height_m * (torso/span)
             val fromSpan = heightM * (torso / span)
             torsoM = (0.65f * base + 0.35f * fromSpan).coerceIn(0.35f, 0.75f)
         } else {
@@ -273,26 +358,62 @@ class CalibrationSession {
         }
         holdMs += dt
         if (holdMs >= TPOSE_HOLD_MS) {
-            advance(Step.AIM_L)
+            enterGated(Step.AIM_L)
             return true
         }
         return false
     }
 
-    private fun tickAim(dt: Long, wristX: Float?, target: String): Boolean {
-        if (wristX == null) {
+    private fun tickAim(
+        dt: Long,
+        wristX: Float?,
+        wristY: Float?,
+        shoulderY: Float?,
+        target: String,
+    ): Boolean {
+        if (wristX == null || wristY == null || shoulderY == null) {
             holdMs = 0
             lastGestureOk = false
+            lastProblem = "I can't see your hand — keep it in the frame."
             wristSamples.clear()
             return false
         }
+
         val inZone = when (target) {
             "L" -> wristX < 0.38f
             "R" -> wristX > 0.62f
             else -> wristX in 0.38f..0.62f
         }
-        lastGestureOk = inZone
-        if (!inZone) {
+        val aboveShoulder = wristY < shoulderY - 0.02f
+
+        // Re-arm: must leave the zone (or drop below shoulder) before hold starts.
+        if (!aimArmed) {
+            if (!inZone || !aboveShoulder) {
+                outOfZoneMs += dt
+                if (outOfZoneMs >= 300L) aimArmed = true
+            } else {
+                outOfZoneMs = 0
+            }
+            holdMs = 0
+            lastGestureOk = false
+            lastProblem = "Drop your hand, then raise it to the ${zoneName(target)} corner."
+            wristSamples.clear()
+            return false
+        }
+
+        lastProblem = when {
+            !aboveShoulder -> "Raise your hand higher, above your shoulder."
+            !inZone && target == "L" ->
+                if (wristX in 0.38f..0.62f) "That's the centre — move it further LEFT."
+                else "Move your hand to your LEFT corner."
+            !inZone && target == "R" ->
+                if (wristX in 0.38f..0.62f) "That's the centre — move it further RIGHT."
+                else "Move your hand to your RIGHT corner."
+            !inZone -> "Move your hand to the CENTRE."
+            else -> null
+        }
+        lastGestureOk = inZone && aboveShoulder
+        if (!lastGestureOk) {
             holdMs = 0
             wristSamples.clear()
             return false
@@ -304,16 +425,16 @@ class CalibrationSession {
             when (target) {
                 "L" -> {
                     aimLMax = min(0.42f, avg + 0.06f)
-                    advance(Step.AIM_C)
+                    enterGated(Step.AIM_C)
                 }
                 "C" -> {
                     aimCMin = max(0.30f, avg - 0.08f)
                     aimCMax = min(0.70f, avg + 0.08f)
-                    advance(Step.AIM_R)
+                    enterGated(Step.AIM_R)
                 }
                 "R" -> {
                     aimRMin = max(0.58f, avg - 0.06f)
-                    advance(Step.PRACTICE)
+                    enterGated(Step.PRACTICE)
                 }
             }
             return true
@@ -322,28 +443,40 @@ class CalibrationSession {
     }
 
     private fun tickPractice(
-        liveForce: Float,
         kick: ForcePoseEngine.KickEvent?,
         kickFoot: String?,
         footSpeed: Float,
     ): Boolean {
-        if (!swingArmed) {
-            swingArmed = true
-            practicePeakSpeed = 0f
-            practicePeakForce = 0f
-        }
-        if (footSpeed > practicePeakSpeed) {
-            practicePeakSpeed = footSpeed
-            if (kickFoot != null) practicePeakFoot = kickFoot
-        }
-        practicePeakForce = max(practicePeakForce, liveForce)
-        if (kick != null) {
-            practicePeakSpeed = max(practicePeakSpeed, 3.5f)
-            if (kickFoot != null) practicePeakFoot = kickFoot
-            confirmPractice()
+        if (kick == null) return false
+        // Only count validated kicks from ForcePoseEngine.
+        swingPeaks.add(kick.peakSpeed.coerceAtLeast(footSpeed))
+        swingFeet.add(kickFoot ?: kick.foot)
+        lastKickReject = null
+        if (swingPeaks.size >= PRACTICE_SWINGS) {
+            finalizePractice()
             return true
         }
+        // Gate the next swing so they reset stance.
+        waitingConfirm = true
+        lastConfirmAskAt = System.currentTimeMillis()
         return false
+    }
+
+    private fun finalizePractice() {
+        if (swingPeaks.isEmpty()) return
+        val sorted = swingPeaks.sorted()
+        val median = sorted[sorted.size / 2]
+        // Threshold ≈ 55% of median hard swing; never below the engine floor.
+        kickMs = max(ForcePoseEngine.FLOOR_MS, median * 0.55f)
+        dominantFoot = swingFeet.groupingBy { it }.eachCount()
+            .maxByOrNull { it.value }?.key ?: "R"
+        advance(Step.DONE)
+    }
+
+    private fun enterGated(next: Step) {
+        advance(next)
+        waitingConfirm = next != Step.DONE && next != Step.BIOMETRICS
+        lastConfirmAskAt = System.currentTimeMillis()
     }
 
     private fun advance(next: Step) {
@@ -351,16 +484,23 @@ class CalibrationSession {
         holdMs = 0
         lastTs = 0
         lastGestureOk = false
+        lastProblem = null
         wristSamples.clear()
-        if (next == Step.PRACTICE) {
-            swingArmed = false
-            practicePeakSpeed = 0f
+        aimArmed = false
+        outOfZoneMs = 0
+        if (next == Step.PRACTICE && swingPeaks.isEmpty()) {
+            // keep peaks if mid-practice gate
         }
+    }
+
+    private fun zoneName(z: String) = when (z) {
+        "L" -> "left"; "R" -> "right"; else -> "centre"
     }
 
     companion object {
         const val TPOSE_HOLD_MS = 2500L
         const val AIM_HOLD_MS = 1500L
+        const val PRACTICE_SWINGS = 3
 
         fun isTpose(lm: List<FloatArray>): Boolean = BodyGuide.isLooseTpose(lm)
 

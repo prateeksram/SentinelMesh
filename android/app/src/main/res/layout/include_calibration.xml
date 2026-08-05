@@ -5,9 +5,19 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:background="#E607131C"
-    android:padding="14dp"
-    android:visibility="gone">
+    android:background="@drawable/card_surface"
+    android:paddingHorizontal="16dp"
+    android:paddingTop="14dp"
+    android:paddingBottom="12dp"
+    android:visibility="gone"
+    android:elevation="8dp">
+
+    <View
+        android:layout_width="36dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginBottom="10dp"
+        android:background="@drawable/pill_surface" />
 
     <TextView
         android:id="@+id/calibTitle"
@@ -15,9 +25,9 @@
         android:layout_height="wrap_content"
         android:gravity="center"
         android:text="CALIBRATE"
-        android:textColor="@color/amber"
+        android:textColor="@color/chalk"
         android:textStyle="bold"
-        android:textSize="20sp"
+        android:textSize="16sp"
         android:letterSpacing="0.06" />
 
     <TextView
@@ -28,15 +38,16 @@
         android:gravity="center"
         android:text="@string/calib_hint"
         android:textColor="@color/muted"
-        android:textStyle="bold"
-        android:textSize="13sp" />
+        android:textSize="13sp"
+        android:maxLines="3"
+        android:ellipsize="end" />
 
     <ProgressBar
         android:id="@+id/calibProgress"
         style="?android:attr/progressBarStyleHorizontal"
         android:layout_width="match_parent"
-        android:layout_height="12dp"
-        android:layout_marginTop="10dp"
+        android:layout_height="8dp"
+        android:layout_marginTop="12dp"
         android:max="100"
         android:progress="0"
         android:progressTint="@color/cyan"
@@ -53,7 +64,7 @@
         <EditText
             android:id="@+id/calibHeight"
             android:layout_width="0dp"
-            android:layout_height="48dp"
+            android:layout_height="44dp"
             android:layout_weight="1"
             android:background="@drawable/zone_off"
             android:gravity="center"
@@ -62,12 +73,13 @@
             android:text="175"
             android:textColor="@color/chalk"
             android:textColorHint="@color/muted"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            android:textSize="14sp" />
 
         <EditText
             android:id="@+id/calibWeight"
             android:layout_width="0dp"
-            android:layout_height="48dp"
+            android:layout_height="44dp"
             android:layout_weight="1"
             android:layout_marginStart="8dp"
             android:background="@drawable/zone_off"
@@ -77,7 +89,8 @@
             android:text="75"
             android:textColor="@color/chalk"
             android:textColorHint="@color/muted"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            android:textSize="14sp" />
     </LinearLayout>
 
     <LinearLayout
@@ -107,7 +120,7 @@
             android:background="@drawable/zone_on"
             android:gravity="center"
             android:text="@string/calib_next"
-            android:textColor="@color/ink"
+            android:textColor="@color/chalk"
             android:textStyle="bold"
             android:textSize="14sp" />
     </LinearLayout>

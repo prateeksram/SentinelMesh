@@ -12,6 +12,7 @@ import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
 import com.sentinelmesh.gesturefootball.forcepose.ForcePoseEngine
 import com.sentinelmesh.gesturefootball.profile.PlayerProfile
+import kotlin.math.hypot
 
 /**
  * Pose + ForcePose / aim / kick.
@@ -40,6 +41,10 @@ class PoseAnalyzer(
         val bodyOkStreak: Int = 0,
         /** True when pose fills the stand-here guide (used by calibration). */
         val inGuide: Boolean = false,
+        /** Mid-shoulder Y (normalized) — calibration requires aim hand above this. */
+        val shoulderY: Float? = null,
+        /** Why the last near-kick was rejected: hand | soft | short | null. */
+        val kickReject: String? = null,
     )
 
     companion object {
@@ -76,6 +81,9 @@ class PoseAnalyzer(
     private var bodyOkStreak = 0
     /** Consecutive NPU null inferences — fall back to MediaPipe so calib isn't stuck. */
     private var npuNullStreak = 0
+    /** Last torso midpoint — teleport = person switch / tracker jump. */
+    private var lastTorsoX = Float.NaN
+    private var lastTorsoY = Float.NaN
 
     private var aimLMax = 0.34f
     private var aimCMin = 0.40f
@@ -291,11 +299,30 @@ class PoseAnalyzer(
                 BodyGuide.contains(landmarks, vis)
             )
         val inGuide = BodyGuide.contains(landmarks, vis)
+
+        val shoulderMidX = (x(L_SHO) + x(R_SHO)) / 2f
+        val shoulderMidY = (y(L_SHO) + y(R_SHO)) / 2f
+        val hipMidX = (x(L_HIP) + x(R_HIP)) / 2f
+        val hipMidY = (y(L_HIP) + y(R_HIP)) / 2f
+        val torsoX = (shoulderMidX + hipMidX) / 2f
+        val torsoY = (shoulderMidY + hipMidY) / 2f
+        // Second person / tracker jump: clear foot history so we don't invent kicks.
+        if (!lastTorsoX.isNaN()) {
+            val jump = hypot(torsoX - lastTorsoX, torsoY - lastTorsoY)
+            if (jump > 0.15f) {
+                force.resetBuffers()
+                bodyOkStreak = 0
+                Log.i(TAG, "person-switch jump=$jump — buffers cleared")
+            }
+        }
+        lastTorsoX = torsoX
+        lastTorsoY = torsoY
+
         bodyOkStreak = if (bodyOk || inGuide || torsoOk) bodyOkStreak + 1 else 0
         lastPoseMs = latency
         delegateLabel = label
 
-        val hipY = (y(L_HIP) + y(R_HIP)) / 2f
+        val hipY = hipMidY
         val wrists = listOf(L_WRI, R_WRI)
             .filter { y(it) < hipY && vis(it) > 0.4f }
             .minByOrNull { y(it) }
@@ -328,13 +355,15 @@ class PoseAnalyzer(
             nowMs = timestampMs,
             leftFootX = lfX, leftFootY = lfY, leftVis = vis(L_ANK),
             rightFootX = rfX, rightFootY = rfY, rightVis = vis(R_ANK),
-            shoulderMidX = (x(L_SHO) + x(R_SHO)) / 2f,
-            shoulderMidY = (y(L_SHO) + y(R_SHO)) / 2f,
-            hipMidX = (x(L_HIP) + x(R_HIP)) / 2f,
-            hipMidY = (y(L_HIP) + y(R_HIP)) / 2f,
+            shoulderMidX = shoulderMidX,
+            shoulderMidY = shoulderMidY,
+            hipMidX = hipMidX,
+            hipMidY = hipMidY,
             zone = zone,
             canKick = canKick,
             aimHandY = wristY,
+            leftWristX = x(L_WRI), leftWristY = y(L_WRI), leftWristVis = vis(L_WRI),
+            rightWristX = x(R_WRI), rightWristY = y(R_WRI), rightWristVis = vis(R_WRI),
         )
         if (kick != null) {
             lastKickAt = timestampMs
@@ -354,6 +383,8 @@ class PoseAnalyzer(
                 liveFoot = force.liveFoot,
                 bodyOkStreak = bodyOkStreak,
                 inGuide = inGuide,
+                shoulderY = shoulderMidY,
+                kickReject = force.consumeReject(),
             )
         )
     }

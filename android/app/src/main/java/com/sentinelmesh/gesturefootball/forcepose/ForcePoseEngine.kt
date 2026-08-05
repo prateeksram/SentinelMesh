@@ -1,6 +1,7 @@
 package com.sentinelmesh.gesturefootball.forcepose
 
 import com.sentinelmesh.gesturefootball.profile.PlayerProfile
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.max
@@ -9,8 +10,12 @@ import kotlin.math.roundToInt
 
 /**
  * ForcePose pipeline (arXiv:2503.22363) — pose-only port.
- * Savitzky–Golay → torso-normalized metres → F = m_leg × a_peak.
- * Also derives height / spin / strike for the richer kick wire.
+ * Median filter → Savitzky–Golay → torso-normalized metres → F = m_leg × a_peak.
+ *
+ * A kick only fires after a validated swing: the foot must stay over the speed
+ * threshold for several consecutive frames, actually travel somewhere (lift or
+ * forward path), and the hands must not be the dominant mover — an aim gesture
+ * or landmark jitter is not a kick.
  */
 class ForcePoseEngine(
     bodyKg: Float = 70f,
@@ -20,7 +25,7 @@ class ForcePoseEngine(
 ) {
     private var legKg = 0.0618f * bodyKg
     private var torsoM = torsoM
-    private var kickMs = kickMs
+    private var kickMs = max(FLOOR_MS, kickMs)
     private val sg = floatArrayOf(-2f, 3f, 6f, 7f, 6f, 3f, -2f).map { it / 21f }
 
     data class Sample(val t: Double, val x: Float, val y: Float)
@@ -39,8 +44,32 @@ class ForcePoseEngine(
         val strike: String = "drive",
     )
 
-    private val footL = ArrayDeque<Sample>()
-    private val footR = ArrayDeque<Sample>()
+    /** Per-joint motion track: raw ring for the median tap + smoothed buffer. */
+    private class Track {
+        val raw = ArrayDeque<Sample>()
+        val buf = ArrayDeque<Sample>()
+
+        /** Foot y (metres) while slow — rolling resting band for the lift check. */
+        val restY = ArrayDeque<Float>()
+        var overCount = 0
+        var softCount = 0
+        var startX = 0f
+        var startY = 0f
+
+        fun clear() {
+            raw.clear()
+            buf.clear()
+            restY.clear()
+            overCount = 0
+            softCount = 0
+        }
+    }
+
+    private val footL = Track()
+    private val footR = Track()
+    private val wristTracks = listOf(Track(), Track())
+    private var torsoEma = 0f
+
     var swingPeak = 0f
         private set
     var liveForce = 0f
@@ -50,18 +79,38 @@ class ForcePoseEngine(
     var liveFoot: String = "R"
         private set
 
+    /** Why the last almost-kick was rejected: "hand" | "soft" | "short" | null. */
+    var lastReject: String? = null
+        private set
+
     fun applyProfile(profile: PlayerProfile) {
         legKg = 0.0618f * profile.weightKg
         torsoM = profile.torsoM
-        kickMs = profile.kickMs
+        kickMs = max(FLOOR_MS, profile.kickMs)
     }
 
+    /** Calibration may lower the bar a little to measure practice swings. */
     fun setKickThreshold(ms: Float) {
-        kickMs = ms
+        kickMs = max(1.6f, ms)
     }
 
     fun resetSwing() {
         swingPeak = 0f
+    }
+
+    /** Person switch / tracker jump: motion history belongs to another body. */
+    fun resetBuffers() {
+        footL.clear()
+        footR.clear()
+        wristTracks.forEach { it.clear() }
+        lastReject = null
+    }
+
+    /** One-shot read of the last rejection reason (for corrective coaching). */
+    fun consumeReject(): String? {
+        val r = lastReject
+        lastReject = null
+        return r
     }
 
     fun update(
@@ -73,30 +122,56 @@ class ForcePoseEngine(
         zone: String,
         canKick: Boolean,
         aimHandY: Float? = null,
+        leftWristX: Float = -1f, leftWristY: Float = -1f, leftWristVis: Float = 0f,
+        rightWristX: Float = -1f, rightWristY: Float = -1f, rightWristVis: Float = 0f,
     ): KickEvent? {
         val torsoLen = hypot(shoulderMidX - hipMidX, shoulderMidY - hipMidY)
         if (torsoLen < 0.05f) return null
-        val mPerUnit = torsoM / torsoLen
+        // EMA keeps the metre scale steady — otherwise landmark jitter at
+        // distance turns straight into phantom m/s.
+        torsoEma = if (torsoEma <= 0f) torsoLen else 0.9f * torsoEma + 0.1f * torsoLen
+        val mPerUnit = torsoM / torsoEma
         val now = nowMs / 1000.0
+
+        // Wrist speed — the veto that separates aim gestures from kicks.
+        var wristSpeed = 0f
+        val wrists = listOf(
+            Triple(leftWristX, leftWristY, leftWristVis),
+            Triple(rightWristX, rightWristY, rightWristVis),
+        )
+        for ((idx, w) in wrists.withIndex()) {
+            val (wx, wy, wv) = w
+            if (wv < 0.4f || wx < 0f) continue
+            val t = wristTracks[idx]
+            medianPush(t, now, wx * mPerUnit, wy * mPerUnit)
+            if (t.buf.size >= 9) {
+                val v = velAt(t.buf, t.buf.size - 3)
+                wristSpeed = max(wristSpeed, hypot(v.first, v.second))
+            }
+        }
+
         var live = 0f
         var speedLive = 0f
         var footLive = liveFoot
         var event: KickEvent? = null
 
-        for ((side, fx, fy, vis, buf) in listOf(
-            Quad("L", leftFootX, leftFootY, leftVis, footL),
-            Quad("R", rightFootX, rightFootY, rightVis, footR),
+        for ((side, fx, fy, vis) in listOf(
+            Quad("L", leftFootX, leftFootY, leftVis),
+            Quad("R", rightFootX, rightFootY, rightVis),
         )) {
-            if (vis < 0.4f) continue
-            buf.addLast(Sample(now, fx * mPerUnit, fy * mPerUnit))
-            while (buf.size > 12) buf.removeFirst()
-            if (buf.size < 9) continue
+            val track = if (side == "L") footL else footR
+            if (vis < 0.4f) {
+                track.overCount = 0
+                continue
+            }
+            val sm = medianPush(track, now, fx * mPerUnit, fy * mPerUnit)
+            if (track.buf.size < 9) continue
 
-            val i = buf.size - 3
-            val v1 = velAt(buf, i)
-            val v0 = velAt(buf, i - 1)
+            val i = track.buf.size - 3
+            val v1 = velAt(track.buf, i)
+            val v0 = velAt(track.buf, i - 1)
             val speed = hypot(v1.first, v1.second)
-            val dt = (buf[i].t - buf[i - 1].t).toFloat().coerceAtLeast(1f / 30f)
+            val dt = (track.buf[i].t - track.buf[i - 1].t).toFloat().coerceAtLeast(1f / 30f)
             val accel = hypot(v1.first - v0.first, v1.second - v0.second) / dt
             val force = legKg * accel
             live = max(live, force)
@@ -104,39 +179,106 @@ class ForcePoseEngine(
                 speedLive = speed
                 footLive = side
             }
-            if (canKick) swingPeak = max(swingPeak, force)
 
-            if (canKick && speed > kickMs) {
-                val f = min(fMax * 1.5f, max(swingPeak, force)).roundToInt()
-                val power = min(1f, f / fMax)
-                val dirDeg = (atan2(-v1.second.toDouble(), kotlin.math.abs(v1.first).toDouble())
-                    * 180.0 / Math.PI).roundToInt()
-                // Screen Y grows downward — high hand / upward foot path → height H.
-                val height = when {
-                    aimHandY != null && aimHandY < 0.38f -> "H"
-                    v1.second < -1.2f -> "H"
-                    else -> "L"
+            // Remember where this foot rests while it is slow.
+            if (speed < 0.8f) {
+                track.restY.addLast(sm.y)
+                while (track.restY.size > 25) track.restY.removeFirst()
+            }
+
+            if (!canKick) {
+                track.overCount = 0
+                track.softCount = 0
+                continue
+            }
+            swingPeak = max(swingPeak, force)
+
+            if (speed > kickMs) {
+                if (track.overCount == 0) {
+                    track.startX = sm.x
+                    track.startY = sm.y
                 }
-                val spin = (v1.first / max(0.5f, speed)).coerceIn(-1f, 1f)
-                val strike = if (v1.second < -2.0f && kotlin.math.abs(v1.first) < speed * 0.55f)
-                    "chip" else "drive"
-                event = KickEvent(
-                    zone = zone,
-                    power = power,
-                    forceN = f,
-                    dirDeg = dirDeg,
-                    foot = side,
-                    peakSpeed = speed,
-                    height = height,
-                    spin = spin,
-                    strike = strike,
-                )
+                track.overCount++
+                track.softCount = 0
+                if (track.overCount >= SWING_FRAMES && event == null) {
+                    val disp = hypot(sm.x - track.startX, sm.y - track.startY)
+                    val restingY = median(track.restY) ?: sm.y
+                    val lifted = restingY - sm.y > 0.05f // metres; y shrinks upward
+                    val forward = abs(v1.first) > 1.4f * abs(v1.second)
+                    when {
+                        wristSpeed > speed * 0.8f -> lastReject = "hand"
+                        disp < 0.22f && !lifted -> lastReject = "short"
+                        !(lifted || forward || disp >= 0.30f) -> lastReject = "short"
+                        else -> {
+                            lastReject = null
+                            track.overCount = 0
+                            val f = min(fMax * 1.5f, max(swingPeak, force)).roundToInt()
+                            val power = min(1f, f / fMax)
+                            val dirDeg = (
+                                atan2(-v1.second.toDouble(), abs(v1.first).toDouble()) *
+                                    180.0 / Math.PI
+                                ).roundToInt()
+                            // Screen Y grows downward — high hand / upward foot path → height H.
+                            val height = when {
+                                aimHandY != null && aimHandY < 0.38f -> "H"
+                                v1.second < -1.2f -> "H"
+                                else -> "L"
+                            }
+                            val spin = (v1.first / max(0.5f, speed)).coerceIn(-1f, 1f)
+                            val strike = if (v1.second < -2.0f && abs(v1.first) < speed * 0.55f) {
+                                "chip"
+                            } else {
+                                "drive"
+                            }
+                            event = KickEvent(
+                                zone = zone,
+                                power = power,
+                                forceN = f,
+                                dirDeg = dirDeg,
+                                foot = side,
+                                peakSpeed = speed,
+                                height = height,
+                                spin = spin,
+                                strike = strike,
+                            )
+                        }
+                    }
+                }
+            } else {
+                // Sub-threshold activity is a useful corrective signal ("harder!").
+                if (speed > kickMs * 0.55f) {
+                    track.softCount++
+                    if (track.softCount >= SWING_FRAMES) lastReject = "soft"
+                } else {
+                    track.softCount = 0
+                }
+                track.overCount = 0
             }
         }
-        liveForce = live
+
         liveSpeed = speedLive
         liveFoot = footLive
+        // A standing player generates zero force — jitter is not effort.
+        liveForce = if (speedLive < 0.5f) 0f else live
         return event
+    }
+
+    /** 3-tap median on raw samples kills single-frame landmark jumps. */
+    private fun medianPush(t: Track, now: Double, mx: Float, my: Float): Sample {
+        t.raw.addLast(Sample(now, mx, my))
+        while (t.raw.size > 3) t.raw.removeFirst()
+        val xs = t.raw.map { it.x }.sorted()
+        val ys = t.raw.map { it.y }.sorted()
+        val s = Sample(now, xs[xs.size / 2], ys[ys.size / 2])
+        t.buf.addLast(s)
+        while (t.buf.size > 12) t.buf.removeFirst()
+        return s
+    }
+
+    private fun median(values: ArrayDeque<Float>): Float? {
+        if (values.isEmpty()) return null
+        val sorted = values.sorted()
+        return sorted[sorted.size / 2]
     }
 
     private fun sgAt(buf: List<Sample>, i: Int, key: (Sample) -> Float): Float {
@@ -160,6 +302,13 @@ class ForcePoseEngine(
         val x: Float,
         val y: Float,
         val vis: Float,
-        val buf: ArrayDeque<Sample>,
     )
+
+    companion object {
+        /** Hard floor for a saved kick threshold (m/s). */
+        const val FLOOR_MS = 2.2f
+
+        /** Consecutive over-threshold frames a swing must sustain (~100 ms). */
+        private const val SWING_FRAMES = 3
+    }
 }
