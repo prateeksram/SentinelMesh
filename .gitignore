@@ -10,6 +10,10 @@ venv/
 # editor / OS noise
 .DS_Store
 Thumbs.db
+.env
+.env.*
+!.env.example
+.logs/
 
 # Android
 android/local.properties
@@ -19,3 +23,7 @@ android/.idea/
 *.iml
 *.apk
 *.aab
+
+# Ephemeral laptop photobooth captures
+laptop/data/photos/*
+!laptop/data/photos/.gitkeep

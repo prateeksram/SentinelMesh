@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Join Gesture Football</title>
+<style>
+  :root{--night:#07131c;--panel:#102536;--chalk:#f4f7f1;--mut:#9db4c6;--amber:#ffc400;--cyan:#3ec7f4;--red:#ff4438;--green:#3ddc74}
+  *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% -10%,#1f506d 0,var(--night) 45%);
+  color:var(--chalk);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;padding:24px 18px 48px}
+  main{width:min(620px,100%);margin:auto}.eyebrow{color:var(--cyan);font-weight:900;letter-spacing:2px;font-size:12px}
+  h1{font:900 clamp(38px,12vw,68px)/.92 "Arial Black",system-ui;margin:10px 0 12px}h1 em{font-style:normal;color:var(--amber)}
+  .lede{color:var(--mut);font-weight:650;line-height:1.45;margin:0 0 20px}.card{background:rgba(16,37,54,.93);border:1px solid #2b5069;
+  border-radius:20px;padding:18px;margin-top:14px;box-shadow:0 18px 50px rgba(0,0,0,.28)}
+  .status{display:flex;align-items:center;gap:10px;font-weight:800}.dot{width:11px;height:11px;border-radius:50%;background:var(--red);box-shadow:0 0 9px var(--red)}
+  .dot.on{background:var(--green);box-shadow:0 0 9px var(--green)}
+  .score{font:900 42px "Arial Black",system-ui;color:var(--amber);margin:12px 0 2px}.phase{color:var(--mut);font-weight:800;letter-spacing:1px}
+  label{display:flex;gap:10px;align-items:flex-start;color:var(--mut);line-height:1.35;font-size:14px;margin:16px 0}input{margin-top:3px;accent-color:var(--amber)}
+  button{width:100%;border:0;border-radius:14px;background:linear-gradient(#ffda55,var(--amber));color:#07131c;padding:16px;
+  font:900 18px "Arial Black",system-ui;letter-spacing:.5px;box-shadow:0 6px 0 #ad8500;cursor:pointer}
+  button:disabled{background:#31506a;color:#7890a2;box-shadow:0 6px 0 #20384a;cursor:not-allowed}
+  .help{font-size:13px;color:var(--mut);line-height:1.4;margin:12px 2px 0}.error{color:#ff948d}.gallery-head{display:flex;align-items:end;justify-content:space-between;gap:12px}
+  .gallery-head h2{margin:0;font:900 23px "Arial Black",system-ui}.gallery-head span{color:var(--mut);font-size:13px}
+  .gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.empty{grid-column:1/-1;color:var(--mut);padding:24px 8px;text-align:center}
+  .photo{margin:0;background:#07131c;border-radius:12px;overflow:hidden;border:1px solid #294a61}.photo img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}
+  .photo figcaption{padding:9px}.photo strong{display:block;font-size:12px;line-height:1.25}.photo a{display:inline-block;color:var(--cyan);font-size:12px;font-weight:800;margin-top:5px;text-decoration:none}
+  @media(max-width:420px){.gallery{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">SNAPDRAGON MULTIVERSE</div>
+  <h1>GESTURE<br><em>FOOTBALL</em></h1>
+  <p class="lede">You versus THE WALL. Start from your phone, play the shootout, and collect your laptop-camera reaction photos here.</p>
+
+  <section class="card">
+    <div class="status"><span class="dot" id="dot"></span><span id="connection">Connecting to stadium…</span></div>
+    <div class="score" id="score">0 · 0</div>
+    <div class="phase" id="phase">LOBBY</div>
+    <label><input type="checkbox" id="consent"> <span>I agree to the laptop taking match photos and keeping them in this private gallery for 15 minutes.</span></label>
+    <button id="start" disabled>WAITING FOR STRIKER</button>
+    <p class="help" id="help">The Gesture Football phone controller must be connected before the match can start.</p>
+  </section>
+
+  <section class="card">
+    <div class="gallery-head"><h2>Your match photos</h2><span id="count">0 photos</span></div>
+    <div class="gallery" id="gallery"><div class="empty">Photos appear here automatically after kicks and at full time.</div></div>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const token=new URLSearchParams(location.search).get("token")||"";
+let ws=null,state=null,connected=false;
+
+function photoUrl(id,download=false){
+  const query=new URLSearchParams({token});if(download)query.set("download","1");
+  return `/api/booth/photos/${encodeURIComponent(id)}?${query}`;
+}
+function connect(){
+  ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
+  ws.onopen=()=>{connected=true;ws.send(JSON.stringify({type:"hello",client:"guest",token}));render();};
+  ws.onclose=()=>{connected=false;render();setTimeout(connect,1500);};
+  ws.onmessage=event=>{const message=JSON.parse(event.data);
+    if(message.type==="error"){$("help").textContent=message.message;$("help").classList.add("error");return;}
+    state=message;render();};
+}
+function render(){
+  $("dot").classList.toggle("on",connected);$("connection").textContent=connected?"Connected to stadium":"Reconnecting…";
+  if(!state)return;
+  $("score").textContent=`${state.score} · ${state.saves}`;$("phase").textContent=state.phase.toUpperCase();
+  const consent=$("consent").checked,start=$("start"),controller=!!state.connected?.phone;
+  if(state.phase==="lobby"){
+    start.textContent=controller?"JOIN & START MATCH":"WAITING FOR STRIKER";
+    start.disabled=!connected||!controller||!consent;
+    $("help").textContent=controller?"Your controller is ready. Start when you are in position.":"Connect the Gesture Football controller to this laptop first.";
+  }else if(state.phase==="end"){
+    start.textContent="PLAY AGAIN";start.disabled=!connected||!consent;
+    $("help").textContent="Full time. Download your photos below or play again.";
+  }else{
+    start.textContent="MATCH IN PROGRESS";start.disabled=true;
+    $("help").textContent=state.line||"THE WALL is watching.";
+  }
+  const photos=state.photobooth?.photos||[];$("count").textContent=`${photos.length} photo${photos.length===1?"":"s"}`;
+  $("gallery").innerHTML=photos.length?photos.slice().reverse().map(photo=>`<figure class="photo">
+    <img src="${photoUrl(photo.id)}" alt="Match photo" loading="lazy">
+    <figcaption><strong>${escapeHtml(photo.label)}</strong><a href="${photoUrl(photo.id,true)}">DOWNLOAD</a></figcaption></figure>`).join("")
+    :'<div class="empty">Photos appear here automatically after kicks and at full time.</div>';
+}
+function escapeHtml(value){const node=document.createElement("span");node.textContent=value;return node.innerHTML;}
+$("consent").onchange=render;
+$("start").onclick=()=>{if(!ws||ws.readyState!==1||!state)return;ws.send(JSON.stringify({type:state.phase==="end"?"again":"start"}));};
+if(!token){$("help").textContent="This QR link is incomplete. Scan the code on the stadium TV again.";$("help").classList.add("error");}
+else connect();
+</script>
+</body>
+</html>

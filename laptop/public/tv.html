@@ -123,6 +123,24 @@
   #fxBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
   #fxBadge.on{color:var(--cyan)}
   #fxBadge.qnn{color:var(--amber)}
+
+  /* ---------------- QR join + match photobooth ---------------- */
+  .booth-card{position:fixed;top:58px;left:16px;z-index:7;width:174px;padding:12px;
+              border-radius:14px;background:linear-gradient(180deg,rgba(9,22,34,.96),rgba(4,11,18,.97));
+              border:1px solid rgba(62,199,244,.45);box-shadow:0 14px 38px rgba(0,0,0,.58)}
+  .booth-card h2{font:900 13px var(--fBlack);letter-spacing:1.5px;color:var(--amber)}
+  .booth-card p{font:700 11px var(--fCond);letter-spacing:1px;color:var(--mut);margin-top:5px;line-height:1.25}
+  #boothQr{display:block;width:150px;height:150px;margin:9px auto 7px;background:#fff;border-radius:8px;padding:5px}
+  #boothStatus{color:var(--chalk);min-height:28px}
+  #cameraBtn{width:100%;margin-top:8px;border:1px solid #31506a;border-radius:8px;padding:7px 8px;
+             background:#1b3549;color:var(--chalk);font:800 11px var(--fCond);letter-spacing:1px;cursor:pointer}
+  #cameraBtn.ready{border-color:rgba(61,220,116,.7);color:var(--green)}
+  #cameraBtn:disabled{cursor:default;opacity:.8}
+  #boothCam{position:fixed;width:1px;height:1px;opacity:0;pointer-events:none}
+  #photoFlash{position:fixed;inset:0;z-index:20;pointer-events:none;background:#fff;opacity:0}
+  #photoFlash.fire{animation:photoFlash .45s ease-out}
+  @keyframes photoFlash{0%{opacity:.92}100%{opacity:0}}
+  @media(max-width:900px){.booth-card{width:144px}.booth-card h2{font-size:11px}#boothQr{width:120px;height:120px}}
 </style>
 </head>
 <body>
@@ -130,6 +148,16 @@
 <canvas id="pitch" width="1280" height="720"></canvas>
 
 <div class="livebug"><span class="reddot"></span>LIVE<em>PENALTY SHOOTOUT</em></div>
+
+<aside class="booth-card" aria-label="Join and receive match photos">
+  <h2>SCAN · PLAY · SNAP</h2>
+  <p>Scan to start your match and receive every reaction photo.</p>
+  <img id="boothQr" alt="QR code to join this match">
+  <p id="boothStatus">Preparing player QR…</p>
+  <button id="cameraBtn" type="button">ENABLE LAPTOP CAMERA</button>
+</aside>
+<video id="boothCam" autoplay muted playsinline></video>
+<div id="photoFlash" aria-hidden="true"></div>
 
 <div class="board">
   <div class="team you">
@@ -168,6 +196,87 @@
 <script>
 const $=id=>document.getElementById(id);
 let S=null, prev=null, ws=null;
+let boothConfig=null, boothStream=null, captureBusy=false;
+const capturedMoments=new Set();
+
+async function initBooth(){
+  try{
+    const response=await fetch("/api/booth",{cache:"no-store"});
+    boothConfig=await response.json();
+    if(!boothConfig.captureToken) throw new Error("Open the TV on localhost to enable laptop capture.");
+    $("boothQr").src=`${boothConfig.qrUrl}?session=${encodeURIComponent(boothConfig.sessionId)}`;
+    $("boothQr").title=boothConfig.joinUrl;
+    $("boothStatus").textContent="Waiting for player to scan";
+    await enableBoothCamera();
+  }catch(error){
+    $("boothStatus").textContent=error?.message||"Photobooth setup unavailable";
+  }
+}
+
+async function enableBoothCamera(){
+  const button=$("cameraBtn");
+  if(boothStream) return;
+  try{
+    boothStream=await navigator.mediaDevices.getUserMedia({
+      video:{width:{ideal:1280},height:{ideal:720},facingMode:"user"},audio:false,
+    });
+    $("boothCam").srcObject=boothStream;
+    await $("boothCam").play();
+    button.textContent="CAMERA READY · AUTO CAPTURE";
+    button.classList.add("ready"); button.disabled=true;
+  }catch(_){
+    button.textContent="ALLOW CAMERA FOR MATCH PHOTOS";
+    button.disabled=false;
+  }
+}
+$("cameraBtn").onclick=enableBoothCamera;
+
+function photoCaption(kind,st){
+  if(kind==="final") return st.score>st.kicksTotal/2?"YOU BEAT THE WALL":"FULL TIME";
+  if(kind==="kick") return `KICK ${st.kick} · GET READY`;
+  const result=st.last?.result||"moment";
+  return `${result.toUpperCase()} · KICK ${st.kick}`;
+}
+
+async function captureMatchPhoto(kind,st){
+  const video=$("boothCam");
+  if(captureBusy||!boothConfig?.captureToken||!boothStream||video.readyState<2) return;
+  const key=`${kind}:${st.kick}:${st.phase}`;
+  if(capturedMoments.has(key)) return;
+  capturedMoments.add(key); captureBusy=true;
+  try{
+    const canvas=document.createElement("canvas"), width=1280, height=720;
+    canvas.width=width; canvas.height=height;
+    const context=canvas.getContext("2d");
+    const scale=Math.max(width/video.videoWidth,height/video.videoHeight);
+    const dw=video.videoWidth*scale, dh=video.videoHeight*scale;
+    context.save(); context.translate(width,0); context.scale(-1,1);
+    context.drawImage(video,(width-dw)/2,(height-dh)/2,dw,dh); context.restore();
+    const shade=context.createLinearGradient(0,height*.55,0,height);
+    shade.addColorStop(0,"rgba(3,9,16,0)"); shade.addColorStop(1,"rgba(3,9,16,.92)");
+    context.fillStyle=shade; context.fillRect(0,0,width,height);
+    context.fillStyle="#FFC400"; context.fillRect(42,40,300,46);
+    context.fillStyle="#07131C"; context.font="900 23px Arial Black, sans-serif";
+    context.fillText("GESTURE FOOTBALL",60,71);
+    context.fillStyle="#fff"; context.font="900 52px Arial Black, sans-serif";
+    context.fillText(photoCaption(kind,st),48,height-82);
+    context.fillStyle="#3EC7F4"; context.font="800 25px Arial, sans-serif";
+    context.fillText(`YOU ${st.score}  ·  ${st.saves} THE WALL`,50,height-42);
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/jpeg",.9));
+    if(!blob) throw new Error("Could not encode photo");
+    const params=new URLSearchParams({kind,kick:String(st.kick||""),
+      result:st.last?.result||"",score:`${st.score}-${st.saves}`});
+    const response=await fetch(`/api/booth/photos?${params}`,{
+      method:"POST",headers:{"Content-Type":"image/jpeg","X-Capture-Token":boothConfig.captureToken},body:blob,
+    });
+    if(!response.ok) throw new Error(await response.text());
+    const flash=$("photoFlash"); flash.classList.remove("fire"); void flash.offsetWidth; flash.classList.add("fire");
+    $("boothStatus").textContent="Photo sent to player gallery";
+  }catch(error){
+    capturedMoments.delete(key);
+    $("boothStatus").textContent=error?.message||"Photo capture failed";
+  }finally{ captureBusy=false; }
+}
 
 /* ============================ VFX director ============================ */
 const VFX={
@@ -333,6 +442,7 @@ function dots(el, forKeeper){
 }
 function onState(st){
   prev=S; S=st;
+  if(st.phase==="lobby"&&prev?.phase!=="lobby") capturedMoments.clear();
   $("sYou").textContent=st.score; $("sWall").textContent=st.saves;
   dots($("dYou"),false); dots($("dWall"),true);
 
@@ -341,6 +451,12 @@ function onState(st){
     `KICK ${st.kick} OF ${st.kicksTotal}`;
 
   $("ledP").classList.toggle("on",!!st.connected?.phone);
+  if(boothConfig){
+    const count=st.photobooth?.photoCount||0;
+    $("boothStatus").textContent=st.connected?.guest
+      ?`PLAYER JOINED · ${count} PHOTO${count===1?"":"S"}`
+      :`SCAN TO JOIN · ${count} PHOTO${count===1?"":"S"}`;
+  }
 
   const desk=$("desk");
   desk.className="desk "+(st.llm?"live":"tmpl");
@@ -362,6 +478,7 @@ function onState(st){
       big.textContent=`KICK ${st.kick}`;
       sub.textContent=st.line||"aim with your hand — THE WALL is watching it"; break;
     case "countdown":
+      if(prev?.phase==="announce") setTimeout(()=>captureMatchPhoto("kick",st),300);
       big.textContent=Math.max(1,Math.ceil(st.timerMs/1000));
       sub.textContent="…"; pop(); break;
     case "shoot":
@@ -369,6 +486,7 @@ function onState(st){
       sub.textContent="swing your leg when ready — feint with your hand";
       if(prev?.phase!=="shoot") pop(); break;
     case "resolve":{
+      if(prev?.phase!=="resolve") setTimeout(()=>captureMatchPhoto("reaction",st),650);
       const r=st.last?.result;
       big.textContent=r==="goal"?"GOAL!":r==="save"?"SAVED!":r==="post"?"POST!":"SKIED!";
       big.className=r==="goal"?"goal":r==="save"?"save":"warn";
@@ -389,6 +507,7 @@ function onState(st){
       }
       break;}
     case "end":{
+      if(prev?.phase!=="end") setTimeout(()=>captureMatchPhoto("final",st),900);
       big.textContent=`${st.score} / ${st.kicksTotal}`;
       big.className=st.score>st.kicksTotal/2?"goal":"save";
       sub.textContent=st.score>st.kicksTotal/2?"YOU BEAT THE WALL":"THE WALL STANDS";
@@ -1828,6 +1947,7 @@ function drawReplay(now){
 
 rebuild();
 requestAnimationFrame(draw);
+initBooth();
 connect();
 </script>
 </body>
