@@ -32,6 +32,8 @@ from pathlib import Path
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
+import neural_fx
+
 ROOT = Path(__file__).parent
 PUBLIC = ROOT / "public"
 
@@ -374,11 +376,16 @@ class Game:
                                          self.kick_msg["power"],
                                          self.kick_msg["t"])
                     force, dir_deg = self.kick_msg["force"], self.kick_msg["dirDeg"]
+                    height = self.kick_msg.get("height")
+                    spin = self.kick_msg.get("spin")
+                    strike = self.kick_msg.get("strike")
+                    foot = self.kick_msg.get("foot")
                     kz = self.keeper_pick(kick_t)
                     result = self.referee(sz, power, kz)
                 else:
                     sz, power, kz, result = None, 0.0, random.choice(ZONES), "over"
                     force, dir_deg = 0, 0
+                    height = spin = strike = foot = None
 
                 if not self._alive(gen):
                     return
@@ -386,10 +393,19 @@ class Game:
                     self.score += 1
                 else:
                     self.saves += 1
-                self.shotmap.append({"kick": self.kick, "zone": sz,
-                                     "keeperZone": kz, "power": round(power, 2),
-                                     "force": force, "dirDeg": dir_deg,
-                                     "result": result})
+                entry = {"kick": self.kick, "zone": sz,
+                         "keeperZone": kz, "power": round(power, 2),
+                         "force": force, "dirDeg": dir_deg,
+                         "result": result}
+                if height in ("H", "L"):
+                    entry["height"] = height
+                if isinstance(spin, (int, float)):
+                    entry["spin"] = round(float(spin), 3)
+                if strike in ("chip", "drive"):
+                    entry["strike"] = strike
+                if foot in ("L", "R"):
+                    entry["foot"] = foot
+                self.shotmap.append(entry)
                 self.last = self.shotmap[-1]
 
                 tkey = result
@@ -433,10 +449,29 @@ class Game:
         elif t == "kick":
             if (self.sockets.get(ws) == "phone" and self.phase == "shoot"
                     and not self.kick_msg and msg.get("zone") in ZONES):
+                height = msg.get("height")
+                if height not in ("H", "L"):
+                    height = None
+                try:
+                    spin = float(msg["spin"]) if msg.get("spin") is not None else None
+                    if spin is not None:
+                        spin = max(-1.0, min(1.0, spin))
+                except (TypeError, ValueError):
+                    spin = None
+                strike = msg.get("strike")
+                if strike not in ("chip", "drive"):
+                    strike = None
+                foot = msg.get("foot")
+                if foot not in ("L", "R"):
+                    foot = None
                 self.kick_msg = {"zone": msg["zone"],
                                  "power": min(1.0, max(0.0, float(msg.get("power", 0.5)))),
                                  "force": max(0, int(msg.get("force") or 0)),   # Newtons, from ForcePose
                                  "dirDeg": int(msg.get("dirDeg") or 0),
+                                 "height": height,
+                                 "spin": spin,
+                                 "strike": strike,
+                                 "foot": foot,
                                  "t": time.monotonic()}
                 self.kick_evt.set()
         elif t == "skel":
@@ -498,9 +533,25 @@ async def ws_handler(request):
     return ws
 
 
+async def fx_status(_request):
+    return web.json_response(neural_fx.status())
+
+
+async def fx_hero(request):
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return web.json_response(neural_fx.hero(payload))
+
+
 def make_app():
-    app = web.Application()
+    app = web.Application(client_max_size=8 * 1024 * 1024)
     app.router.add_get("/ws", ws_handler)
+    app.router.add_get("/fx/status", fx_status)
+    app.router.add_post("/fx/hero", fx_hero)
     app.router.add_get("/", lambda r: web.HTTPFound("/tv.html"))
     app.router.add_static("/", PUBLIC, show_index=True)
     return app
@@ -525,6 +576,8 @@ async def main():
 
     desk = game.desk
     print(f"Desk  :  {'LOCAL AI DESK · ' + desk.model if desk.mode == 'local' else 'CLAUDE DESK · ' + desk.model if desk.mode == 'cloud' else 'templates only (set ANTHROPIC_API_KEY or GF_LLM_URL to upgrade)'}")
+    fx = neural_fx.status()
+    print(f"Neural FX :  {fx.get('backend', '?').upper()} · {fx.get('detail', '')}")
     await asyncio.Event().wait()
 
 
