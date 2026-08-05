@@ -74,6 +74,8 @@ class PoseAnalyzer(
     private var lastKickAt = 0L
     private var lastShootPhase = false
     private var bodyOkStreak = 0
+    /** Consecutive NPU null inferences — fall back to MediaPipe so calib isn't stuck. */
+    private var npuNullStreak = 0
 
     private var aimLMax = 0.34f
     private var aimCMin = 0.40f
@@ -112,6 +114,7 @@ class PoseAnalyzer(
                     mode = Mode.GPU
                     ensureLandmarker(Delegate.GPU)
                 } else {
+                    npuNullStreak = 0
                     delegateLabel = "NPU"
                 }
             }
@@ -193,7 +196,7 @@ class PoseAnalyzer(
         val result = try {
             engine.infer(bitmap)
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "NPU infer failed", e)
             npu?.close()
             npu = null
             npuAvailable = false
@@ -206,9 +209,22 @@ class PoseAnalyzer(
             return
         }
         if (result == null) {
-            onHud(Hud(zone, false, 0f, null, 0, "NPU", bodyOkStreak = bodyOkStreak))
+            npuNullStreak++
+            // MediaPipe full-frame pose is reliable for calibration; use it whenever
+            // NPU can't see a body this frame. Sticky-switch after sustained misses.
+            if (ensureLandmarker(Delegate.GPU)) {
+                analyzeMp(bitmap, timestampMs, landmarkerGpu, "GPU")
+                if (npuNullStreak >= 120) {
+                    Log.w(TAG, "NPU miss streak=$npuNullStreak — sticking to GPU")
+                    mode = Mode.GPU
+                    delegateLabel = "GPU"
+                }
+            } else {
+                onHud(Hud(zone, false, 0f, null, 0, "NPU", bodyOkStreak = bodyOkStreak))
+            }
             return
         }
+        npuNullStreak = 0
         processLandmarks(
             landmarks = result.landmarks33,
             vis = { 1f },
