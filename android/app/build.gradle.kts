@@ -62,6 +62,7 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
+    implementation("androidx.camera:camera-video:$camerax")
 
     // MediaPipe Pose (GPU fallback when Hexagon / QNN fails to load)
     implementation("com.google.mediapipe:tasks-vision:0.10.14")

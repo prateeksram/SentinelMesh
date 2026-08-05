@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -24,6 +25,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import com.sentinelmesh.gesturefootball.calibrate.CalibrationSession
 import com.sentinelmesh.gesturefootball.databinding.ActivityMainBinding
+import com.sentinelmesh.gesturefootball.debug.ScreenRecordService
 import com.sentinelmesh.gesturefootball.forcepose.ForcePoseEngine
 import com.sentinelmesh.gesturefootball.net.GameClient
 import com.sentinelmesh.gesturefootball.pose.PoseAnalyzer
@@ -68,6 +70,13 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private var lastNotedZone: String? = null
     private var lastKickMeta: ForcePoseEngine.KickEvent? = null
 
+    private var hostConnected = false
+    /** Last spoken calibration instruction — refreshCalibUi runs per frame, speak only changes. */
+    private var lastCalibVoice = ""
+    private var readyPromptAt = 0L
+    /** Invalidates pending mic-unmute callbacks when a new TTS utterance begins. */
+    private var ttsUnmuteToken = 0
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
@@ -77,18 +86,34 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         else binding.voiceBadge.text = "VOICE · NO MIC"
     }
 
+    private val screenRecLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { res ->
+        val data = res.data
+        if (res.resultCode == RESULT_OK && data != null) {
+            ScreenRecordService.start(this, res.resultCode, data)
+            updateRecBtn(recording = true)
+        } else {
+            binding.voiceBadge.text = "REC · DENIED"
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
         val prefs = getSharedPreferences(GameClient.PREFS, Context.MODE_PRIVATE)
-        val savedUrl = prefs.getString(GameClient.PREF_URL, GameClient.DEFAULT_URL)
+        val rawSaved = prefs.getString(GameClient.PREF_URL, GameClient.DEFAULT_URL)
             ?: GameClient.DEFAULT_URL
+        val savedUrl = GameClient.normalizeUrl(rawSaved)
+        if (savedUrl != rawSaved) {
+            prefs.edit().putString(GameClient.PREF_URL, savedUrl).apply()
+        }
         binding.hostUrl.setText(savedUrl.removePrefix("ws://").removeSuffix("/ws").let {
             if (savedUrl == GameClient.DEFAULT_URL) "127.0.0.1:8080" else it
         })
-        game = GameClient(url = GameClient.normalizeUrl(savedUrl), listener = this)
+        game = GameClient(url = savedUrl, listener = this)
         game.connect()
         binding.hostConnect.setOnClickListener { connectHost() }
         binding.hostUrl.setOnEditorActionListener { _, action, _ ->
@@ -128,6 +153,13 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         binding.calibBtn.setOnClickListener { startCalibration() }
         binding.calibration.calibNext.setOnClickListener { onCalibNext() }
         binding.calibration.calibSkip.setOnClickListener { onCalibSkip() }
+
+        binding.recBtn.setOnClickListener { toggleScreenRec() }
+        ScreenRecordService.onStatus = { msg ->
+            binding.voiceBadge.text = msg
+            updateRecBtn(ScreenRecordService.running)
+        }
+        updateRecBtn(ScreenRecordService.running)
 
         if (profile == null) startCalibration()
 
@@ -225,6 +257,43 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         }
     }
 
+    /** REC button: one tap starts a screen recording (system consent), next tap stops it. */
+    private fun toggleScreenRec() {
+        if (ScreenRecordService.running) {
+            ScreenRecordService.stop(this)
+            updateRecBtn(recording = false)
+        } else {
+            val mgr = getSystemService(MediaProjectionManager::class.java)
+            screenRecLauncher.launch(mgr.createScreenCaptureIntent())
+            vibrate(30)
+        }
+    }
+
+    private fun updateRecBtn(recording: Boolean) {
+        binding.recBtn.text = if (recording) "STOP" else getString(R.string.rec_btn)
+        binding.recBtn.setTextColor(
+            ContextCompat.getColor(this, if (recording) R.color.chalk else R.color.red)
+        )
+        binding.recBtn.setBackgroundResource(
+            if (recording) R.drawable.zone_on else R.drawable.zone_off
+        )
+    }
+
+    /** Mute the mic while the coach speaks so TTS never transcribes itself. */
+    private fun onCoachSpeaking(speaking: Boolean) {
+        mainHandler.post {
+            if (speaking) {
+                ttsUnmuteToken++
+                voice?.setMuted(true)
+            } else {
+                val token = ++ttsUnmuteToken
+                mainHandler.postDelayed({
+                    if (token == ttsUnmuteToken) voice?.setMuted(false)
+                }, 400)
+            }
+        }
+    }
+
     private fun startVoice() {
         if (voice != null) return
         binding.voiceBadge.text = "VOICE · LOADING"
@@ -236,7 +305,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     binding.voiceBadge.text = "VOICE · NO MODEL"
                     return@post
                 }
-                coach = VoiceCoach(this)
+                coach = VoiceCoach(this, onSpeaking = ::onCoachSpeaking)
                 if (smoke != null) handleVoice(smoke)
                 voice = VoiceListener(
                     engine = engine,
@@ -286,12 +355,42 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     private fun handleVoice(result: WhisperEngine.Result) {
         val cmd = coach?.parse(result.text) ?: return
+
+        // Hands-free calibration: NEXT / SKIP drive the steps, zones are ignored
+        // so casual speech can't fight the aim capture.
+        if (calibrating) {
+            when (cmd.intent) {
+                VoiceCoach.Intent.NEXT -> {
+                    binding.hint.text = "Voice · next · \"${result.text}\""
+                    vibrate(40)
+                    onCalibNext()
+                }
+                VoiceCoach.Intent.SKIP -> {
+                    binding.hint.text = "Voice · skip · \"${result.text}\""
+                    vibrate(40)
+                    if (calib?.step == CalibrationSession.Step.BIOMETRICS) onCalibNext()
+                    else onCalibSkip()
+                }
+                else -> if (result.text.isNotBlank()) {
+                    binding.hint.text = "Heard: \"${result.text}\""
+                }
+            }
+            return
+        }
+
         when (cmd.intent) {
             VoiceCoach.Intent.READY -> {
-                binding.big.text = "READY"
                 binding.hint.text = "Heard: \"${result.text}\""
                 vibrate(60)
-                askQwen("ready")
+                if (hostConnected && (lastPhase == null || lastPhase == "lobby")) {
+                    binding.big.text = "STARTING…"
+                    coach?.speak("Here we go!")
+                    game.sendStart()
+                } else {
+                    binding.big.text = "READY"
+                    coach?.speak("Locked in. Pick a corner.")
+                    askQwen("ready")
+                }
             }
             VoiceCoach.Intent.LEFT -> {
                 pose?.forceZone("L")
@@ -313,7 +412,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 vibrate(40)
                 askQwen("trash talk")
             }
-            VoiceCoach.Intent.UNKNOWN -> {
+            VoiceCoach.Intent.NEXT, VoiceCoach.Intent.SKIP, VoiceCoach.Intent.UNKNOWN -> {
                 if (result.text.isNotBlank()) {
                     binding.hint.text = "Heard: \"${result.text}\""
                 }
@@ -375,6 +474,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         calib = CalibrationSession()
         pendingCalibKick = null
         pose?.calibrationSwing = false
+        lastCalibVoice = ""
         binding.calibration.calibPanel.visibility = View.VISIBLE
         binding.calibBtn.visibility = View.GONE
         refreshCalibUi()
@@ -400,11 +500,31 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         updateProfileHint()
         if (lastPhase == null || lastPhase == "lobby") {
             binding.big.text = "READY?"
+            promptReadyToStart()
+        }
+    }
+
+    /** After calibration / entering the lobby: ask aloud, start on a spoken "ready". */
+    private fun promptReadyToStart() {
+        if (calibrating || !hostConnected || profile == null) return
+        if (lastPhase != null && lastPhase != "lobby") return
+        val now = System.currentTimeMillis()
+        if (now - readyPromptAt < 20_000) return
+        readyPromptAt = now
+        coach?.speak("Are you ready? Say ready to start the match.")
+        if (!hintHeldByHost()) {
+            binding.hint.text = "Say \"ready\" to start the match"
         }
     }
 
     private fun refreshCalibUi() {
         val ui = calib?.ui() ?: return
+        // Voice-guide each state change; blank voice (hold states) stays quiet and
+        // keeps the guard so bouncing ready<->holding doesn't re-speak instructions.
+        if (ui.voice.isNotBlank() && ui.voice != lastCalibVoice) {
+            lastCalibVoice = ui.voice
+            coach?.speak(ui.voice)
+        }
         val panel = binding.calibration
         panel.calibTitle.text = ui.title
         panel.calibHint.text = ui.hint
@@ -492,6 +612,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         val session = calib ?: return
         when (session.step) {
             CalibrationSession.Step.PRACTICE -> startCalibration()
+            CalibrationSession.Step.TPOSE -> {
+                session.skipTpose()
+                refreshCalibUi()
+            }
             CalibrationSession.Step.AIM_L,
             CalibrationSession.Step.AIM_C,
             CalibrationSession.Step.AIM_R,
@@ -525,11 +649,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 }
             }
             provider.unbindAll()
+            // Screen recording (REC button) covers debugging — no camera video
+            // use case, which frees encoder bandwidth for pose analysis.
             provider.bindToLifecycle(
-                this,
-                CameraSelector.DEFAULT_FRONT_CAMERA,
-                preview,
-                analysis,
+                this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, analysis
             )
         }, ContextCompat.getMainExecutor(this))
     }
@@ -654,6 +777,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     override fun onConnected(connected: Boolean) {
         mainHandler.post {
+            hostConnected = connected
             binding.led.setBackgroundResource(
                 if (connected) R.drawable.led_on else R.drawable.led_off
             )
@@ -674,6 +798,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     binding.big.text = "READY?"
                     updateProfileHint()
                     lastResultSpoken = null
+                    if (lastPhase != "lobby") promptReadyToStart()
                 }
                 "announce" -> {
                     binding.big.text = "KICK ${state.kick} OF ${state.kicksTotal}"
@@ -695,7 +820,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 "shoot" -> {
                     binding.big.text = "KICK!"
                     if (!holdHint) {
-                        binding.hint.text = "Swing your leg — your hand picks the corner!"
+                        binding.hint.text = "Swing your leg when ready — your hand picks the corner!"
                     }
                     if (lastPhase != "shoot") vibrateBurst()
                 }
@@ -767,6 +892,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     }
 
     override fun onDestroy() {
+        ScreenRecordService.onStatus = null
+        if (ScreenRecordService.running) ScreenRecordService.stop(this)
         super.onDestroy()
         voice?.close()
         voice = null

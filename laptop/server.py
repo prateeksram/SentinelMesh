@@ -41,10 +41,10 @@ def _f(name, default):
     return float(os.environ.get(name, default))
 
 KICKS         = int(os.environ.get("GF_KICKS", 5))      # kicks per match
-SHOOT_WINDOW  = _f("GF_SHOOT_WINDOW", 4.0)   # seconds to swing before the kick is skied
+SHOOT_WINDOW  = _f("GF_SHOOT_WINDOW", 0)     # seconds to swing; <= 0 waits forever for the kick
 KEEPER_REACT  = _f("GF_KEEPER_REACTION", 0.45)  # keeper reads your aim this many s BEFORE the kick — feint inside this window to beat it
 KEEPER_IQ     = _f("GF_KEEPER_IQ", 0.75)     # 0 = guesses randomly, 1 = near-psychic
-ANNOUNCE_S    = _f("GF_ANNOUNCE_S", 2.2)
+ANNOUNCE_S    = _f("GF_ANNOUNCE_S", 3.5)     # long enough for the spoken keeper line on the TV
 COUNTDOWN_S   = _f("GF_COUNTDOWN_S", 3.0)
 RESOLVE_S     = _f("GF_RESOLVE_S", 3.8)
 POWER_BEAT    = 0.82      # power above this can beat a keeper in the same corner
@@ -334,12 +334,18 @@ class Game:
 
                 # ---------------- shoot -------------------
                 self.phase = "shoot"
-                self.timer_end = time.monotonic() + SHOOT_WINDOW
-                await self.broadcast()
-                try:
-                    await asyncio.wait_for(self.kick_evt.wait(), SHOOT_WINDOW)
-                except asyncio.TimeoutError:
-                    pass
+                if SHOOT_WINDOW > 0:
+                    self.timer_end = time.monotonic() + SHOOT_WINDOW
+                    await self.broadcast()
+                    try:
+                        await asyncio.wait_for(self.kick_evt.wait(), SHOOT_WINDOW)
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    # Wait as long as it takes — the kick decides the tempo.
+                    self.timer_end = 0.0
+                    await self.broadcast()
+                    await self.kick_evt.wait()
 
                 # ---------------- resolve -----------------
                 if self.kick_msg:
