@@ -43,7 +43,7 @@ class PoseAnalyzer(
         val inGuide: Boolean = false,
         /** Mid-shoulder Y (normalized) — calibration requires aim hand above this. */
         val shoulderY: Float? = null,
-        /** Why the last near-kick was rejected: hand | soft | short | null. */
+        /** Why the last near-kick was rejected: soft | short | null. */
         val kickReject: String? = null,
     )
 

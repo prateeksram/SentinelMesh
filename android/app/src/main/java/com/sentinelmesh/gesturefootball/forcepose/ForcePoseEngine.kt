@@ -12,10 +12,10 @@ import kotlin.math.roundToInt
  * ForcePose pipeline (arXiv:2503.22363) — pose-only port.
  * Median filter → Savitzky–Golay → torso-normalized metres → F = m_leg × a_peak.
  *
- * A kick only fires after a validated swing: the foot must stay over the speed
- * threshold for several consecutive frames, actually travel somewhere (lift or
- * forward path), and the hands must not be the dominant mover — an aim gesture
- * or landmark jitter is not a kick.
+ * Kick validation is foot/leg only: sustained over-threshold speed plus a real
+ * travel path (lift / forward / displacement). Wrists are ignored during the
+ * swing — natural aim/balance arm motion must not veto a kick (calib or match).
+ * Aim zone (L/C/R) is decided elsewhere from the hand.
  */
 class ForcePoseEngine(
     bodyKg: Float = 70f,
@@ -67,7 +67,6 @@ class ForcePoseEngine(
 
     private val footL = Track()
     private val footR = Track()
-    private val wristTracks = listOf(Track(), Track())
     private var torsoEma = 0f
 
     var swingPeak = 0f
@@ -79,7 +78,7 @@ class ForcePoseEngine(
     var liveFoot: String = "R"
         private set
 
-    /** Why the last almost-kick was rejected: "hand" | "soft" | "short" | null. */
+    /** Why the last almost-kick was rejected: "soft" | "short" | null. */
     var lastReject: String? = null
         private set
 
@@ -91,7 +90,7 @@ class ForcePoseEngine(
 
     /** Calibration may lower the bar a little to measure practice swings. */
     fun setKickThreshold(ms: Float) {
-        kickMs = max(1.6f, ms)
+        kickMs = max(PRACTICE_FLOOR_MS, ms)
     }
 
     fun resetSwing() {
@@ -102,7 +101,6 @@ class ForcePoseEngine(
     fun resetBuffers() {
         footL.clear()
         footR.clear()
-        wristTracks.forEach { it.clear() }
         lastReject = null
     }
 
@@ -113,6 +111,7 @@ class ForcePoseEngine(
         return r
     }
 
+    @Suppress("UNUSED_PARAMETER")
     fun update(
         nowMs: Long,
         leftFootX: Float, leftFootY: Float, leftVis: Float,
@@ -122,6 +121,7 @@ class ForcePoseEngine(
         zone: String,
         canKick: Boolean,
         aimHandY: Float? = null,
+        // Kept for call-site compatibility; wrists are not used for kick validation.
         leftWristX: Float = -1f, leftWristY: Float = -1f, leftWristVis: Float = 0f,
         rightWristX: Float = -1f, rightWristY: Float = -1f, rightWristVis: Float = 0f,
     ): KickEvent? {
@@ -132,23 +132,6 @@ class ForcePoseEngine(
         torsoEma = if (torsoEma <= 0f) torsoLen else 0.9f * torsoEma + 0.1f * torsoLen
         val mPerUnit = torsoM / torsoEma
         val now = nowMs / 1000.0
-
-        // Wrist speed — the veto that separates aim gestures from kicks.
-        var wristSpeed = 0f
-        val wrists = listOf(
-            Triple(leftWristX, leftWristY, leftWristVis),
-            Triple(rightWristX, rightWristY, rightWristVis),
-        )
-        for ((idx, w) in wrists.withIndex()) {
-            val (wx, wy, wv) = w
-            if (wv < 0.4f || wx < 0f) continue
-            val t = wristTracks[idx]
-            medianPush(t, now, wx * mPerUnit, wy * mPerUnit)
-            if (t.buf.size >= 9) {
-                val v = velAt(t.buf, t.buf.size - 3)
-                wristSpeed = max(wristSpeed, hypot(v.first, v.second))
-            }
-        }
 
         var live = 0f
         var speedLive = 0f
@@ -203,45 +186,43 @@ class ForcePoseEngine(
                 if (track.overCount >= SWING_FRAMES && event == null) {
                     val disp = hypot(sm.x - track.startX, sm.y - track.startY)
                     val restingY = median(track.restY) ?: sm.y
-                    val lifted = restingY - sm.y > 0.05f // metres; y shrinks upward
-                    val forward = abs(v1.first) > 1.4f * abs(v1.second)
-                    when {
-                        wristSpeed > speed * 0.8f -> lastReject = "hand"
-                        disp < 0.22f && !lifted -> lastReject = "short"
-                        !(lifted || forward || disp >= 0.30f) -> lastReject = "short"
-                        else -> {
-                            lastReject = null
-                            track.overCount = 0
-                            val f = min(fMax * 1.5f, max(swingPeak, force)).roundToInt()
-                            val power = min(1f, f / fMax)
-                            val dirDeg = (
-                                atan2(-v1.second.toDouble(), abs(v1.first).toDouble()) *
-                                    180.0 / Math.PI
-                                ).roundToInt()
-                            // Screen Y grows downward — high hand / upward foot path → height H.
-                            val height = when {
-                                aimHandY != null && aimHandY < 0.38f -> "H"
-                                v1.second < -1.2f -> "H"
-                                else -> "L"
-                            }
-                            val spin = (v1.first / max(0.5f, speed)).coerceIn(-1f, 1f)
-                            val strike = if (v1.second < -2.0f && abs(v1.first) < speed * 0.55f) {
-                                "chip"
-                            } else {
-                                "drive"
-                            }
-                            event = KickEvent(
-                                zone = zone,
-                                power = power,
-                                forceN = f,
-                                dirDeg = dirDeg,
-                                foot = side,
-                                peakSpeed = speed,
-                                height = height,
-                                spin = spin,
-                                strike = strike,
-                            )
+                    val lifted = restingY - sm.y > 0.04f // metres; y shrinks upward
+                    val forward = abs(v1.first) > 1.2f * abs(v1.second)
+                    // Foot-only path gate — wrists never participate.
+                    if (!(lifted || forward || disp >= 0.18f)) {
+                        lastReject = "short"
+                    } else {
+                        lastReject = null
+                        track.overCount = 0
+                        val f = min(fMax * 1.5f, max(swingPeak, force)).roundToInt()
+                        val power = min(1f, f / fMax)
+                        val dirDeg = (
+                            atan2(-v1.second.toDouble(), abs(v1.first).toDouble()) *
+                                180.0 / Math.PI
+                            ).roundToInt()
+                        // Screen Y grows downward — high hand / upward foot path → height H.
+                        val height = when {
+                            aimHandY != null && aimHandY < 0.38f -> "H"
+                            v1.second < -1.2f -> "H"
+                            else -> "L"
                         }
+                        val spin = (v1.first / max(0.5f, speed)).coerceIn(-1f, 1f)
+                        val strike = if (v1.second < -2.0f && abs(v1.first) < speed * 0.55f) {
+                            "chip"
+                        } else {
+                            "drive"
+                        }
+                        event = KickEvent(
+                            zone = zone,
+                            power = power,
+                            forceN = f,
+                            dirDeg = dirDeg,
+                            foot = side,
+                            peakSpeed = speed,
+                            height = height,
+                            spin = spin,
+                            strike = strike,
+                        )
                     }
                 }
             } else {
@@ -305,8 +286,11 @@ class ForcePoseEngine(
     )
 
     companion object {
-        /** Hard floor for a saved kick threshold (m/s). */
-        const val FLOOR_MS = 2.2f
+        /** Hard floor for a saved match kick threshold (m/s). */
+        const val FLOOR_MS = 1.7f
+
+        /** Practice swings may go a bit lower while measuring. */
+        const val PRACTICE_FLOOR_MS = 1.5f
 
         /** Consecutive over-threshold frames a swing must sustain (~100 ms). */
         private const val SWING_FRAMES = 3

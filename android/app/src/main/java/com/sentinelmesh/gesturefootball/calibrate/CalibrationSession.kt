@@ -145,11 +145,10 @@ class CalibrationSession {
                 showBiometrics = false,
                 waitingConfirm = true,
                 swingIndex = n,
-                voice = "Ready to kick the real ball? Swing ${n + 1} of $PRACTICE_SWINGS. Say ready.",
+                voice = "Ready for practice kicks? Say ready, then swing $PRACTICE_SWINGS times. Hands don't matter — kick with your leg.",
             )
         }
         val rejectHint = when (lastKickReject) {
-            "hand" -> "Keep your hands still — kick with your leg."
             "soft" -> "Harder — swing like you mean it."
             "short" -> "Follow through — kick the ball, don't just tap."
             else -> null
@@ -456,9 +455,8 @@ class CalibrationSession {
             finalizePractice()
             return true
         }
-        // Gate the next swing so they reset stance.
-        waitingConfirm = true
-        lastConfirmAskAt = System.currentTimeMillis()
+        // Keep listening for the next swing — no READY re-gate between swings.
+        waitingConfirm = false
         return false
     }
 
@@ -475,6 +473,7 @@ class CalibrationSession {
 
     private fun enterGated(next: Step) {
         advance(next)
+        // READY once before first practice swing; aim stages still gate each hold.
         waitingConfirm = next != Step.DONE && next != Step.BIOMETRICS
         lastConfirmAskAt = System.currentTimeMillis()
     }
