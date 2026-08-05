@@ -23,19 +23,25 @@ HTTPS on :8443 appears automatically when cert.pem/key.pem sit next to this file
 """
 
 import asyncio
+import io
 import json
 import os
 import random
+import socket
 import ssl
 import time
 from pathlib import Path
+from urllib.parse import urlencode
 
+import qrcode
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
 import neural_fx
+from photobooth import PhotoBooth
 
 ROOT = Path(__file__).parent
 PUBLIC = ROOT / "public"
+PHOTO_ROOT = ROOT / "data" / "photos"
 
 
 # ------------------------------------------------- knobs (env-overridable) --
@@ -212,7 +218,11 @@ class Game:
             "replay": self.replay,
             "line": self.line,
             "llm": self.desk.mode,
-            "connected": {"phone": "phone" in self.sockets.values()},
+            "connected": {
+                "phone": "phone" in self.sockets.values(),
+                "guest": "guest" in self.sockets.values(),
+            },
+            "photobooth": booth.snapshot(),
         }
 
     async def broadcast(self):
@@ -438,6 +448,11 @@ class Game:
             client = msg.get("client")
             if client in ("phone", "tv"):
                 self.sockets[ws] = client
+            elif client == "guest":
+                if booth.validate_join(msg.get("token")):
+                    self.sockets[ws] = client
+                else:
+                    await ws.send_json({"type": "error", "message": "This game QR has expired. Scan the TV again."})
             await self.broadcast()
         elif t == "aim":
             z = msg.get("zone")
@@ -483,7 +498,8 @@ class Game:
                 self.replay = {"kick": self.kick, "frames": frames[:40]}
                 await self.broadcast()
         elif t == "start":
-            if (self.phase == "lobby" and "phone" in self.sockets.values()
+            if (self.sockets.get(ws) in ("phone", "tv", "guest")
+                    and self.phase == "lobby" and "phone" in self.sockets.values()
                     and not (self.task and not self.task.done())):
                 self.line = "Here we go!"
                 self.task = asyncio.get_event_loop().create_task(self.run_match())
@@ -515,6 +531,43 @@ class Game:
 
 # ================================================================ HTTP ======
 game = Game(Desk())
+booth = PhotoBooth(
+    PHOTO_ROOT,
+    ttl_seconds=int(os.environ.get("GF_PHOTO_TTL_SECONDS", "900")),
+    max_photos=int(os.environ.get("GF_PHOTO_MAX", "24")),
+)
+
+
+def _lan_host() -> str:
+    configured = os.environ.get("GF_LAN_HOST", "").strip()
+    if configured:
+        return configured
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("8.8.8.8", 80))
+        return probe.getsockname()[0]
+    except OSError:
+        return "localhost"
+    finally:
+        probe.close()
+
+
+def _public_base() -> str:
+    configured = os.environ.get("GF_PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    if (ROOT / "cert.pem").exists() and (ROOT / "key.pem").exists():
+        return f"https://{_lan_host()}:8443"
+    return f"http://{_lan_host()}:8080"
+
+
+def _is_local_request(request: web.Request) -> bool:
+    return request.remote in {"127.0.0.1", "::1", None}
+
+
+def _join_url() -> str:
+    query = urlencode({"token": booth.join_token})
+    return f"{_public_base()}/join.html?{query}"
 
 
 async def ws_handler(request):
@@ -547,13 +600,114 @@ async def fx_hero(request):
     return web.json_response(neural_fx.hero(payload))
 
 
+async def booth_config(request: web.Request) -> web.Response:
+    payload = booth.snapshot()
+    if _is_local_request(request):
+        payload.update({
+            "joinUrl": _join_url(),
+            "qrUrl": "/api/booth/qr.png",
+            "captureToken": booth.capture_token,
+        })
+    return web.json_response(payload)
+
+
+async def booth_qr(request: web.Request) -> web.Response:
+    if not _is_local_request(request):
+        raise web.HTTPForbidden(text="QR configuration is available on the laptop display only")
+    image = qrcode.make(_join_url())
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return web.Response(body=output.getvalue(), content_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+async def booth_gallery(request: web.Request) -> web.Response:
+    if not booth.validate_join(request.query.get("token")):
+        raise web.HTTPForbidden(text="This gallery link has expired")
+    return web.json_response(booth.snapshot())
+
+
+async def booth_photo_upload(request: web.Request) -> web.Response:
+    if not booth.validate_capture(request.headers.get("X-Capture-Token")):
+        raise web.HTTPForbidden(text="Laptop capture token required")
+    image = await request.read()
+    if not image or len(image) > 5 * 1024 * 1024:
+        raise web.HTTPRequestEntityTooLarge(max_size=5 * 1024 * 1024, actual_size=len(image))
+    try:
+        kick = int(request.query["kick"]) if request.query.get("kick") else None
+    except ValueError:
+        kick = None
+    result = request.query.get("result") or None
+    kind = request.query.get("kind", "reaction")
+    if kind == "final":
+        label = "Full-time portrait"
+    elif kind == "kick" and kick:
+        label = f"Kick {kick} setup"
+    elif kick and result:
+        label = f"Kick {kick} · {result.upper()} reaction"
+    else:
+        label = "Match moment"
+    try:
+        photo = booth.add_photo(
+            image,
+            label=label,
+            kick=kick,
+            result=result,
+            score=request.query.get("score", ""),
+        )
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    await game.broadcast()
+    return web.json_response(photo.public(), status=201)
+
+
+async def booth_photo_download(request: web.Request) -> web.StreamResponse:
+    join_ok = booth.validate_join(request.query.get("token"))
+    capture_ok = booth.validate_capture(request.headers.get("X-Capture-Token"))
+    if not join_ok and not capture_ok:
+        raise web.HTTPForbidden(text="This photo link has expired")
+    found = booth.find_photo(request.match_info["photo_id"])
+    if not found:
+        raise web.HTTPNotFound(text="Photo not found")
+    photo, path = found
+    response = web.FileResponse(path, headers={"Cache-Control": "private, max-age=60"})
+    if request.query.get("download") == "1":
+        response.headers["Content-Disposition"] = f'attachment; filename="gesture-football-{photo.id}.jpg"'
+    return response
+
+
+async def booth_cleanup_context(_app: web.Application):
+    async def clean() -> None:
+        while True:
+            await asyncio.sleep(30)
+            if booth.cleanup():
+                await game.broadcast()
+
+    task = asyncio.create_task(clean())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def root_redirect(_request: web.Request) -> web.StreamResponse:
+    raise web.HTTPFound("/tv.html")
+
+
 def make_app():
     app = web.Application(client_max_size=8 * 1024 * 1024)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/fx/status", fx_status)
     app.router.add_post("/fx/hero", fx_hero)
-    app.router.add_get("/", lambda r: web.HTTPFound("/tv.html"))
+    app.router.add_get("/api/booth", booth_config)
+    app.router.add_get("/api/booth/qr.png", booth_qr)
+    app.router.add_get("/api/booth/gallery", booth_gallery)
+    app.router.add_post("/api/booth/photos", booth_photo_upload)
+    app.router.add_get("/api/booth/photos/{photo_id}", booth_photo_download)
+    app.router.add_get("/", root_redirect)
     app.router.add_static("/", PUBLIC, show_index=True)
+    app.cleanup_ctx.append(booth_cleanup_context)
     return app
 
 
@@ -563,6 +717,7 @@ async def main():
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", 8080).start()
     print("HTTP  :  http://0.0.0.0:8080   (tv.html · phone.html)")
+    print(f"JOIN  :  {_join_url()}   (scan the TV QR to start + receive photos)")
 
     cert, key = ROOT / "cert.pem", ROOT / "key.pem"
     if cert.exists() and key.exists():
