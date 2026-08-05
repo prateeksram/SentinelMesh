@@ -73,9 +73,18 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private var hostConnected = false
     /** Last spoken calibration instruction — refreshCalibUi runs per frame, speak only changes. */
     private var lastCalibVoice = ""
+    private var lastCalibVoiceAt = 0L
     private var readyPromptAt = 0L
     /** Invalidates pending mic-unmute callbacks when a new TTS utterance begins. */
     private var ttsUnmuteToken = 0
+    private var hostExpanded = false
+    private var telemetryExpanded = false
+    private var hostPillState = HostPill.OFFLINE
+    private var lastPoseMsLabel = "—"
+    private var lastForceLabel = "0 N"
+    private var showForceChip = false
+
+    private enum class HostPill { OFFLINE, CONNECTING, CONNECTED, FAILED }
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -83,7 +92,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         if (result[Manifest.permission.CAMERA] == true) startCamera()
         else binding.hint.text = "Camera permission required"
         if (result[Manifest.permission.RECORD_AUDIO] == true) startVoice()
-        else binding.voiceBadge.text = "VOICE · NO MIC"
+        else {
+            binding.voiceBadge.text = "VOICE · NO MIC"
+            refreshAiChip()
+        }
     }
 
     private val screenRecLauncher = registerForActivityResult(
@@ -95,6 +107,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             updateRecBtn(recording = true)
         } else {
             binding.voiceBadge.text = "REC · DENIED"
+            refreshAiChip()
         }
     }
 
@@ -133,15 +146,20 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 },
             )
             binding.aiBadge.text = "BODY AI · ON-DEVICE"
-            binding.npuBadge.text = "DELEGATE · ${pose?.delegateLabel} · tap"
+            lastPoseMsLabel = "${pose?.delegateLabel} · —"
+            binding.npuBadge.text = lastPoseMsLabel
             binding.npuBadge.setOnClickListener {
                 val label = pose?.cycleDelegate() ?: return@setOnClickListener
-                binding.npuBadge.text = "DELEGATE · $label · …"
+                lastPoseMsLabel = "$label · …"
+                binding.npuBadge.text = lastPoseMsLabel
+                refreshAiChip()
                 vibrate(25)
             }
+            refreshAiChip()
         } catch (e: Exception) {
             binding.aiBadge.text = "AI FAILED"
             binding.hint.text = "Model missing or GPU delegate failed: ${e.message}"
+            refreshAiChip()
         }
 
         profile = PlayerProfileStore.load(this)
@@ -158,8 +176,19 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         ScreenRecordService.onStatus = { msg ->
             binding.voiceBadge.text = msg
             updateRecBtn(ScreenRecordService.running)
+            refreshAiChip()
         }
         updateRecBtn(ScreenRecordService.running)
+
+        binding.hostPill.setOnClickListener { toggleHostRow() }
+        binding.aiChip.setOnClickListener { toggleTelemetry() }
+        binding.aiChip.setOnLongClickListener {
+            toggleTelemetry()
+            true
+        }
+        setTelemetryVisible(false)
+        updateHostPill(connected = false)
+        applyChromeForMode()
 
         if (profile == null) startCalibration()
 
@@ -232,26 +261,34 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             when (status) {
                 is GameClient.ConnectStatus.Connecting -> {
                     if (!hostStatusPending) return@post
+                    hostPillState = HostPill.CONNECTING
+                    paintHostPill()
                     showHostHint("Connecting ${status.url} …", R.color.cyan, holdMs = 8000L)
                 }
                 is GameClient.ConnectStatus.Connected -> {
                     if (!hostStatusPending) return@post
                     hostStatusPending = false
                     flashHostBtn("OK")
-                    showHostHint("Connected · ${status.url}", R.color.green)
+                    hostPillState = HostPill.CONNECTED
+                    paintHostPill()
+                    showHostHint("Connected", R.color.green)
                 }
                 is GameClient.ConnectStatus.Failed -> {
                     hostStatusPending = false
                     flashHostBtn("ERR")
+                    hostPillState = HostPill.FAILED
+                    paintHostPill()
                     showHostHint(
-                        "Host failed · ${status.message} · check Wi‑Fi & server.py",
+                        "Host failed · ${status.message}",
                         R.color.red,
                     )
                 }
                 is GameClient.ConnectStatus.Disconnected -> {
                     if (!hostStatusPending) return@post
                     hostStatusPending = false
-                    showHostHint("Disconnected · ${status.url}", R.color.muted)
+                    hostPillState = HostPill.OFFLINE
+                    paintHostPill()
+                    showHostHint("Disconnected", R.color.muted)
                 }
             }
         }
@@ -275,7 +312,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             ContextCompat.getColor(this, if (recording) R.color.chalk else R.color.red)
         )
         binding.recBtn.setBackgroundResource(
-            if (recording) R.drawable.zone_on else R.drawable.zone_off
+            if (recording) R.drawable.zone_on else R.drawable.pill_surface
         )
     }
 
@@ -297,12 +334,14 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private fun startVoice() {
         if (voice != null) return
         binding.voiceBadge.text = "VOICE · LOADING"
+        refreshAiChip()
         Executors.newSingleThreadExecutor().execute {
             val engine = WhisperEngine.create(this)
             val smoke = if (engine != null) smokeWhisper(engine) else null
             mainHandler.post {
                 if (engine == null) {
                     binding.voiceBadge.text = "VOICE · NO MODEL"
+                    refreshAiChip()
                     return@post
                 }
                 coach = VoiceCoach(this, onSpeaking = ::onCoachSpeaking)
@@ -314,9 +353,13 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                         refreshNeuralLoad()
                         handleVoice(r)
                     },
-                    onStatus = { s -> binding.voiceBadge.text = s },
+                    onStatus = { s ->
+                        binding.voiceBadge.text = s
+                        refreshAiChip()
+                    },
                 )
                 voice?.start()
+                refreshAiChip()
             }
         }
     }
@@ -356,12 +399,11 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private fun handleVoice(result: WhisperEngine.Result) {
         val cmd = coach?.parse(result.text) ?: return
 
-        // Hands-free calibration: NEXT / SKIP drive the steps, zones are ignored
-        // so casual speech can't fight the aim capture.
+        // Hands-free calibration: READY/NEXT arm each stage; SKIP skips holds.
         if (calibrating) {
             when (cmd.intent) {
-                VoiceCoach.Intent.NEXT -> {
-                    binding.hint.text = "Voice · next · \"${result.text}\""
+                VoiceCoach.Intent.READY, VoiceCoach.Intent.NEXT -> {
+                    binding.hint.text = "Voice · ready · \"${result.text}\""
                     vibrate(40)
                     onCalibNext()
                 }
@@ -395,25 +437,25 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             VoiceCoach.Intent.LEFT -> {
                 pose?.forceZone("L")
                 setZone("L")
-                binding.hint.text = "Voice aim · L · \"${result.text}\""
+                if (!hintHeldByHost()) binding.hint.text = "Aim · Left"
             }
             VoiceCoach.Intent.CENTER -> {
                 pose?.forceZone("C")
                 setZone("C")
-                binding.hint.text = "Voice aim · C · \"${result.text}\""
+                if (!hintHeldByHost()) binding.hint.text = "Aim · Centre"
             }
             VoiceCoach.Intent.RIGHT -> {
                 pose?.forceZone("R")
                 setZone("R")
-                binding.hint.text = "Voice aim · R · \"${result.text}\""
+                if (!hintHeldByHost()) binding.hint.text = "Aim · Right"
             }
             VoiceCoach.Intent.TRASH -> {
-                binding.hint.text = "Trash talk · \"${result.text}\""
+                if (!hintHeldByHost()) binding.hint.text = "Heard you"
                 vibrate(40)
                 askQwen("trash talk")
             }
             VoiceCoach.Intent.NEXT, VoiceCoach.Intent.SKIP, VoiceCoach.Intent.UNKNOWN -> {
-                if (result.text.isNotBlank()) {
+                if (result.text.isNotBlank() && !hintHeldByHost()) {
                     binding.hint.text = "Heard: \"${result.text}\""
                 }
             }
@@ -429,8 +471,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 refreshNeuralLoad()
                 if (reply.text.isNotBlank()) {
                     coach?.speak(reply.text)
-                    if (!calibrating) {
-                        binding.hint.text = "Coach · ${reply.text}"
+                    if (!calibrating && !hintHeldByHost()) {
+                        binding.hint.text = reply.text
                     }
                 }
             }
@@ -438,11 +480,87 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     }
 
     private fun refreshNeuralLoad() {
-        val poseMs = pose?.lastPoseMs?.takeIf { it >= 0 }?.toString() ?: "—"
-        val asr = if (lastAsrMs >= 0) "${lastAsrMs}" else "—"
-        val llm = if (lastLlmMs >= 0) "${lastLlmMs}" else "—"
+        val asr = if (lastAsrMs >= 0) "${lastAsrMs} ms" else "—"
+        val llm = if (lastLlmMs >= 0) "${lastLlmMs} ms" else "—"
         val backend = qwen?.backendLabel ?: "—"
-        binding.neuralLoad.text = "NEURAL LOAD · POSE ${poseMs}ms · ASR ${asr}ms · LLM ${llm}ms ($backend)"
+        binding.asrStat.text = asr
+        binding.llmStat.text = if (lastLlmMs >= 0) "$llm · $backend" else backend
+        binding.forceStat.text = lastForceLabel
+        refreshAiChip()
+    }
+
+    private fun refreshAiChip() {
+        val posePart = lastPoseMsLabel.ifBlank { "—" }
+        val voiceRaw = binding.voiceBadge.text?.toString().orEmpty()
+        val voicePart = when {
+            voiceRaw.contains("LISTEN", ignoreCase = true) -> "LISTEN"
+            voiceRaw.contains("NO MODEL", ignoreCase = true) -> "NO VOICE"
+            voiceRaw.contains("NO MIC", ignoreCase = true) -> "NO MIC"
+            voiceRaw.contains("LOADING", ignoreCase = true) -> "VOICE…"
+            voiceRaw.contains("REC", ignoreCase = true) -> "REC"
+            voiceRaw.contains("OFF", ignoreCase = true) -> "VOICE"
+            voiceRaw.isNotBlank() -> "VOICE"
+            else -> "VOICE"
+        }
+        binding.aiChip.text = "$posePart · $voicePart"
+        binding.forceBadge.text = lastForceLabel
+        binding.forceBadge.visibility = if (showForceChip) View.VISIBLE else View.GONE
+        binding.forceStat.text = lastForceLabel
+    }
+
+    private fun toggleTelemetry() {
+        setTelemetryVisible(!telemetryExpanded)
+    }
+
+    private fun setTelemetryVisible(show: Boolean) {
+        telemetryExpanded = show
+        binding.telemetry.visibility = if (show) View.VISIBLE else View.GONE
+    }
+
+    private fun toggleHostRow() {
+        hostExpanded = !hostExpanded
+        binding.hostRow.visibility = if (hostExpanded) View.VISIBLE else View.GONE
+    }
+
+    private fun updateHostPill(connected: Boolean) {
+        hostPillState = if (connected) HostPill.CONNECTED else HostPill.OFFLINE
+        paintHostPill()
+    }
+
+    private fun paintHostPill() {
+        val host = game.url.removePrefix("ws://").removeSuffix("/ws")
+        when (hostPillState) {
+            HostPill.CONNECTED -> {
+                val label = if (host.length > 16) host.takeLast(14) else host
+                binding.hostPill.text = "● $label"
+                binding.hostPill.setTextColor(ContextCompat.getColor(this, R.color.green))
+                binding.hostPill.setBackgroundResource(R.drawable.host_pill_ok)
+            }
+            HostPill.CONNECTING -> {
+                binding.hostPill.text = "… Connecting"
+                binding.hostPill.setTextColor(ContextCompat.getColor(this, R.color.cyan))
+                binding.hostPill.setBackgroundResource(R.drawable.host_pill_offline)
+            }
+            HostPill.FAILED -> {
+                binding.hostPill.text = "✕ Failed"
+                binding.hostPill.setTextColor(ContextCompat.getColor(this, R.color.red))
+                binding.hostPill.setBackgroundResource(R.drawable.host_pill_fail)
+            }
+            HostPill.OFFLINE -> {
+                binding.hostPill.text = "○ Offline"
+                binding.hostPill.setTextColor(ContextCompat.getColor(this, R.color.muted))
+                binding.hostPill.setBackgroundResource(R.drawable.host_pill_offline)
+            }
+        }
+    }
+
+    private fun applyChromeForMode() {
+        val inCalib = calibrating
+        binding.zones.visibility = if (inCalib) View.GONE else View.VISIBLE
+        binding.calibBtn.visibility = if (inCalib) View.GONE else View.VISIBLE
+        // Keep body badge during calib; quiet it in match unless not framed.
+        binding.bodyBadge.alpha = if (inCalib) 1f else 0.85f
+        binding.aiChip.visibility = View.VISIBLE
     }
 
     private fun noteZone(zone: String) {
@@ -452,8 +570,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         while (zoneHistory.size > 6) zoneHistory.removeFirst()
         if (zoneHistory.size >= 4) {
             val last4 = zoneHistory.takeLast(4)
-            if (last4.distinct().size == 1 && !calibrating) {
-                binding.hint.text = "You're predictable — mix it. Stop looping $zone."
+            if (last4.distinct().size == 1 && !calibrating && !hintHeldByHost()) {
+                binding.hint.text = "Mix it up — stop looping $zone"
             }
         }
     }
@@ -470,13 +588,23 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     }
 
     private fun startCalibration() {
+        // Don't open calibration mid-match — wait-forever shoot would hang.
+        val phase = lastPhase
+        if (phase in listOf("announce", "countdown", "shoot", "resolve")) {
+            coach?.speak("Finish the match first.")
+            binding.hint.text = "Finish the match first — then recalibrate."
+            vibrate(40)
+            return
+        }
         calibrating = true
         calib = CalibrationSession()
         pendingCalibKick = null
         pose?.calibrationSwing = false
         lastCalibVoice = ""
+        lastCalibVoiceAt = 0L
         binding.calibration.calibPanel.visibility = View.VISIBLE
-        binding.calibBtn.visibility = View.GONE
+        setTelemetryVisible(false)
+        applyChromeForMode()
         refreshCalibUi()
     }
 
@@ -496,7 +624,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         pose?.calibrationSwing = false
         binding.overlay.setBodyGuide(show = false, ok = false)
         binding.calibration.calibPanel.visibility = View.GONE
-        binding.calibBtn.visibility = View.VISIBLE
+        applyChromeForMode()
         updateProfileHint()
         if (lastPhase == null || lastPhase == "lobby") {
             binding.big.text = "READY?"
@@ -519,10 +647,13 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     private fun refreshCalibUi() {
         val ui = calib?.ui() ?: return
-        // Voice-guide each state change; blank voice (hold states) stays quiet and
-        // keeps the guard so bouncing ready<->holding doesn't re-speak instructions.
-        if (ui.voice.isNotBlank() && ui.voice != lastCalibVoice) {
+        // Speak on change, or re-prompt the same correction every 4s.
+        val now = System.currentTimeMillis()
+        if (ui.voice.isNotBlank() &&
+            (ui.voice != lastCalibVoice || now - lastCalibVoiceAt > 4000L)
+        ) {
             lastCalibVoice = ui.voice
+            lastCalibVoiceAt = now
             coach?.speak(ui.voice)
         }
         val panel = binding.calibration
@@ -535,7 +666,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             this,
             when {
                 ui.holding -> R.color.green
-                ui.title.contains("DETECTED") -> R.color.cyan
+                ui.title.contains("DETECTED") || ui.title.contains("ADJUST") -> R.color.cyan
                 else -> R.color.amber
             }
         )
@@ -544,6 +675,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 this,
                 when {
                     ui.holding -> R.color.green
+                    ui.title.contains("ADJUST") -> R.color.amber
                     ui.title.contains("DETECTED") -> R.color.cyan
                     ui.title.contains("FIND") -> R.color.amber
                     else -> R.color.muted
@@ -552,24 +684,34 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         )
         panel.calibBioRow.visibility = if (ui.showBiometrics) View.VISIBLE else View.GONE
 
-        when (ui.step) {
-            CalibrationSession.Step.BIOMETRICS -> {
+        when {
+            ui.waitingConfirm -> {
+                pose?.calibrationSwing = ui.step == CalibrationSession.Step.PRACTICE
+                panel.calibSkip.visibility = View.VISIBLE
+                panel.calibSkip.text = getString(R.string.calib_skip)
+                panel.calibNext.text = "I'M READY"
+                panel.calibNext.isEnabled = true
+                panel.calibNext.alpha = 1f
+                binding.big.text = "READY?"
+                binding.hint.text = ui.hint
+            }
+            ui.step == CalibrationSession.Step.BIOMETRICS -> {
                 panel.calibNext.text = getString(R.string.calib_next)
                 panel.calibSkip.visibility = View.INVISIBLE
                 pose?.calibrationSwing = false
             }
-            CalibrationSession.Step.PRACTICE -> {
+            ui.step == CalibrationSession.Step.PRACTICE -> {
                 pose?.calibrationSwing = true
                 pose?.setKickThreshold(1.8f)
                 panel.calibSkip.visibility = View.VISIBLE
                 panel.calibSkip.text = "RESTART"
-                panel.calibNext.text = getString(R.string.calib_confirm_swing)
+                panel.calibNext.text = if (ui.canFinishSwing) getString(R.string.calib_confirm_swing) else "SWING…"
                 panel.calibNext.isEnabled = ui.canFinishSwing
                 panel.calibNext.alpha = if (ui.canFinishSwing) 1f else 0.45f
-                binding.big.text = "KICK!"
+                binding.big.text = "KICK ${ui.swingIndex + 1}/${ui.swingTotal}"
                 binding.hint.text = ui.hint
             }
-            CalibrationSession.Step.DONE -> {
+            ui.step == CalibrationSession.Step.DONE -> {
                 pose?.calibrationSwing = false
                 panel.calibSkip.visibility = View.INVISIBLE
                 panel.calibNext.text = getString(R.string.calib_done)
@@ -592,6 +734,13 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     private fun onCalibNext() {
         val session = calib ?: return
+        val ui = session.ui()
+        if (ui.waitingConfirm) {
+            session.confirmReady()
+            coach?.speak("Go.")
+            refreshCalibUi()
+            return
+        }
         when (session.step) {
             CalibrationSession.Step.BIOMETRICS -> {
                 val h = binding.calibration.calibHeight.text.toString().toFloatOrNull() ?: 175f
@@ -689,10 +838,12 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 calib?.step != CalibrationSession.Step.DONE,
             ok = guideOk,
         )
-        binding.forceBadge.text = if (hud.liveForce > 5f)
-            "FORCEPOSE · ${hud.liveForce.roundToInt()} N"
-        else "FORCEPOSE · — N"
-        binding.npuBadge.text = "DELEGATE · ${hud.delegateLabel} · ${hud.latencyMs} ms"
+        lastForceLabel = if (hud.liveForce > 5f)
+            "${hud.liveForce.roundToInt()} N"
+        else "0 N"
+        lastPoseMsLabel = "${hud.delegateLabel} · ${hud.latencyMs} ms"
+        binding.npuBadge.text = lastPoseMsLabel
+        showForceChip = hud.liveForce > 8f || lastPhase == "shoot" || calibrating
         refreshNeuralLoad()
 
         if (calibrating) {
@@ -706,10 +857,13 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 bodyOk = lm != null,
                 landmarks = lm,
                 wristXMirrored = hud.wristXMirrored,
+                wristY = hud.wristY,
+                shoulderY = hud.shoulderY,
                 liveForce = hud.liveForce,
                 kick = kick,
                 kickFoot = kick?.foot ?: hud.liveFoot,
                 footSpeed = max(hud.liveSpeed, kick?.peakSpeed ?: 0f),
+                kickReject = hud.kickReject,
             )
             if (advanced || session.step == CalibrationSession.Step.PRACTICE ||
                 session.step == CalibrationSession.Step.TPOSE ||
@@ -781,6 +935,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             binding.led.setBackgroundResource(
                 if (connected) R.drawable.led_on else R.drawable.led_off
             )
+            updateHostPill(connected)
         }
     }
 
@@ -801,17 +956,17 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     if (lastPhase != "lobby") promptReadyToStart()
                 }
                 "announce" -> {
-                    binding.big.text = "KICK ${state.kick} OF ${state.kicksTotal}"
-                    if (!holdHint) {
-                        binding.hint.text = "Raise a hand to aim — THE WALL is watching…"
-                    }
+                    binding.big.text = "KICK ${state.kick}/${state.kicksTotal}"
+                    if (!holdHint) binding.hint.text = "Aim with your hand"
+                    showForceChip = false
+                    refreshAiChip()
                     if (lastPhase != "announce") {
                         coach?.speak("Kick ${state.kick} of ${state.kicksTotal}. Pick a corner.")
                     }
                 }
                 "countdown" -> {
                     binding.big.text = ceil(state.timerMs / 1000.0).toInt().toString()
-                    if (!holdHint) binding.hint.text = "Hold your fake… switch late!"
+                    if (!holdHint) binding.hint.text = "Feint… switch late"
                     if (lastPhase != "countdown") {
                         vibrate(30)
                         coach?.speak("Ready")
@@ -819,9 +974,9 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 }
                 "shoot" -> {
                     binding.big.text = "KICK!"
-                    if (!holdHint) {
-                        binding.hint.text = "Swing your leg when ready — your hand picks the corner!"
-                    }
+                    if (!holdHint) binding.hint.text = "Swing when ready"
+                    showForceChip = true
+                    refreshAiChip()
                     if (lastPhase != "shoot") vibrateBurst()
                 }
                 "resolve" -> {
