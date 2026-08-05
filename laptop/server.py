@@ -172,6 +172,7 @@ class Game:
         self.desk = desk
         self.sockets: dict[web.WebSocketResponse, str] = {}   # ws -> client id
         self.task: asyncio.Task | None = None
+        self.match_gen = 0                      # bumped on abort so a dying match can't clobber lobby
         self._reset()
 
     # ------------------------------------------------------------ state ----
@@ -190,6 +191,9 @@ class Game:
         self.kick_msg = None
         self.kick_evt = asyncio.Event()
         self.key = 0                            # kick key — guards stale desk lines
+
+    def _alive(self, gen: int) -> bool:
+        return gen == self.match_gen
 
     def snapshot(self):
         return {
@@ -312,31 +316,44 @@ class Game:
             await asyncio.sleep(seconds)
 
     async def run_match(self):
+        gen = self.match_gen
         try:
             for _ in range(KICKS):
+                if not self._alive(gen):
+                    return
                 # ---------------- announce ----------------
                 self.key += 1
                 self.kick += 1
                 self.kick_msg = None
-                self.kick_evt.clear()
+                self.kick_evt = asyncio.Event()  # fresh event (abort may have set the old one)
                 self.aim_trail = []
                 self.replay = None
+                if not self._alive(gen):
+                    return
                 self.phase = "announce"
                 pred = self.predict()
                 self.line = tline("read", z=ZW[pred].replace("the ", ""))
                 await self.broadcast()
+                if not self._alive(gen):
+                    return
                 self.ask_desk("read", self.ctx(), {"announce", "countdown"})
                 await asyncio.sleep(ANNOUNCE_S)
+                if not self._alive(gen):
+                    return
 
                 # ---------------- countdown ---------------
                 self.phase = "countdown"
                 await self.timer(COUNTDOWN_S, phase_broadcast_every=1.0)
+                if not self._alive(gen):
+                    return
 
                 # ---------------- shoot -------------------
                 self.phase = "shoot"
                 if SHOOT_WINDOW > 0:
                     self.timer_end = time.monotonic() + SHOOT_WINDOW
                     await self.broadcast()
+                    if not self._alive(gen):
+                        return
                     try:
                         await asyncio.wait_for(self.kick_evt.wait(), SHOOT_WINDOW)
                     except asyncio.TimeoutError:
@@ -345,7 +362,11 @@ class Game:
                     # Wait as long as it takes — the kick decides the tempo.
                     self.timer_end = 0.0
                     await self.broadcast()
+                    if not self._alive(gen):
+                        return
                     await self.kick_evt.wait()
+                if not self._alive(gen):
+                    return
 
                 # ---------------- resolve -----------------
                 if self.kick_msg:
@@ -359,6 +380,8 @@ class Game:
                     sz, power, kz, result = None, 0.0, random.choice(ZONES), "over"
                     force, dir_deg = 0, 0
 
+                if not self._alive(gen):
+                    return
                 if result == "goal":
                     self.score += 1
                 else:
@@ -375,12 +398,15 @@ class Game:
                 self.line = tline(tkey, z=ZW.get(sz, "the middle"))
                 self.phase = "resolve"
                 await self.broadcast()
+                if not self._alive(gen):
+                    return
                 self.ask_desk("kick", self.ctx(), {"resolve", "end"})
                 await asyncio.sleep(RESOLVE_S)
 
-            await self.full_time()
+            if self._alive(gen):
+                await self.full_time()
         except asyncio.CancelledError:
-            raise
+            return
 
     async def full_time(self):
         self.key += 1
@@ -435,13 +461,14 @@ class Game:
                 await self.broadcast()
         elif t == "abort":
             # End / restart from lobby mid-match (or from full time).
+            # Do NOT await the match task here — that deadlocks the WS handler
+            # when the match is mid-broadcast to this same socket.
             if self.phase != "lobby":
+                self.match_gen += 1
                 if self.task and not self.task.done():
                     self.task.cancel()
-                    try:
-                        await self.task
-                    except asyncio.CancelledError:
-                        pass
+                # Unblock shoot-phase wait so the cancelled task can exit.
+                self.kick_evt.set()
                 self.desk.recent.clear()
                 self._reset()
                 self.line = "Match aborted — waiting for the striker…"
