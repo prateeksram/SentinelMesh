@@ -177,6 +177,8 @@ $("startBtn").onclick=()=>{ if(!S)return;
 $("abortBtn").onclick=()=>{
   if(!S||S.phase==="lobby"||!ws||ws.readyState!==1) return;
   if(!confirm("End this match and return to the lobby?")) return;
+  $("abortBtn").disabled=true;
+  $("abortBtn").textContent="ENDING…";
   ws.send(JSON.stringify({type:"abort"}));
 };
 
@@ -215,6 +217,7 @@ function onState(st){
   big.className=""; btn.classList.add("hide");
   // END MATCH visible for any live / full-time phase (not lobby).
   abort.classList.toggle("hide", st.phase==="lobby");
+  if(st.phase!=="lobby"){ abort.disabled=false; abort.textContent="END MATCH"; }
   switch(st.phase){
     case "lobby":
       big.textContent="GESTURE FOOTBALL";
