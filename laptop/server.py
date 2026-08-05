@@ -433,6 +433,19 @@ class Game:
                 self.desk.recent.clear()
                 self._reset()
                 await self.broadcast()
+        elif t == "abort":
+            # End / restart from lobby mid-match (or from full time).
+            if self.phase != "lobby":
+                if self.task and not self.task.done():
+                    self.task.cancel()
+                    try:
+                        await self.task
+                    except asyncio.CancelledError:
+                        pass
+                self.desk.recent.clear()
+                self._reset()
+                self.line = "Match aborted — waiting for the striker…"
+                await self.broadcast()
 
     def on_close(self, ws):
         self.sockets.pop(ws, None)
