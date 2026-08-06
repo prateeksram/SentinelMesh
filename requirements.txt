@@ -1,3 +1,4 @@
 aiohttp>=3.9
+-r ai100/requirements.txt
 # Optional for Neural FX NPU upgrade (see laptop/NEURAL_FX.md):
 # onnxruntime

@@ -88,7 +88,7 @@ async def phone():
                                 ],
                             }
                         )
-                if st["phase"] == "end":
+                if st["phase"] == "end" and st.get("postGameReport", {}).get("status") == "ready":
                     st["_saw_generating"] = saw_generating
                     return st
             return last
@@ -116,7 +116,7 @@ async def tv():
                 if st["phase"] == "lobby" and st["connected"]["phone"] and not started:
                     started = True
                     await ws.send_json({"type": "start"})
-                if st["phase"] == "end":
+                if st["phase"] == "end" and st.get("postGameReport", {}).get("status") == "ready":
                     st["_phases"] = phases
                     return st
 
@@ -139,6 +139,15 @@ async def main():
     print("\nMatch simulation:")
     st, tv_st = await asyncio.gather(phone(), tv())
     elapsed = time.perf_counter() - t0
+
+    report = st.get("postGameReport") or {}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(HTTP + report.get("pngUrl", "")) as response:
+            report_png = await response.read()
+            report_png_status = response.status
+        async with session.get(HTTP + report.get("pdfUrl", "")) as response:
+            report_pdf = await response.read()
+            report_pdf_status = response.status
 
     print(
         f"\nFINAL: {st['score']}/{st['kicksTotal']} saves={st['saves']} "
@@ -168,6 +177,10 @@ async def main():
     assert st["scene"].get("atmosphere") and st["scene"].get("difficulty")
     assert st.get("sceneMetrics", {}).get("source") in ("geniex", "template")
     assert st.get("report") is not None
+    assert report.get("status") == "ready"
+    assert report_png_status == 200 and report_png.startswith(b"\x89PNG")
+    assert report_pdf_status == 200 and report_pdf.startswith(b"%PDF")
+    assert report.get("qrUrl") and report.get("landingUrl")
     d = st["scene"]["difficulty"]
     for k in ("keeperIq", "keeperReaction", "shootWindow", "powerBeat"):
         assert k in d

@@ -14,7 +14,7 @@ Branch: `prateek` · Phone: Galaxy S25 Ultra (Snapdragon 8 Elite)
 |---|---|---|
 | **Player 1** | Phone (`android/` app) | Aim, kick, all AI on-device |
 | **Player 2** | Arduino UNO Q (teammates) | Same WebSocket protocol |
-| **Host / TV** | Laptop (`laptop/server.py`) | Match engine, THE WALL, stadium UI |
+| **Host / TV** | Laptop (`laptop/server.py`) | Match engine, THE WALL, stadium UI, AI100 report compositor |
 
 The phone is **not** the match host. It only sends tiny JSON (`aim`, `kick`, `skel`). No camera frames leave the device.
 
@@ -99,6 +99,38 @@ Details: [`android/README.md`](android/README.md).
 | TV stadium | `laptop/public/tv.html` | Done |
 | Browser striker (fallback) | `laptop/public/phone.html` | Done |
 | Headless match test | `laptop/test_match.py` | Done |
+
+### AI100 post-match report
+
+The self-contained report subsystem lives in [`ai100/`](ai100/README.md).
+
+At full time the laptop turns the phone's existing kick JSON into a private,
+one-page scouting card:
+
+- goal conversion and shot-by-shot outcomes;
+- average/max ForcePose Newtons and force consistency;
+- favorite direction, placement unpredictability, launch angle and curve index;
+- chip/drive mix, dominant foot, high/low split and keeper wrong-foot rate;
+- a clearly labeled **five-kick game sample** comparison with the current
+  Transfermarkt career penalty records for Cristiano Ronaldo and Lionel Messi.
+
+Qualcomm Cloud AI100 SDXL Turbo creates the personalized, text-free stadium
+artwork. The laptop calculates and typesets every statistic, then exports both
+PNG and one-page PDF. This division is intentional: image models should never
+be trusted to render telemetry or benchmark numbers. The TV displays a QR code
+to a private download page; generated assets expire after 30 minutes.
+
+Copy `ai100/.env.example` to `ai100/.env` and add the hackathon AI100 key. If AI100 is
+offline, the same report and QR flow continues with procedural artwork.
+
+For a local sample without playing a match:
+
+```powershell
+Invoke-RestMethod -Method Post http://localhost:8080/api/report/simulate `
+  -ContentType application/json -Body '{"playerName":"Demo Striker"}'
+```
+
+The TV updates from **BUILDING YOUR CARD** to a scannable report automatically.
 
 ---
 
@@ -188,6 +220,8 @@ Native: calibration weight / torso. Browser fallback: `phone.html?kg=82`.
 | `GF_KEEPER_REACTION` | 0.45 | feint window (s) |
 | `GF_KEEPER_IQ` | 0.75 | 0 = random · 1 = psychic |
 | `GF_ANNOUNCE_S` / `GF_COUNTDOWN_S` / `GF_RESOLVE_S` | 2.2 / 3.0 / 3.8 | pacing |
+| `GF_PUBLIC_BASE_URL` | auto LAN address | public/ngrok origin encoded into report QR |
+| `GF_ENABLE_REPORT_SIM` | 0 | allow the sample endpoint beyond localhost |
 
 Kick sensitivity: `KICK_MS` / `F_MAX` in `ForcePoseEngine.kt` (or browser `phone.html`).
 

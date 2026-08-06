@@ -67,12 +67,19 @@ Bullet-time skeleton for TV orbit replay:
   "score": 1,
   "line": "THE WALL dives…",
   "timerMs": 0,
-  "last": { "force": 210, "result": "goal" }
+  "last": { "force": 210, "result": "goal" },
+  "postGameReport": { "status": "generating" }
 }
 ```
 
 `phase` ∈ `lobby` | `announce` | `countdown` | `shoot` | `resolve` | `end`  
 `last.result` ∈ `goal` | `save` | `post` | `miss` (and synonyms)
+
+At full time, `postGameReport.status` moves from `generating` to `ready`.
+The ready object contains short-lived `landingUrl`, `pngUrl`, `pdfUrl`, and
+`qrUrl` paths plus a small preview. Report statistics are calculated from the
+server's accumulated `shotmap`; no extra phone payload or camera upload is
+required.
 
 ## On-device only (never on the wire)
 

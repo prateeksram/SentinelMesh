@@ -138,6 +138,30 @@
   #reportLine{margin-top:10px;font-family:var(--fCond);font-weight:600;letter-spacing:1px;
               font-size:clamp(13px,1.6vw,18px);color:var(--mut);max-width:70vw;display:none}
   #reportLine.show{display:block}
+  #reportPanel{position:fixed;right:18px;top:108px;z-index:8;width:min(310px,24vw);
+               padding:18px;background:linear-gradient(160deg,rgba(9,25,37,.97),rgba(5,13,22,.98));
+               border:1px solid #355873;border-top:4px solid var(--amber);border-radius:18px;
+               box-shadow:0 22px 60px rgba(0,0,0,.65);display:none;pointer-events:auto}
+  #reportPanel.show{display:block;animation:reportIn .35s ease-out}
+  @keyframes reportIn{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
+  #reportPanel .eyebrow{font-family:var(--fCond);font-weight:800;letter-spacing:2px;
+                       color:var(--cyan);font-size:12px}
+  #reportTitle{font-family:var(--fBlack);font-size:clamp(18px,2vw,28px);line-height:1.05;margin:7px 0 4px;color:var(--amber)}
+  #reportStatus{font-family:var(--fCond);font-weight:700;color:var(--mut);font-size:14px;line-height:1.3}
+  #reportQr{display:none;width:100%;aspect-ratio:1;margin:14px 0 10px;background:#fff;border-radius:10px;padding:8px}
+  #reportQr.show{display:block}
+  #reportStats{display:none;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}
+  #reportStats.show{display:grid}
+  #reportStats b{background:#102b3d;border:1px solid #294b62;border-radius:9px;padding:8px;
+                 color:var(--chalk);font-family:var(--fCond);font-size:13px;text-align:center}
+  #reportOpen{display:none;text-decoration:none;text-align:center;background:var(--amber);color:var(--ink);
+              font-family:var(--fBlack);font-size:13px;letter-spacing:1px;padding:11px;border-radius:10px;margin-top:9px}
+  #reportOpen.show{display:block}
+  #reportPanel .spin{display:none;width:34px;height:34px;margin:16px auto 8px;border-radius:50%;
+                     border:4px solid #26465c;border-top-color:var(--amber);animation:reportSpin .8s linear infinite}
+  #reportPanel.generating .spin{display:block}
+  @keyframes reportSpin{to{transform:rotate(360deg)}}
+  @media(max-width:900px){#reportPanel{width:250px;right:10px;top:94px;padding:13px}}
 </style>
 </head>
 <body>
@@ -168,6 +192,16 @@
     <button id="startBtn" disabled>START MATCH</button>
   </div>
 </div>
+
+<aside id="reportPanel" aria-live="polite">
+  <div class="eyebrow">AI100 POST-MATCH LAB</div>
+  <div id="reportTitle">SCOUTING REPORT</div>
+  <div id="reportStatus">Waiting for full time.</div>
+  <div class="spin"></div>
+  <img id="reportQr" alt="Scan to download your post-match report">
+  <div id="reportStats"><b id="reportConversion">--% conversion</b><b id="reportForce">-- N max</b></div>
+  <a id="reportOpen" href="#" target="_blank" rel="noopener">OPEN REPORT</a>
+</aside>
 
 <div id="genBarWrap"><div id="genBar"></div></div>
 <div id="genMeta"></div>
@@ -405,6 +439,38 @@ function dots(el, forKeeper){
     el.appendChild(d);
   }
 }
+let reportToken="";
+function updateReportPanel(st){
+  const panel=$("reportPanel"), card=st.postGameReport;
+  const qr=$("reportQr"), stats=$("reportStats"), open=$("reportOpen");
+  panel.classList.remove("show","generating");
+  qr.classList.remove("show"); stats.classList.remove("show"); open.classList.remove("show");
+  if(!card||card.status==="idle") return;
+  panel.classList.add("show");
+  if(card.status==="generating"){
+    panel.classList.add("generating");
+    $("reportTitle").textContent="BUILDING YOUR CARD";
+    $("reportStatus").textContent=card.message||"AI100 is designing your scouting report…";
+    return;
+  }
+  if(card.status==="error"){
+    $("reportTitle").textContent="REPORT BENCHED";
+    $("reportStatus").textContent=card.message||"The report could not be generated.";
+    return;
+  }
+  if(card.status!=="ready") return;
+  const p=card.preview||{};
+  $("reportTitle").textContent=p.nickname||"YOUR MATCH REPORT";
+  $("reportStatus").textContent=`GRADE ${p.grade||"–"} · SCAN WITH YOUR PHONE`;
+  $("reportConversion").textContent=`${p.conversionRate??0}% conversion`;
+  $("reportForce").textContent=`${p.maxForce??0} N max`;
+  stats.classList.add("show"); open.classList.add("show"); qr.classList.add("show");
+  open.href=card.landingUrl;
+  if(reportToken!==card.token){
+    reportToken=card.token;
+    qr.src=`${card.qrUrl}?v=${encodeURIComponent(card.token)}`;
+  }
+}
 function onState(st){
   prev=S; S=st;
   $("sYou").textContent=st.score; $("sWall").textContent=st.saves;
@@ -426,6 +492,7 @@ function onState(st){
 
   setLevelBadge(st.level);
   if(st.sceneMetrics?.source) setSceneBadge(st.sceneMetrics.source);
+  updateReportPanel(st);
 
   const big=$("big"), sub=$("sub"), btn=$("startBtn"), abort=$("abortBtn");
   const report=$("reportLine"), genWrap=$("genBarWrap"), genBar=$("genBar"), genMeta=$("genMeta");

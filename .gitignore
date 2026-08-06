@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.env
+.env.*
+!.env.example
 
 # TLS certs for the phone camera — never commit these
 *.pem
@@ -13,7 +16,11 @@ laptop/models/*.data
 laptop/models/*.zip
 laptop/models/_export_depth/
 laptop/logs/
+laptop/data/reports/
+laptop/data/report_cache/
 laptop/public/scenes/*.json
+ai100/cache/
+ai100/data/reports/
 
 # editor / OS noise
 .DS_Store
