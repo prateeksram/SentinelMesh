@@ -206,9 +206,11 @@ class Game:
         self.scene = None
         self.report = ""
         self.gen_progress = 0
+        self.gen_step = ""
         self.scene_metrics = None
         self.report_card = None
         self.report_task: asyncio.Task | None = None
+        self.aim_locked = None  # zone frozen at shoot entry (feints only before)
         self._reset()
 
     # ------------------------------------------------------------ state ----
@@ -221,6 +223,7 @@ class Game:
         self.shotmap = []                       # per-kick results for the TV dot map
         self.aim = "C"                          # live aim from the hand
         self.aim_trail = []                     # (monotonic t, zone) during a kick
+        self.aim_locked = None                  # frozen at shoot; cleared each kick
         self.replay = None                      # bullet-time skeleton for the current kick
         self.report_card = None
         self.last = None
@@ -237,6 +240,7 @@ class Game:
         self.scene = None
         self.report = ""
         self.gen_progress = 0
+        self.gen_step = ""
         self.scene_metrics = None
         self.k_iq = KEEPER_IQ
         self.k_react = KEEPER_REACT
@@ -255,7 +259,8 @@ class Game:
             "score": self.score,
             "saves": self.saves,
             "shotmap": self.shotmap,
-            "aimLive": self.aim,
+            "aimLive": self.aim_locked if self.aim_locked else self.aim,
+            "aimLocked": self.aim_locked is not None,
             "timerMs": max(0, int((self.timer_end - time.monotonic()) * 1000)),
             "last": self.last,
             "replay": self.replay,
@@ -266,6 +271,7 @@ class Game:
             "scene": self.scene,
             "report": self.report,
             "genProgress": self.gen_progress,
+            "genStep": self.gen_step,
             "sceneMetrics": self.scene_metrics,
             "postGameReport": self.report_card,
         }
@@ -384,6 +390,7 @@ class Game:
                 self.kick_msg = None
                 self.kick_evt = asyncio.Event()  # fresh event (abort may have set the old one)
                 self.aim_trail = []
+                self.aim_locked = None
                 self.replay = None
                 if not self._alive(gen):
                     return
@@ -405,6 +412,9 @@ class Game:
                     return
 
                 # ---------------- shoot -------------------
+                # Freeze aim at countdown→shoot; feints only before this.
+                self.aim_locked = self.aim if self.aim in ZONES else "C"
+                self.aim = self.aim_locked
                 self.phase = "shoot"
                 if self.k_window > 0:
                     self.timer_end = time.monotonic() + self.k_window
@@ -427,9 +437,11 @@ class Game:
 
                 # ---------------- resolve -----------------
                 if self.kick_msg:
-                    sz, power, kick_t = (self.kick_msg["zone"],
-                                         self.kick_msg["power"],
-                                         self.kick_msg["t"])
+                    # Prefer aim locked at shoot entry over late wrist drift.
+                    sz = self.aim_locked or self.kick_msg["zone"]
+                    if sz not in ZONES:
+                        sz = self.kick_msg["zone"]
+                    power, kick_t = self.kick_msg["power"], self.kick_msg["t"]
                     force, dir_deg = self.kick_msg["force"], self.kick_msg["dirDeg"]
                     height = self.kick_msg.get("height")
                     spin = self.kick_msg.get("spin")
@@ -486,6 +498,7 @@ class Game:
         # 2) generating phase — SceneEngine owns the NPU; desk verdict waits until after
         self.phase = "generating"
         self.gen_progress = 0
+        self.gen_step = "Starting venue generator…"
         await self.broadcast()
         gen = self.match_gen
         # 3) pick + generate
@@ -493,11 +506,13 @@ class Game:
         ctx = scene_engine.build_context(self.score, self.saves, KICKS, self.shotmap)
         last_bcast = 0.0
 
-        async def progress(p):
+        async def progress(p, step=""):
             nonlocal last_bcast
             self.gen_progress = p
+            if step:
+                self.gen_step = step
             now = time.monotonic()
-            if p in (5, 100) or now - last_bcast > 0.25:
+            if p in (5, 100) or step or now - last_bcast > 0.25:
                 last_bcast = now
                 if self._alive(gen):
                     await self.broadcast()
@@ -572,10 +587,15 @@ class Game:
         elif t == "aim":
             z = msg.get("zone")
             if self.sockets.get(ws) == "phone" and z in ZONES:
-                self.aim = z
-                if self.phase in ("announce", "countdown", "shoot"):
+                # Feints only in announce/countdown — ignore aim once shoot locks.
+                if self.phase in ("announce", "countdown"):
+                    self.aim = z
                     self.aim_trail.append((time.monotonic(), z))
                     await self.broadcast()
+                elif self.phase == "shoot" and self.aim_locked is None:
+                    # Safety: lock on first aim if shoot started without lock.
+                    self.aim_locked = z
+                    self.aim = z
         elif t == "kick":
             if (self.sockets.get(ws) == "phone" and self.phase == "shoot"
                     and not self.kick_msg and msg.get("zone") in ZONES):
@@ -594,7 +614,8 @@ class Game:
                 foot = msg.get("foot")
                 if foot not in ("L", "R"):
                     foot = None
-                self.kick_msg = {"zone": msg["zone"],
+                zone = self.aim_locked if self.aim_locked in ZONES else msg["zone"]
+                self.kick_msg = {"zone": zone,
                                  "power": min(1.0, max(0.0, float(msg.get("power", 0.5)))),
                                  "force": max(0, int(msg.get("force") or 0)),   # Newtons, from ForcePose
                                  "dirDeg": int(msg.get("dirDeg") or 0),
@@ -685,12 +706,86 @@ async def fx_hero(request):
 
 
 async def scene_status(_request):
+    st = scene_engine.LAST_STATUS
     return web.json_response({
         "level": game.campaign_level,
         "progress": game.gen_progress,
+        "genStep": game.gen_step or st.get("genStep"),
         "metrics": game.scene_metrics,
         "phase": game.phase,
+        "scene": game.scene,
+        "fingerprint": (game.scene or {}).get("fingerprint") if game.scene else None,
+        "tvUrl": (game.scene or {}).get("tvUrl") if game.scene else st.get("tvUrl"),
+        "verified": (game.scene or {}).get("verified") if game.scene else None,
+        "attempts": st.get("attempts"),
+        "contract": st.get("contract"),
+        "lessonsApplied": st.get("lessonsApplied"),
+        "promoted": st.get("promoted"),
     })
+
+
+async def scene_brief(_request):
+    ctx = None
+    if game.shotmap:
+        ctx = scene_engine.build_context(
+            game.score, game.saves, KICKS, game.shotmap
+        )
+    return web.json_response(
+        scene_engine.build_brief(game.campaign_level, ctx)
+    )
+
+
+async def scene_upload(request):
+    """Accept polished CSS/overlay or full HTML; verify vs golden; promote."""
+    try:
+        if request.content_type and "multipart" in request.content_type:
+            reader = await request.multipart()
+            fields = {}
+            while True:
+                part = await reader.next()
+                if part is None:
+                    break
+                name = part.name
+                if not name:
+                    continue
+                if name == "html":
+                    fields["html"] = await part.text()
+                else:
+                    fields[name] = await part.text()
+            payload = fields
+        else:
+            payload = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "bad_request"}, status=400)
+    if not isinstance(payload, dict):
+        return web.json_response({"ok": False, "error": "bad_json"}, status=400)
+    try:
+        level = int(payload.get("level") or game.campaign_level or 1)
+    except (TypeError, ValueError):
+        level = game.campaign_level or 1
+    level = max(1, min(scene_engine.MAX_LEVEL, level))
+    ctx = scene_engine.build_context(
+        game.score, game.saves, KICKS, game.shotmap or []
+    )
+    result = await scene_engine.upload_and_promote(
+        level=level,
+        css=payload.get("css"),
+        overlay_html=payload.get("overlayHtml") or payload.get("overlay_html"),
+        html=payload.get("html"),
+        ctx=ctx,
+    )
+    if result.get("ok") and result.get("scene"):
+        scene = result["scene"]
+        d = scene["difficulty"]
+        game.k_iq, game.k_react = d["keeperIq"], d["keeperReaction"]
+        game.k_window, game.k_beat = d["shootWindow"], d["powerBeat"]
+        game.scene = scene
+        game.report = scene.get("report", "")
+        game.scene_metrics = scene.get("metrics")
+        game.campaign_level = level
+        game.gen_step = scene_engine.LAST_STATUS.get("genStep") or "Ready — verified (upload)"
+        await game.broadcast()
+    return web.json_response(result, status=200 if result.get("ok") else 422)
 
 
 async def hw_status(_request):
@@ -712,6 +807,8 @@ def make_app():
     app.router.add_get("/fx/status", fx_status)
     app.router.add_post("/fx/hero", fx_hero)
     app.router.add_get("/scene/status", scene_status)
+    app.router.add_get("/scene/brief", scene_brief)
+    app.router.add_post("/scene/upload", scene_upload)
     app.router.add_get("/hw/status", hw_status)
     report_web.register(app)
     app.router.add_get("/", lambda r: web.HTTPFound("/tv.html"))

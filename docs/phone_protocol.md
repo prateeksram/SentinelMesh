@@ -72,7 +72,12 @@ Bullet-time skeleton for TV orbit replay:
 }
 ```
 
-`phase` ∈ `lobby` | `announce` | `countdown` | `shoot` | `resolve` | `end`  
+`phase` ∈ `lobby` | `announce` | `countdown` | `shoot` | `resolve` | `end` | `generating`
+
+During `announce` / `countdown`, phone streams live `aim`. When phase becomes `shoot`,
+aim is **locked** (server freezes `aimLive` / `aimLocked`; phone stops updating zone for
+kick). Feints after the whistle no longer change the shot corner.
+
 `last.result` ∈ `goal` | `save` | `post` | `miss` (and synonyms)
 
 At full time, `postGameReport.status` moves from `generating` to `ready`.

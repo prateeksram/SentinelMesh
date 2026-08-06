@@ -1,61 +1,58 @@
-# SceneEngine — Pillar 3 (GenieX venue + difficulty)
+# SceneEngine — Pillar 3 (agentic GenieX TV + golden verify + learning)
 
-Designs the next stadium atmosphere and keeper knobs after full time.
+After full time, GenieX drafts a **new venue TV page** (CSS + overlay assembled onto golden `tv.html`). Every candidate is **validated against the golden functional contract**. Failures are recorded; the director reframes. Only verified pages are promoted to `public/scenes/live/`.
+
+## Flow
+
+1. Load golden contract (`scene_contract.py` ← `public/tv.html`)
+2. Load learning memory (`logs/scene_memory.jsonl`)
+3. Director drafts venue JSON (`css`, `overlayHtml`, difficulty, copy…)
+4. Assemble full candidate HTML from golden + skin
+5. Verify vs required IDs / WebSocket / `onState` / `applyScene`
+6. On fail → critic reframe (max 3 attempts) + memory lesson
+7. Promote to `/scenes/live/level_N.html` or fall back to template skin on golden
+
+TV progress bar (`genProgress` + **`genStep`**) shows each step in plain language.
 
 ## Models (AI Hub)
 
 ```powershell
-# Token via env only — never commit
 $env:QAI_HUB_API_TOKEN = "<your token>"
 .\laptop\fetch_aihub_models.ps1
-
-# LLM
 geniex pull ai-hub-models/Qwen3-4B-Instruct-2507
 geniex serve   # http://127.0.0.1:18181/v1
-# Served id (see geniex list): qualcomm/Qwen3-4B-Instruct-2507:W4A16
 ```
-
-Depth plate for Neural FX is documented in [`NEURAL_FX.md`](NEURAL_FX.md).
 
 ## Env
 
 | Var | Default | Meaning |
 |---|---|---|
-| `GF_GENIEX_URL` | `http://127.0.0.1:18181/v1` | GenieX OpenAI-compatible base |
-| `GF_GENIEX_MODEL` | `qualcomm/Qwen3-4B-Instruct-2507:W4A16` | Model id (`geniex list`) |
-| `GF_GENIEX` | `1` | Set `0` to skip GenieX desk (local/cloud/templates) |
-| `GF_SCENE_TIMEOUT_S` | `90` | Scene JSON generation timeout |
+| `GF_GENIEX_URL` | `http://127.0.0.1:18181/v1` | GenieX base |
+| `GF_GENIEX_MODEL` | `qualcomm/Qwen3-4B-Instruct-2507:W4A16` | Model id |
+| `GF_SCENE_TIMEOUT_S` | `90` | Director/critic timeout |
 | `GF_SCENE_MAX_LEVEL` | `5` | Campaign cap |
+| `GF_SCENE_MAX_ATTEMPTS` | `3` | Generate→verify retries |
 
-## Badges (TV)
+## HTTP
 
-| Badge | Meaning |
+| Endpoint | Purpose |
 |---|---|
-| `DESK · GENIEX` | Commentary via GenieX |
-| `SCENE · READY` | Last scene from GenieX |
-| `SCENE · TEMPLATE` | Fallback atmospheres / difficulty |
-| `LVL N/5` | Campaign level (never regresses on rematch) |
+| `GET /scene/status` | progress, genStep, fingerprint, attempts, contract |
+| `GET /scene/brief` | export brief + lessons for external polish |
+| `POST /scene/upload` | `{level, css, overlayHtml}` or `{html}` — same golden verifier |
 
-## Logs
+## TV debug
 
-`laptop/logs/scene_gen.jsonl` — one JSON line per generation:
+Open `tv.html?debug=1` for the scene HUD (step, fingerprint, tvUrl).
 
-```json
-{"t": 1710000000.0, "level": 3, "source": "geniex|template", "total_ms": 4200}
-```
+## Aim lock
 
-Files under `public/scenes/` are for logging / QUAD / replay only. **The WebSocket snapshot is the sole TV source of truth** (browser never fetches `latest.json`).
+On `shoot`, aim freezes (phone + server). Feints only in announce/countdown.
 
-## Timing vs power
-
-- App logs (`scene_gen.jsonl`, Desk latency) = **UX timing**
-- QUAD `/quad-profile` on the bench = **formal power / NPU** profiler
-
-## Smoke test
+## Smoke tests
 
 ```powershell
 cd laptop
+python debug_scene.py
 python test_scene_gen.py
 ```
-
-Score 1/5 vs 3/5 should differ in atmosphere + `keeperIq`. With GenieX down, `source` is `template`.

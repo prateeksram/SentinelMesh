@@ -57,6 +57,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private var lastZoneSent = 0L
     private val skelBuf = ArrayDeque<Pair<Long, List<FloatArray>>>()
     private var lastPhase: String? = null
+    /** Aim frozen when shoot starts — feints only in announce/countdown. */
+    private var lockedAimZone: String? = null
     private var lastResultSpoken: String? = null
 
     private var calibrating = false
@@ -828,8 +830,9 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     private fun applyHud(hud: PoseAnalyzer.Hud) {
         binding.overlay.setLandmarks(hud.landmarks)
-        setZone(hud.zone)
-        noteZone(hud.zone)
+        val displayZone = lockedAimZone ?: hud.zone
+        setZone(displayZone)
+        if (lockedAimZone == null) noteZone(hud.zone)
         val framed = hud.inGuide || (
             hud.bodyOk && hud.bodyOkStreak >= PoseAnalyzer.BODY_OK_FRAMES
             )
@@ -901,8 +904,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
         val now = System.currentTimeMillis()
         if (now - lastZoneSent > 200) {
-            game.sendAim(hud.zone)
+            val zoneToSend = lockedAimZone ?: hud.zone
+            game.sendAim(zoneToSend)
             lastZoneSent = now
+            setZone(zoneToSend)
         }
     }
 
@@ -926,8 +931,9 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             return
         }
         lastKickMeta = kick
+        val zone = lockedAimZone ?: kick.zone
         game.sendKick(
-            zone = kick.zone,
+            zone = zone,
             power = kick.power,
             force = kick.forceN,
             dirDeg = kick.dirDeg,
@@ -972,12 +978,14 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             val holdHint = hintHeldByHost()
             when (state.phase) {
                 "lobby" -> {
+                    lockedAimZone = null
                     binding.big.text = "READY?"
                     updateProfileHint()
                     lastResultSpoken = null
                     if (lastPhase != "lobby") promptReadyToStart()
                 }
                 "announce" -> {
+                    lockedAimZone = null
                     binding.big.text = "KICK ${state.kick}/${state.kicksTotal}"
                     if (!holdHint) binding.hint.text = "Aim with your hand"
                     showForceChip = false
@@ -987,6 +995,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     }
                 }
                 "countdown" -> {
+                    lockedAimZone = null
                     binding.big.text = ceil(state.timerMs / 1000.0).toInt().toString()
                     if (!holdHint) binding.hint.text = "Feint… switch late"
                     if (lastPhase != "countdown") {
@@ -996,12 +1005,17 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 }
                 "shoot" -> {
                     binding.big.text = "KICK!"
-                    if (!holdHint) binding.hint.text = "Swing when ready"
+                    if (!holdHint) binding.hint.text = "Swing when ready — aim locked"
                     showForceChip = true
                     refreshAiChip()
-                    if (lastPhase != "shoot") vibrateBurst()
+                    if (lastPhase != "shoot") {
+                        lockedAimZone = pose?.zone ?: "C"
+                        setZone(lockedAimZone!!)
+                        vibrateBurst()
+                    }
                 }
                 "resolve" -> {
+                    lockedAimZone = null
                     val r = state.lastResult
                     binding.big.text = when (r) {
                         "goal" -> "GOAL!"

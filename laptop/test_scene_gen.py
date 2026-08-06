@@ -17,20 +17,24 @@ async def fake(score):
     ctx = scene_engine.build_context(score, 5 - score, 5, shot)
     lvl = scene_engine.pick_next_level(score, 1)
 
-    async def prog(p):
-        print("  ", p, "%")
+    async def prog(p, step=""):
+        print(f"  {p}% {step}")
 
     s = await scene_engine.generate(ctx, lvl, prog)
     print(
         f"score {score}/5 -> L{lvl} {s['timeOfDay']} "
         f"iq={s['difficulty']['keeperIq']} src={s['metrics']['source']} "
+        f"fp={s.get('fingerprint')} verified={s.get('verified')} "
         f"{s['metrics'].get('total_ms', '?')}ms"
     )
+    return s
 
 
 async def main():
-    for sc in (1, 3):
-        await fake(sc)
+    a = await fake(1)
+    b = await fake(3)
+    assert a.get("fingerprint") != b.get("fingerprint"), "venues should differ"
+    assert a.get("verified") and b.get("verified")
 
 
 if __name__ == "__main__":

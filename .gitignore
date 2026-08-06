@@ -19,6 +19,9 @@ laptop/logs/
 laptop/data/reports/
 laptop/data/report_cache/
 laptop/public/scenes/*.json
+laptop/public/scenes/candidates/
+laptop/public/scenes/live/
+laptop/public/scenes/contract.json
 ai100/cache/
 ai100/data/reports/
 

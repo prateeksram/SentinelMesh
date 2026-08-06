@@ -133,8 +133,15 @@
           transition:width .2s linear}
   #genMeta{position:fixed;left:50%;transform:translateX(-50%);bottom:90px;z-index:6;
            font-family:var(--fCond);font-weight:700;letter-spacing:1.5px;font-size:12px;
-           color:var(--mut);display:none}
+           color:var(--mut);display:none;max-width:min(720px,92vw);text-align:center;
+           white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #genMeta.show{display:block}
+  #sceneDebug{position:fixed;left:12px;bottom:78px;z-index:9;display:none;
+              font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:1.35;
+              color:#cfe6f5;background:rgba(4,10,16,.82);border:1px solid #355873;
+              padding:8px 10px;border-radius:8px;max-width:min(420px,70vw);
+              white-space:pre-wrap}
+  #sceneDebug.show{display:block}
   #reportLine{margin-top:10px;font-family:var(--fCond);font-weight:600;letter-spacing:1px;
               font-size:clamp(13px,1.6vw,18px);color:var(--mut);max-width:70vw;display:none}
   #reportLine.show{display:block}
@@ -211,6 +218,7 @@
 
 <div id="genBarWrap"><div id="genBar"></div></div>
 <div id="genMeta"></div>
+<div id="sceneDebug"></div>
 
 <div class="ticker">
   <div class="desk tmpl" id="desk"><span class="pulse"></span><span id="deskName">TEMPLATE DESK</span></div>
@@ -369,6 +377,8 @@ probeHwStatus();
 
 /* Scene atmosphere (campaign venues) */
 let SCENE_GRADE="night", FLOODLIGHTS=true, CROWD_LEVEL=1;
+const DEBUG=new URLSearchParams(location.search).has("debug");
+let lastVenueNav="";
 function applyScene(scene){
   if(!scene) return;
   const a=scene.atmosphere||{};
@@ -380,6 +390,60 @@ function applyScene(scene){
   if(typeof buildSky==="function"){
     buildSky(); buildCrowd(); buildBoards(); buildPitch(); buildVig();
   }
+  // Inject agentic venue skin when present (hot-load without full navigation).
+  let skin=document.getElementById("venue-skin");
+  if(scene.css){
+    if(!skin){
+      skin=document.createElement("style");
+      skin.id="venue-skin";
+      document.head.appendChild(skin);
+    }
+    skin.textContent=scene.css;
+    skin.dataset.level=String(scene.level||"");
+  }
+  if(scene.overlayHtml){
+    const baked=document.getElementById("venueSplash")||document.getElementById("venueTitleCard");
+    if(!baked){
+      let host=document.getElementById("venueOverlayHost");
+      if(!host){
+        host=document.createElement("div");
+        host.id="venueOverlayHost";
+        document.body.insertBefore(host, document.body.firstChild);
+      }
+      host.innerHTML=scene.overlayHtml;
+    }
+  }
+  if(DEBUG){
+    console.log("[applyScene]", {
+      level:scene.level, title:scene.title, fp:scene.fingerprint,
+      verified:scene.verified, tvUrl:scene.tvUrl, source:scene.metrics?.source
+    });
+  }
+}
+function maybeNavigateVenue(scene){
+  if(!scene?.tvUrl) return;
+  const want=scene.tvUrl;
+  if(!want.startsWith("/scenes/live/")) return;
+  if(location.pathname===want || location.pathname.endsWith(want)) return;
+  if(lastVenueNav===want) return;
+  lastVenueNav=want;
+  const q=location.search||"";
+  location.href=want+q;
+}
+function updateSceneDebug(st){
+  const el=$("sceneDebug");
+  if(!DEBUG||!el) return;
+  el.classList.add("show");
+  const sc=st.scene||{};
+  const bits=[
+    `phase ${st.phase} · L${st.level||"—"}`,
+    `step ${st.genStep||"—"}`,
+    `prog ${st.genProgress||0}%`,
+    `src ${sc.metrics?.source||"—"} · attempts ${sc.metrics?.attempts??"—"}`,
+    `fp ${sc.fingerprint||"—"} · verified ${sc.verified?"yes":"no"}`,
+    `tv ${sc.tvUrl||"—"}`,
+  ];
+  el.textContent=bits.join("\n");
 }
 async function requestHeroPlate(st){
   if(!st?.last || HERO.pending) return;
@@ -563,30 +627,34 @@ function onState(st){
     case "generating":{
       big.textContent="NEXT VENUE";
       const p=st.genProgress||0;
-      sub.textContent=`Designing the ground… ${p}%`;
+      const step=st.genStep||"Designing the ground…";
+      sub.textContent=`${step}`;
       btn.classList.add("hide"); abort.classList.remove("hide");
       genWrap.classList.add("show"); genBar.style.width=`${p}%`;
-      const m=st.sceneMetrics;
-      if(m&&(m.total_ms||m.tokens)){
-        genMeta.classList.add("show");
-        const bits=[];
-        if(m.total_ms) bits.push(`${m.total_ms} ms`);
-        if(m.tokens) bits.push(`${m.tokens} tok`);
-        genMeta.textContent=bits.join(" · ");
-      }
+      genMeta.classList.add("show");
+      genMeta.textContent=`${p}% · ${step}`;
+      updateSceneDebug(st);
       break;}
     case "end":{
-      if(prev?.phase!=="end" && st.scene) applyScene(st.scene);
+      if(prev?.phase!=="end" && st.scene){
+        applyScene(st.scene);
+        maybeNavigateVenue(st.scene);
+      }
       big.textContent=`${st.score} / ${st.kicksTotal}`;
       big.className=st.score>st.kicksTotal/2?"goal":"save";
       sub.textContent=st.score>st.kicksTotal/2?"YOU BEAT THE WALL":"THE WALL STANDS";
       if(st.report){ report.textContent=st.report; report.classList.add("show"); }
       btn.classList.remove("hide"); btn.disabled=false;
       btn.textContent=st.level?"NEXT VENUE":"PLAY AGAIN";
-      if(st.sceneMetrics?.total_ms){
+      if(st.genStep||st.sceneMetrics?.total_ms){
         genMeta.classList.add("show");
-        genMeta.textContent=`scene ${st.sceneMetrics.total_ms} ms · ${st.sceneMetrics.source||""}`;
+        const bits=[];
+        if(st.genStep) bits.push(st.genStep);
+        if(st.sceneMetrics?.total_ms) bits.push(`${st.sceneMetrics.total_ms} ms`);
+        if(st.sceneMetrics?.source) bits.push(st.sceneMetrics.source);
+        genMeta.textContent=bits.join(" · ");
       }
+      updateSceneDebug(st);
       break;}
   }
   speakLine(st);
