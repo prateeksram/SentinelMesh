@@ -4,7 +4,7 @@ Body-controlled penalty shootout on Snapdragon silicon.
 
 **Hand aims. Leg kicks. ForcePose measures Newtons on-device. Whisper hears you. A private coach talks back — no video leaves the phone.**
 
-Branch: `prateek` · Phone: Galaxy S25 Ultra (Snapdragon 8 Elite)
+Branch: `promptbooth-integration` · Based on `prateek` · Phone: Galaxy S25 Ultra (Snapdragon 8 Elite)
 
 ---
 
@@ -17,6 +17,17 @@ Branch: `prateek` · Phone: Galaxy S25 Ultra (Snapdragon 8 Elite)
 | **Host / TV** | Laptop (`laptop/server.py`) | Match engine, THE WALL, stadium UI |
 
 The phone is **not** the match host. It only sends tiny JSON (`aim`, `kick`, `skel`). No camera frames leave the device.
+
+### Match photobooth
+
+The stadium TV now includes **SCAN · PLAY · SNAP** in its upper-left corner:
+
+1. The player scans the session QR and opens a zero-install join page.
+2. After accepting the 15-minute photo notice, the player can start the match from the phone once the Gesture Football controller is connected.
+3. The laptop camera captures a branded setup photo, each goal/save reaction, and a full-time portrait.
+4. New photos appear live on the scanned phone over the existing match WebSocket and can be downloaded individually.
+
+The QR uses a cryptographically random session token. Photo uploads require a separate token issued only to the laptop TV on localhost; downloads require the QR token. Captures stay under `laptop/data/photos/`, are excluded from Git, and are deleted after 15 minutes. Camera frames never leave the laptop server.
 
 Laptop and phone need the **same Wi‑Fi / hotspot**, not internet. On-device AI works offline (airplane mode still coaches; only the match link needs LAN).
 
@@ -106,10 +117,18 @@ Details: [`android/README.md`](android/README.md).
 
 ### 1) Laptop host + TV
 ```powershell
+python -m pip install -r requirements.txt
 cd laptop
 python server.py
 ```
-Open `http://localhost:8080/tv.html`. Note laptop LAN IP (e.g. `172.20.10.2`).
+Open `http://localhost:8080/tv.html`, allow the laptop camera, and scan the displayed QR. Note laptop LAN IP (e.g. `172.20.10.2`).
+
+By default the QR uses the detected LAN address. For ngrok or another HTTPS reverse proxy, set the externally reachable origin before starting:
+
+```powershell
+$env:GF_PUBLIC_BASE_URL="https://your-tunnel.example"
+python laptop/server.py
+```
 
 ### 2) Phone app
 1. Install / open **Gesture Football** (camera + mic permissions).
@@ -188,6 +207,9 @@ Native: calibration weight / torso. Browser fallback: `phone.html?kg=82`.
 | `GF_KEEPER_REACTION` | 0.45 | feint window (s) |
 | `GF_KEEPER_IQ` | 0.75 | 0 = random · 1 = psychic |
 | `GF_ANNOUNCE_S` / `GF_COUNTDOWN_S` / `GF_RESOLVE_S` | 2.2 / 3.0 / 3.8 | pacing |
+| `GF_PUBLIC_BASE_URL` | detected LAN URL | externally reachable origin encoded in the QR |
+| `GF_PHOTO_TTL_SECONDS` | 900 | photo gallery lifetime and deletion deadline |
+| `GF_PHOTO_MAX` | 24 | maximum photos retained in the active QR session |
 
 Kick sensitivity: `KICK_MS` / `F_MAX` in `ForcePoseEngine.kt` (or browser `phone.html`).
 
