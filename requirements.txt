@@ -1,0 +1,3 @@
+aiohttp>=3.9
+# Optional for Neural FX NPU upgrade (see laptop/NEURAL_FX.md):
+# onnxruntime

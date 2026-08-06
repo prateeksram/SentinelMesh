@@ -1,0 +1,29 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# TLS certs for the phone camera — never commit these
+*.pem
+
+# Large AI Hub model binaries (fetch via laptop/fetch_aihub_models.ps1)
+laptop/models/*.onnx
+laptop/models/*.data
+laptop/models/*.zip
+laptop/models/_export_depth/
+laptop/logs/
+laptop/public/scenes/*.json
+
+# editor / OS noise
+.DS_Store
+Thumbs.db
+
+# Android
+android/local.properties
+android/.gradle/
+android/**/build/
+android/.idea/
+*.iml
+*.apk
+*.aab

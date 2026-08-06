@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="night">#0A1218</color>
+    <color name="ink">#061018</color>
+    <color name="chalk">#F2F5F0</color>
+    <color name="amber">#F0B429</color>
+    <color name="cyan">#3EC7F4</color>
+    <color name="red">#FF4D42</color>
+    <color name="green">#3DDC74</color>
+    <color name="muted">#8FA3B5</color>
+    <color name="zone_border">#2A3D4E</color>
+    <color name="surface">#CC0E1A24</color>
+    <color name="surface_solid">#121C26</color>
+    <color name="scrim">#99061018</color>
+</resources>
