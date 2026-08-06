@@ -34,3 +34,6 @@ android/.idea/
 *.iml
 *.apk
 *.aab
+
+# UNO Q simulator identity (persisted per machine, never shared)
+tools/.unoq_device_id

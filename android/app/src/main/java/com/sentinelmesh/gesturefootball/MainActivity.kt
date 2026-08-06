@@ -66,6 +66,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     private var lastAsrMs: Long = -1
     private var lastLlmMs: Long = -1
+    private var lastPoseLatencyMs: Long = -1
+    private var lastDelegateRung: String = "—"
     private val zoneHistory = ArrayDeque<String>()
     private var lastNotedZone: String? = null
     private var lastKickMeta: ForcePoseEngine.KickEvent? = null
@@ -126,8 +128,16 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         binding.hostUrl.setText(savedUrl.removePrefix("ws://").removeSuffix("/ws").let {
             if (savedUrl == GameClient.DEFAULT_URL) "127.0.0.1:8080" else it
         })
-        game = GameClient(url = savedUrl, listener = this)
+        // Stable device identity: generated once, persisted, never regenerated
+        // (docs/device-protocol.md rule 1). Lets the host resume our session.
+        val deviceId = prefs.getString("device_id", null) ?: run {
+            val id = "phone-" + java.util.UUID.randomUUID().toString().take(12)
+            prefs.edit().putString("device_id", id).apply()
+            id
+        }
+        game = GameClient(url = savedUrl, listener = this, deviceId = deviceId)
         game.connect()
+        mainHandler.postDelayed(telemRunnable, 1000)
         binding.hostConnect.setOnClickListener { connectHost() }
         binding.hostUrl.setOnEditorActionListener { _, action, _ ->
             if (action == EditorInfo.IME_ACTION_DONE) {
@@ -856,6 +866,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             "${hud.liveForce.roundToInt()} N"
         else "0 N"
         lastPoseMsLabel = "${hud.delegateLabel} · ${hud.latencyMs} ms"
+        lastPoseLatencyMs = hud.latencyMs
+        lastDelegateRung = hud.delegateLabel
         binding.npuBadge.text = lastPoseMsLabel
         showForceChip = hud.liveForce > 8f || lastPhase == "shoot" || calibrating
         refreshNeuralLoad()
@@ -1043,6 +1055,16 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                         askQwen(r)
                     }
                 }
+                "generating" -> {
+                    // SceneEngine is designing the next venue — don't leave the
+                    // striker staring at a stale resolve screen.
+                    binding.big.text = "NEXT VENUE"
+                    binding.big.setTextColor(ContextCompat.getColor(this, R.color.cyan))
+                    if (!holdHint) binding.hint.text = "The Wall is redesigning the ground…"
+                    if (lastPhase != "generating") {
+                        coach?.speak("Designing the next venue.")
+                    }
+                }
                 "end" -> {
                     binding.big.text = "${state.score} / ${state.kicksTotal}"
                     binding.big.setTextColor(ContextCompat.getColor(this, R.color.amber))
@@ -1053,6 +1075,29 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 }
             }
             lastPhase = state.phase
+        }
+    }
+
+    /** 1 Hz per-unit telemetry (handoff-2 P2). The NPU cell carries the
+     *  current fallback rung; pose ms lands on whichever unit runs pose. */
+    private val telemRunnable = object : Runnable {
+        override fun run() {
+            try {
+                val rung = lastDelegateRung
+                val npuMetric = org.json.JSONObject().put("rung", rung)
+                if (rung == "NPU" && lastPoseLatencyMs >= 0) npuMetric.put("pose_ms", lastPoseLatencyMs)
+                if (lastAsrMs >= 0) npuMetric.put("asr_ms", lastAsrMs)
+                game.sendTelem("npu", 0.0, npuMetric, "rung: $rung")
+                val gpuMetric = org.json.JSONObject()
+                if (rung == "GPU" && lastPoseLatencyMs >= 0) gpuMetric.put("pose_ms", lastPoseLatencyMs)
+                game.sendTelem("gpu", 0.0, gpuMetric,
+                    if (rung == "GPU") "pose fallback active" else "fallback rung (idle)")
+                val cpuMetric = org.json.JSONObject()
+                if (rung == "CPU" && lastPoseLatencyMs >= 0) cpuMetric.put("pose_ms", lastPoseLatencyMs)
+                if (lastLlmMs >= 0) cpuMetric.put("coach_ms", lastLlmMs)
+                game.sendTelem("cpu", 0.0, cpuMetric, "app + camera + mel")
+            } catch (_: Exception) { /* telemetry must never crash the app */ }
+            mainHandler.postDelayed(this, 1000)
         }
     }
 

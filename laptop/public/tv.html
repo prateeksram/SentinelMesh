@@ -403,15 +403,18 @@ async function requestHeroPlate(st){
       body:JSON.stringify(body),
     });
     const j=await r.json();
-    if(!j?.ok || !j.plate) return;
+    if(!j?.ok || !j.plate){ HERO.pending=false; return; }
     const im=new Image();
+    // Clear pending only once the image has actually decoded (or failed) —
+    // clearing it earlier let a second state broadcast issue a duplicate POST.
     im.onload=()=>{
+      HERO.pending=false;
       if(S?.kick===kick){ HERO.img=im; HERO.kick=kick; HERO.backend=j.backend; HERO.ms=j.ms||0; setFxBadge(j.backend); }
     };
+    im.onerror=()=>{ HERO.pending=false; };
     im.src=j.plate;
     setFxBadge(j.backend||"procedural");
-  }catch(_){ /* degrade silently */ }
-  finally{ HERO.pending=false; }
+  }catch(_){ HERO.pending=false; /* degrade silently */ }
 }
 /* ============================ websocket ============================ */
 function connect(){
@@ -420,6 +423,27 @@ function connect(){
   ws.onclose=()=>setTimeout(connect,1500);
   ws.onmessage=ev=>onState(JSON.parse(ev.data));
 }
+/* -------- telemetry: self-reported render duty at 1 Hz (handoff-2 P2).
+   Honesty rule: without WebGPU this measures MAIN-THREAD draw time (Canvas2D
+   rasterization is CPU work); the state string says so. With the WebGPU
+   overlay live, gpu_pass_us carries true GPU nanoseconds from timestamp
+   queries (P3). -------- */
+const TELEM={work:0,frames:0,lastDraw:0};
+/* WebGPU overlay state — populated by gpuInit() at the end of this script.
+   Feature-detected; ?nogpu=1 force-disables. The demo never requires it. */
+const GPUC={on:false, passUs:0};
+setInterval(()=>{
+  if(!ws || ws.readyState!==1 || !TELEM.frames) return;
+  const frameMs=TELEM.work/TELEM.frames;
+  const metric={fps:TELEM.frames, draw_ms:Math.round(frameMs*100)/100,
+                renderer:GPUC.on?"webgpu-overlay+canvas2d":"canvas2d"};
+  if(GPUC.on && GPUC.passUs>0) metric.gpu_pass_us=Math.round(GPUC.passUs);
+  ws.send(JSON.stringify({type:"telem",unit:"gpu",source:"tv",
+    busy_pct:Math.min(100,Math.round(TELEM.work/10)/1),
+    metric:metric,
+    state:GPUC.on?"webgpu confetti/post overlay":"canvas2d (main-thread raster)"}));
+  TELEM.work=0; TELEM.frames=0;
+},1000);
 $("startBtn").onclick=()=>{ if(!S)return;
   ws.send(JSON.stringify({type:S.phase==="end"?"again":"start"})); };
 $("abortBtn").onclick=()=>{
@@ -747,6 +771,10 @@ function rebuild(){
   DPR=Math.min(window.devicePixelRatio||1,1.25);
   W=Math.max(640,Math.round(innerWidth*DPR));
   H=Math.max(400,Math.round(innerHeight*DPR));
+  // Hard resolution ceiling (P3): a 4K display used to get a 4800px backing
+  // store — Canvas2D raster cost scales with it. CSS stretches the rest.
+  const capScale=Math.min(1, 2560/W, 1440/H);
+  if(capScale<1){ W=Math.round(W*capScale); H=Math.round(H*capScale); }
   cv.width=W; cv.height=H;
   camF=Math.min(0.85*W,1.95*H);
   HZY=H*0.875-M.CAMH*sc(M.DSPOT);
@@ -760,7 +788,7 @@ function rebuild(){
   TIERS=[{y0:STOP,       y1:STOP+h*0.27,r:H*0.0022,cap:9,sh:0.5},
          {y0:STOP+h*0.34,y1:STOP+h*0.60,r:H*0.0029,cap:8,sh:0.72},
          {y0:STOP+h*0.68,y1:STOP+h*0.99,r:H*0.0037,cap:7,sh:1.0}];
-  buildSky(); buildCrowd(); buildBoards(); buildPitch(); buildVig();
+  buildSky(); buildCrowd(); buildBoards(); buildPitch(); buildVig(); buildNet();
 }
 let rszT=null;
 addEventListener("resize",()=>{clearTimeout(rszT);rszT=setTimeout(rebuild,140);});
@@ -1264,8 +1292,22 @@ function drawBall(){
 }
 
 /* ============================== goal + net ============================== */
+/* P3: the net geometry is static outside the 1.4 s goal ripple, but was
+   re-tessellated every frame (~290 nodes, ~600 Canvas2D calls, ~580 array
+   allocs). It now renders once into LNET at rebuild() and blits per frame;
+   live tessellation runs only while a ripple is active.
+   (The handoff asked for a WebGPU static vertex buffer — blocked: the net
+   sits UNDER the keeper/striker/ball in the z-order and a GPU overlay canvas
+   composites above the whole 2D scene. Cached-layer gets the same win.) */
+let LNET=null, NET_STATIC=false;
+function buildNet(){
+  LNET=mk(W,H);
+  NET_STATIC=true;            // short-circuits netOfs before it touches FX
+  drawNet(0, LNET.getContext("2d"));
+  NET_STATIC=false;
+}
 function netOfs(nx,ny,now){                 // ripple displacement for node (metres)
-  if(!FX.ripple) return [0,0];
+  if(NET_STATIC || !FX.ripple) return [0,0];
   const ph=(now-FX.ripple.t0)/1000;
   if(ph>1.4){ FX.ripple=null; return [0,0]; }
   const dx=nx-FX.ripple.x, dy=ny-FX.ripple.y, dist=Math.hypot(dx,dy);
@@ -1278,17 +1320,17 @@ function netP(nx,ny,nd,now){
   const s=sc(nd);
   return [W/2+(nx+ox)*s, gy(nd)-(ny+oy)*s];
 }
-function drawNet(now){
+function drawNet(now,g=cx){
   const NU=14,NV=7, dTop=M.DG+0.45, dBot=M.DG+1.35, hTop=2.3;
-  cx.strokeStyle="rgba(235,245,250,.30)";
-  cx.lineWidth=Math.max(1,0.9*H/900);
-  cx.beginPath();
+  g.strokeStyle="rgba(235,245,250,.30)";
+  g.lineWidth=Math.max(1,0.9*H/900);
+  g.beginPath();
   for(let i=0;i<=NU;i++){                       // back-panel verticals (sampled for ripple)
     const nx=-3.6+7.2*i/NU;
     for(let j=0;j<=NV;j++){
       const v=j/NV, ny=hTop*(1-v), nd=lerp(dTop+0.85,dBot,v);
       const [px,py]=netP(nx,ny,nd,now);
-      j?cx.lineTo(px,py):cx.moveTo(px,py);
+      j?g.lineTo(px,py):g.moveTo(px,py);
     }
   }
   for(let j=0;j<=NV;j++){                       // back-panel horizontals
@@ -1296,32 +1338,32 @@ function drawNet(now){
     for(let i=0;i<=NU;i++){
       const nx=-3.6+7.2*i/NU;
       const [px,py]=netP(nx,ny,nd,now);
-      i?cx.lineTo(px,py):cx.moveTo(px,py);
+      i?g.lineTo(px,py):g.moveTo(px,py);
     }
   }
   for(let i=0;i<=NU;i+=1){                      // roof of the net
     const nx=-3.6+7.2*i/NU;
     const [ax,ay]=netP(nx*1.016,M.GH-0.06,M.DG+0.06,now);
     const [bx,by]=netP(nx,hTop,dTop+0.85,now);
-    cx.moveTo(ax,ay); cx.lineTo(bx,by);
+    g.moveTo(ax,ay); g.lineTo(bx,by);
   }
   for(let j=0;j<=4;j++){                        // side panels
     const ny=j*0.55;
     for(const sgn of [-1,1]){
       const [ax,ay]=netP(sgn*3.63,ny,M.DG+0.05,now);
       const [bx,by]=netP(sgn*3.6,Math.min(ny,hTop),dBot,now);
-      cx.moveTo(ax,ay); cx.lineTo(bx,by);
+      g.moveTo(ax,ay); g.lineTo(bx,by);
     }
   }
-  cx.stroke();
+  g.stroke();
   // stanchions
-  cx.strokeStyle="rgba(230,240,246,.55)"; cx.lineWidth=Math.max(1.5,0.05*sc(M.DG));
-  cx.beginPath();
+  g.strokeStyle="rgba(230,240,246,.55)"; g.lineWidth=Math.max(1.5,0.05*sc(M.DG));
+  g.beginPath();
   for(const sgn of [-1,1]){
-    cx.moveTo(PXX(sgn*3.66,M.DG),BARY);
-    cx.lineTo(PXX(sgn*3.6,dBot),gy(dBot));
+    g.moveTo(PXX(sgn*3.66,M.DG),BARY);
+    g.lineTo(PXX(sgn*3.6,dBot),gy(dBot));
   }
-  cx.stroke();
+  g.stroke();
 }
 function drawFrame(now){
   const q=(now-FX.postHitT)/450;
@@ -1876,10 +1918,12 @@ function drawFX(now,dt){
     p.x+=p.vx*dt+Math.sin(now/150+p.seed*7)*H*0.25*dt;
     p.y+=p.vy*dt;
     p.vx*=(1-0.4*dt); p.rot+=p.vr*dt;
-    cx.save(); cx.translate(p.x,p.y); cx.rotate(p.rot);
-    cx.fillStyle=p.col; cx.globalAlpha=clamp(1.5-age/3,0,1);
-    cx.fillRect(-2.6*H/900,-4.2*H/900,5.2*H/900,8.4*H/900);
-    cx.restore(); cx.globalAlpha=1;
+    if(!GPUC.on){                        // GPU overlay draws confetti instanced (P3);
+      cx.save(); cx.translate(p.x,p.y); cx.rotate(p.rot);   // CPU keeps physics only
+      cx.fillStyle=p.col; cx.globalAlpha=clamp(1.5-age/3,0,1);
+      cx.fillRect(-2.6*H/900,-4.2*H/900,5.2*H/900,8.4*H/900);
+      cx.restore(); cx.globalAlpha=1;
+    }
   }
 }
 
@@ -1916,6 +1960,10 @@ let lastT=0;
 function draw(now){
   requestAnimationFrame(draw);
   if(!W) return;
+  // rAF throttle: 120/144 Hz displays halve their work; 60 Hz unaffected.
+  if(now-TELEM.lastDraw<15.0){ return; }
+  TELEM.lastDraw=now;
+  const __t0=performance.now();
   const dt=clamp((now-lastT)/1000||0.016,0.001,0.05); lastT=now;
   updateCrowd(now,dt); updateBall(now,dt);
   cx.save();
@@ -1936,7 +1984,8 @@ function draw(now){
     cx.globalAlpha=0.55; cx.drawImage(LPITCH,0,0); cx.globalAlpha=1;
   }
   drawGoalShadow();
-  drawNet(now);
+  if(FX.ripple) drawNet(now);            // live tessellation only during the ripple
+  else if(LNET) cx.drawImage(LNET,0,0);  // static net: one blit (P3)
   if(B.d>M.DG+0.05) drawBall();          // ball inside the goal sits behind the frame
   drawFrame(now);
   drawKeeper(now,dt);
@@ -1950,6 +1999,8 @@ function draw(now){
   drawPostFX(now);
   if(S?.phase==="resolve" && S.replay?.frames?.length>1) drawReplay(now);
   else replayKick=-1;
+  if(GPUC.on) gpuDrawOverlay(now);
+  TELEM.work+=performance.now()-__t0; TELEM.frames++;
 }
 
 /* ============ bullet-time: orbiting slow-mo 3D skeleton ============ */
@@ -2025,6 +2076,129 @@ function drawReplay(now){
   cx.restore();
 }
 
+/* ====================== WebGPU overlay (handoff-2 P3) ======================
+   Confetti as ONE instanced draw (was ~2,400 Canvas2D calls with a
+   save/restore pair per particle). Lives on a second canvas at z-index 1 —
+   above the 2D scene, below all DOM HUD (z 4/6). `#pitch` keeps its 2d
+   context untouched. Timestamp queries feed telemetry with true GPU ns.
+   No WebGPU (or ?nogpu=1) → the Canvas2D path runs unchanged. */
+const CONFETTI_RGB={"#FFC400":[1,.769,0],"#3EC7F4":[.243,.78,.957],
+  "#F4F7F1":[.957,.969,.945],"#3ddc74":[.239,.863,.455],"#ff8a3c":[1,.541,.235]};
+const GPU_CAP=600;   // > max live confetti (299 goal + 220 full-time)
+
+async function gpuInit(){
+  if(new URLSearchParams(location.search).has("nogpu")) return;
+  if(!navigator.gpu) return;
+  try{
+    const adapter=await navigator.gpu.requestAdapter();
+    if(!adapter) return;
+    const hasTS=adapter.features.has("timestamp-query");
+    const dev=await adapter.requestDevice({requiredFeatures:hasTS?["timestamp-query"]:[]});
+    const cvg=document.createElement("canvas");
+    cvg.id="gpu";
+    cvg.style.cssText="position:fixed;inset:0;width:100vw;height:100vh;z-index:1;pointer-events:none";
+    document.body.appendChild(cvg);
+    const ctx=cvg.getContext("webgpu");
+    const fmt=navigator.gpu.getPreferredCanvasFormat();
+    ctx.configure({device:dev,format:fmt,alphaMode:"premultiplied"});
+
+    const shader=dev.createShaderModule({code:`
+      struct U { size: vec2f, shake: vec2f };
+      @group(0) @binding(0) var<uniform> u: U;
+      struct VSOut { @builtin(position) pos: vec4f, @location(0) color: vec4f };
+      @vertex fn vs(@builtin(vertex_index) vi: u32,
+                    @location(0) ppos: vec2f, @location(1) rot: f32,
+                    @location(2) half: vec2f, @location(3) col: vec4f) -> VSOut {
+        var corners=array<vec2f,6>(vec2f(-1,-1),vec2f(1,-1),vec2f(1,1),
+                                   vec2f(-1,-1),vec2f(1,1),vec2f(-1,1));
+        let c=corners[vi]*half;
+        let s=sin(rot); let co=cos(rot);
+        let p=vec2f(c.x*co-c.y*s, c.x*s+c.y*co)+ppos+u.shake;
+        let ndc=vec2f(p.x/u.size.x*2.0-1.0, 1.0-p.y/u.size.y*2.0);
+        var o:VSOut;
+        o.pos=vec4f(ndc,0.0,1.0);
+        o.color=vec4f(col.rgb*col.a, col.a);   // premultiplied
+        return o;
+      }
+      @fragment fn fs(@location(0) color: vec4f) -> @location(0) vec4f { return color; }
+    `});
+    const pipeline=dev.createRenderPipeline({
+      layout:"auto",
+      vertex:{module:shader,entryPoint:"vs",buffers:[{
+        arrayStride:9*4, stepMode:"instance",
+        attributes:[{shaderLocation:0,offset:0, format:"float32x2"},
+                    {shaderLocation:1,offset:8, format:"float32"},
+                    {shaderLocation:2,offset:12,format:"float32x2"},
+                    {shaderLocation:3,offset:20,format:"float32x4"}]}]},
+      fragment:{module:shader,entryPoint:"fs",targets:[{format:fmt,
+        blend:{color:{srcFactor:"one",dstFactor:"one-minus-src-alpha"},
+               alpha:{srcFactor:"one",dstFactor:"one-minus-src-alpha"}}}]},
+      primitive:{topology:"triangle-list"},
+    });
+    const inst=dev.createBuffer({size:GPU_CAP*9*4,
+      usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
+    const ubuf=dev.createBuffer({size:16,
+      usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+    const bind=dev.createBindGroup({layout:pipeline.getBindGroupLayout(0),
+      entries:[{binding:0,resource:{buffer:ubuf}}]});
+    let qset=null,qres=null,qread=null,mapping=false;
+    if(hasTS){
+      qset=dev.createQuerySet({type:"timestamp",count:2});
+      qres=dev.createBuffer({size:16,usage:GPUBufferUsage.QUERY_RESOLVE|GPUBufferUsage.COPY_SRC});
+      qread=dev.createBuffer({size:16,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
+    }
+    Object.assign(GPUC,{on:true,dev,ctx,cvg,pipeline,inst,ubuf,bind,
+      data:new Float32Array(GPU_CAP*9),hasTS,qset,qres,qread,
+      get mapping(){return mapping;}, set mapping(v){mapping=v;}});
+    console.log("[gpu] webgpu overlay live"+(hasTS?" + timestamp queries":""));
+  }catch(e){ console.warn("[gpu] webgpu unavailable — canvas2d path stays:",e); GPUC.on=false; }
+}
+
+function gpuDrawOverlay(now){
+  const g=GPUC;
+  if(g.cvg.width!==W||g.cvg.height!==H){ g.cvg.width=W; g.cvg.height=H; }
+  const sh=shakeOff(now);
+  const hw=2.6*H/900, hh=4.2*H/900;
+  let n=0;
+  for(const p of FX.confetti){
+    if(n>=GPU_CAP) break;
+    const age=(now-p.t0)/1000;
+    const a=clamp(1.5-age/3,0,1);
+    if(a<=0) continue;
+    const rgb=CONFETTI_RGB[p.col]||[1,1,1];
+    const o=n*9;
+    g.data[o]=p.x; g.data[o+1]=p.y; g.data[o+2]=p.rot;
+    g.data[o+3]=hw; g.data[o+4]=hh;
+    g.data[o+5]=rgb[0]; g.data[o+6]=rgb[1]; g.data[o+7]=rgb[2]; g.data[o+8]=a;
+    n++;
+  }
+  g.dev.queue.writeBuffer(g.ubuf,0,new Float32Array([W,H,sh[0],sh[1]]));
+  if(n) g.dev.queue.writeBuffer(g.inst,0,g.data,0,n*9);
+  const enc=g.dev.createCommandEncoder();
+  const passDesc={colorAttachments:[{view:g.ctx.getCurrentTexture().createView(),
+    clearValue:{r:0,g:0,b:0,a:0},loadOp:"clear",storeOp:"store"}]};
+  if(g.hasTS) passDesc.timestampWrites={querySet:g.qset,
+    beginningOfPassWriteIndex:0,endOfPassWriteIndex:1};
+  const pass=enc.beginRenderPass(passDesc);
+  if(n){ pass.setPipeline(g.pipeline); pass.setBindGroup(0,g.bind);
+         pass.setVertexBuffer(0,g.inst); pass.draw(6,n); }
+  pass.end();
+  if(g.hasTS){
+    enc.resolveQuerySet(g.qset,0,2,g.qres,0);
+    if(!g.mapping) enc.copyBufferToBuffer(g.qres,0,g.qread,0,16);
+  }
+  g.dev.queue.submit([enc.finish()]);
+  if(g.hasTS && !g.mapping){
+    g.mapping=true;
+    g.qread.mapAsync(GPUMapMode.READ).then(()=>{
+      const t=new BigInt64Array(g.qread.getMappedRange());
+      GPUC.passUs=Number(t[1]-t[0])/1000;   // true GPU ns → µs, into telemetry
+      g.qread.unmap(); g.mapping=false;
+    }).catch(()=>{ g.mapping=false; });
+  }
+}
+
+gpuInit();
 rebuild();
 requestAnimationFrame(draw);
 connect();

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GF · Silicon Telemetry</title>
+<style>
+  :root{
+    --bg:#070c12; --cell:#0d1520; --cell-edge:#1b2836; --ink:#e8eef4;
+    --dim:#5a6b7c; --amber:#ffc400; --cyan:#3ec7f4; --green:#39d98a;
+    --grey:#3a4552; --red:#ff5d5d;
+    font-family:"Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);min-height:100vh;padding:28px}
+  header{display:flex;align-items:baseline;gap:14px;margin-bottom:22px}
+  h1{font-size:20px;letter-spacing:.14em;font-weight:600}
+  h1 em{color:var(--amber);font-style:normal}
+  #link{font-size:12px;color:var(--dim)}
+  #link.on{color:var(--green)}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;max-width:1200px}
+  .devrow-label{grid-column:1/-1;font-size:11px;letter-spacing:.22em;color:var(--dim);
+    text-transform:uppercase;margin-top:6px}
+  .cell{background:var(--cell);border:1px solid var(--cell-edge);border-radius:10px;
+    padding:14px 16px;min-height:132px;position:relative;transition:border-color .3s}
+  .cell.live{border-color:#2b4258}
+  .cell h2{font-size:12px;letter-spacing:.12em;color:var(--dim);text-transform:uppercase;
+    display:flex;justify-content:space-between;align-items:center}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--grey);display:inline-block}
+  .dot.fresh{background:var(--green)}
+  .dot.stale{background:var(--grey)}
+  .duty{font-size:34px;font-weight:700;margin:8px 0 4px;font-variant-numeric:tabular-nums}
+  .duty small{font-size:14px;color:var(--dim);font-weight:400}
+  .bar{height:5px;border-radius:3px;background:#16202c;overflow:hidden;margin-bottom:8px}
+  .bar i{display:block;height:100%;width:0;background:var(--cyan);transition:width .4s}
+  .bar i.hot{background:var(--amber)}
+  .meta{font-size:11.5px;color:var(--dim);line-height:1.6;font-variant-numeric:tabular-nums}
+  .meta b{color:var(--ink);font-weight:500}
+  .state{font-size:11px;color:var(--cyan);margin-top:4px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .cell.dark .duty,.cell.dark .meta{color:var(--grey)}
+  .cell.dark .state{color:var(--grey)}
+  footer{margin-top:20px;font-size:11px;color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <h1>SILICON <em>TELEMETRY</em></h1>
+  <span id="link">connecting…</span>
+</header>
+<div class="grid" id="grid"></div>
+<footer>Self-reported duty cycle, 1 Hz per unit per device. Grey dot = no data
+for 3 s (dead ≠ idle). Dark cell = unit not registered — missing hardware is
+visible, not invisible.</footer>
+
+<script>
+"use strict";
+/* Nine cells, always — one per unit the plan expects (handoff §6). */
+const LAYOUT = [
+  {dev:"laptop", label:"LAPTOP · Snapdragon X Elite", units:["cpu","gpu","npu"]},
+  {dev:"phone",  label:"PHONE · Galaxy S25",          units:["cpu","gpu","npu"]},
+  {dev:"unoq",   label:"UNO Q · QRB2210",             units:["cpu","gpu","mcu"]},
+];
+const grid = document.getElementById("grid");
+const cells = {};
+for(const row of LAYOUT){
+  const lbl=document.createElement("div");
+  lbl.className="devrow-label"; lbl.textContent=row.label;
+  grid.appendChild(lbl);
+  for(const u of row.units){
+    const c=document.createElement("div");
+    c.className="cell dark";
+    c.innerHTML=`<h2>${u.toUpperCase()}<span class="dot"></span></h2>
+      <div class="duty">—<small></small></div>
+      <div class="bar"><i></i></div>
+      <div class="meta">not registered</div>
+      <div class="state"></div>`;
+    grid.appendChild(c);
+    cells[`${row.dev}.${u}`]=c;
+  }
+}
+
+let staleMs = 3000;
+function render(devices){
+  const seen=new Set();
+  for(const key in devices){
+    const d=devices[key];
+    for(const unit in d.units){
+      const cell=cells[`${d.device}.${unit}`];
+      if(!cell) continue;
+      seen.add(`${d.device}.${unit}`);
+      const r=d.units[unit];
+      const stale=r.age_ms>staleMs;
+      cell.classList.remove("dark");
+      cell.classList.toggle("live",!stale);
+      cell.querySelector(".dot").className="dot "+(stale?"stale":"fresh");
+      const busy=Number(r.busy_pct)||0;
+      cell.querySelector(".duty").innerHTML=
+        stale?`—<small> no data</small>`:`${busy.toFixed(0)}<small> %</small>`;
+      const bar=cell.querySelector(".bar i");
+      bar.style.width=(stale?0:Math.min(100,busy))+"%";
+      bar.className=busy>80?"hot":"";
+      /* Domain metric proving the work is real — a % alone could be a spinlock */
+      const m=r.metric||{};
+      const parts=Object.entries(m).slice(0,3)
+        .map(([k,v])=>`${k} <b>${typeof v==="number"?(Number.isInteger(v)?v:v.toFixed(1)):v}</b>`);
+      if(r.temp_c!=null) parts.push(`temp <b>${r.temp_c}°C</b>`);
+      cell.querySelector(".meta").innerHTML=parts.join(" · ")||"&nbsp;";
+      cell.querySelector(".state").textContent=r.state||"";
+    }
+  }
+  /* units never reported stay dark "not registered" — nothing to do */
+}
+
+let ws;
+function connect(){
+  ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
+  ws.onopen=()=>{
+    document.getElementById("link").textContent="● live";
+    document.getElementById("link").className="on";
+    ws.send(JSON.stringify({type:"hello",client:"dashboard",roles:["dashboard"],
+      device:"laptop",device_id:localStorage.gfDashId||
+      (localStorage.gfDashId="dash-"+Math.random().toString(36).slice(2,10))}));
+  };
+  ws.onclose=()=>{
+    document.getElementById("link").textContent="reconnecting…";
+    document.getElementById("link").className="";
+    setTimeout(connect,1500);
+  };
+  ws.onmessage=ev=>{
+    let m; try{ m=JSON.parse(ev.data); }catch(_){ return; }
+    if(m.type==="telem_state"){ staleMs=m.stale_ms||3000; render(m.devices||{}); }
+    /* welcome and anything else: ignored by design */
+  };
+}
+connect();
+/* age the dots between pushes */
+setInterval(()=>{ for(const k in cells){ /* server pushes at 1 Hz; nothing to do */ } },2000);
+</script>
+</body>
+</html>

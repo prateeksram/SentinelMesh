@@ -273,8 +273,10 @@ def analyze_match(
     fooled = sum(
         1
         for shot in shots
-        if shot.get("zone") in "LCR"
-        and shot.get("keeperZone") in "LCR"
+        # Tuple membership, not substring: a skied kick has zone=None, and
+        # `None in "LCR"` raises TypeError (real shotmaps contain them).
+        if shot.get("zone") in ("L", "C", "R")
+        and shot.get("keeperZone") in ("L", "C", "R")
         and shot.get("zone") != shot.get("keeperZone")
     )
     spins = [abs(float(shot["spin"])) for shot in shots if isinstance(shot.get("spin"), (int, float))]

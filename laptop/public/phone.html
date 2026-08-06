@@ -83,15 +83,24 @@ let S=null, ws=null;
 let zone="C", lastZoneSent=0, lastKick=0, bodyOK=false;
 
 /* ---------------- websocket ---------------- */
+// Stable device identity — survives reconnects, resumes the same session.
+const DEVICE_ID = localStorage.gfDeviceId ||
+  (localStorage.gfDeviceId = "phoneweb-" + Math.random().toString(36).slice(2, 12));
 function connect(){
   ws = new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
-  ws.onopen  = ()=>{ $("led").classList.add("on"); ws.send(JSON.stringify({type:"hello",client:"phone"})); };
+  ws.onopen  = ()=>{ $("led").classList.add("on"); ws.send(JSON.stringify({
+    type:"hello", client:"phone", device_id:DEVICE_ID, device:"phone",
+    roles:["phone"],
+    streams:[{name:"aim",schema:"zone",rate_hz:5},{name:"kick",schema:"event",rate_hz:0}],
+    compute:{has_npu:false}, proto:1,
+  })); };
   ws.onclose = ()=>{ $("led").classList.remove("on"); setTimeout(connect,1500); };
   ws.onmessage = ev => onState(JSON.parse(ev.data));
 }
 function send(o){ if(ws && ws.readyState===1) ws.send(JSON.stringify(o)); }
 
 function onState(st){
+  if(st && st.type && st.type!=="state") return;   // welcome/ack — control plane, not UI
   const prev = S; S = st;
   const big=$("big"), hint=$("hint");
   big.className="";
@@ -109,6 +118,10 @@ function onState(st){
       big.textContent = r==="goal"?"GOAL!":r==="save"?"SAVED!":r==="post"?"POST!":"SKIED!";
       big.className = r==="goal"?"goal":r==="save"?"warn":"warn";
       hint.textContent = (st.last?.force?st.last.force+" N — ":"")+(st.line||""); break;}
+    case "generating":
+      big.textContent="NEXT VENUE";
+      hint.textContent = st.genProgress!=null ? `The Wall is redesigning the ground… ${st.genProgress}%`
+                                              : "The Wall is redesigning the ground…"; break;
     case "end":       big.textContent=`${st.score} / ${st.kicksTotal}`;
                       big.className="goal"; hint.textContent=st.line||""; break;
   }

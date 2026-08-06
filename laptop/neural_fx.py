@@ -38,7 +38,14 @@ _STATUS = {
 
 
 def _try_load_ort():
-    """Best-effort ORT (+ QNN) load. Never raises — procedural always works."""
+    """Best-effort ORT (+ QNN) load. Never raises — procedural always works.
+
+    Fail-loud policy (system-plan §5.3): silent CPU fallback is the failure
+    mode the honesty rule exists to prevent. QNN is used when QNN_SDK_ROOT is
+    set; the CPU EP is offered ONLY behind FX_ALLOW_CPU=1. Per-node fallback
+    inside a QNN session is disabled via session.disable_cpu_ep_fallback, and
+    the *actual* provider is asserted after creation.
+    """
     global _ORT_SESSION, _ORT_BACKEND, _STATUS
     if _ORT_SESSION is not None or not HERO_ONNX.exists():
         return
@@ -57,12 +64,32 @@ def _try_load_ort():
     qnn_root = os.environ.get("QNN_SDK_ROOT", "")
     if qnn_root and Path(qnn_root).exists():
         providers.append("QNNExecutionProvider")
-    providers.append("CPUExecutionProvider")
+    allow_cpu = os.environ.get("FX_ALLOW_CPU", "0").lower() in ("1", "true", "yes")
+    if allow_cpu:
+        providers.append("CPUExecutionProvider")
+    if not providers:
+        _STATUS = {
+            "ok": True,
+            "backend": "procedural",
+            "model": None,
+            "detail": ("model present but no QNN (QNN_SDK_ROOT unset) and CPU EP "
+                       "disabled — set FX_ALLOW_CPU=1 to allow CPU inference"),
+        }
+        return
 
     try:
-        sess = ort.InferenceSession(str(HERO_ONNX), providers=providers)
-        used = sess.get_providers()[0] if sess.get_providers() else "CPUExecutionProvider"
+        so = ort.SessionOptions()
+        # No silent per-node CPU fallback inside a QNN session — fail instead.
+        so.add_session_config_entry("session.disable_cpu_ep_fallback",
+                                    "0" if allow_cpu else "1")
+        sess = ort.InferenceSession(str(HERO_ONNX), sess_options=so,
+                                    providers=providers)
+        used = sess.get_providers()[0] if sess.get_providers() else "?"
         backend = "qnn" if "QNN" in used else "cpu"
+        # Assert the provider we got is one we asked for — a lit NPU badge
+        # backed by CPU is worse than no badge.
+        if backend == "cpu" and not allow_cpu:
+            raise RuntimeError(f"wanted QNN, got {used}")
         _ORT_SESSION = sess
         _ORT_BACKEND = backend
         _STATUS = {
@@ -190,9 +217,12 @@ def _procedural_plate(frames: list, meta: dict, size: int = 192) -> dict:
         rgba[o + 2] = tint[2]
         rgba[o + 3] = a
 
+    # One encode: plate and depthPreview are the same buffer — encoding the
+    # PNG twice was pure waste (row-filter copy + zlib, both duplicated).
+    png = _png_b64(bytes(rgba), w, h)
     return {
-        "depthPreview": _png_b64(bytes(rgba), w, h),
-        "plate": _png_b64(bytes(rgba), w, h),
+        "depthPreview": png,
+        "plate": png,
         "backend": "procedural",
         "w": w,
         "h": h,
@@ -208,8 +238,9 @@ def _result_tint(meta: dict) -> tuple[int, int, int]:
     return (244, 247, 241)
 
 
-def _decode_image_rgb(image_b64: str | None, size: int) -> list[list[tuple[int, int, int]]] | None:
-    """Decode optional data-URL / base64 still → size×size RGB rows. None on failure."""
+def _decode_image_rgb(image_b64: str | None, size: int):
+    """Decode optional data-URL / base64 still → (size,size,3) float32 array
+    in 0..255, or None on failure. numpy-native; Pillow for the decode."""
     if not image_b64 or not isinstance(image_b64, str):
         return None
     try:
@@ -219,21 +250,28 @@ def _decode_image_rgb(image_b64: str | None, size: int) -> list[list[tuple[int, 
         data = base64.b64decode(raw)
     except Exception:
         return None
-    # Prefer Pillow when present; otherwise skip still path.
     try:
         from io import BytesIO
+
+        import numpy as np  # type: ignore
         from PIL import Image  # type: ignore
 
         im = Image.open(BytesIO(data)).convert("RGB").resize((size, size))
-        px = list(im.getdata())
-        return [px[y * size : (y + 1) * size] for y in range(size)]
+        return np.asarray(im, dtype=np.float32)
     except Exception:
         return None
 
 
-def _silhouette_rgb(frames: list, size: int = 518) -> list[list[tuple[int, int, int]]]:
-    """Rasterize a white-on-black joint silhouette for Depth-Anything input."""
-    heat = [0.0] * (size * size)
+def _silhouette_rgb(frames: list, size: int = 518):
+    """Rasterize a white-on-black joint silhouette for Depth-Anything input.
+
+    Vectorized: per-joint window adds of a precomputed radial kernel instead
+    of the former pure-Python per-pixel loops (~800k iterations per plate).
+    Returns (size,size,3) float32 in 0..255.
+    """
+    import numpy as np  # type: ignore
+
+    heat = np.zeros((size, size), dtype=np.float32)
     mid = frames[len(frames) // 2] if frames else None
     samples = []
     if mid and isinstance(mid.get("p"), list):
@@ -244,24 +282,29 @@ def _silhouette_rgb(frames: list, size: int = 518) -> list[list[tuple[int, int, 
         if isinstance(p, list):
             samples.append(p)
 
+    kernels: dict[int, "np.ndarray"] = {}
+
+    def kernel(r: int):
+        k = kernels.get(r)
+        if k is None:
+            ax = np.arange(-r, r + 1, dtype=np.float32)
+            d2 = ax[None, :] ** 2 + ax[:, None] ** 2
+            fall = np.clip(1.0 - d2 / (r * r), 0.0, None)
+            k = (fall * fall).astype(np.float32)
+            kernels[r] = k
+        return k
+
     def splat(nx: float, ny: float, amp: float, rad: float):
         cx = int((0.5 + nx * 0.35) * (size - 1))
         cy = int((0.35 + ny * 0.45) * (size - 1))
         r = max(2, int(rad * size))
-        r2 = r * r
-        for dy in range(-r, r + 1):
-            yy = cy + dy
-            if yy < 0 or yy >= size:
-                continue
-            for dx in range(-r, r + 1):
-                xx = cx + dx
-                if xx < 0 or xx >= size:
-                    continue
-                d2 = dx * dx + dy * dy
-                if d2 > r2:
-                    continue
-                fall = 1.0 - d2 / r2
-                heat[yy * size + xx] += amp * fall * fall
+        y0, y1 = max(0, cy - r), min(size, cy + r + 1)
+        x0, x1 = max(0, cx - r), min(size, cx + r + 1)
+        if y0 >= y1 or x0 >= x1:
+            return
+        k = kernel(r)
+        heat[y0:y1, x0:x1] += amp * k[y0 - (cy - r):y1 - (cy - r),
+                                      x0 - (cx - r):x1 - (cx - r)]
 
     for pts in samples:
         for i, q in enumerate(pts):
@@ -274,16 +317,9 @@ def _silhouette_rgb(frames: list, size: int = 518) -> list[list[tuple[int, int, 
             amp = 1.35 if i in (27, 28, 31, 32, 25, 26) else 0.55
             splat(x, y, amp, 0.12 if i in (31, 32) else 0.09)
 
-    mx = max(heat) or 1.0
-    rows: list[list[tuple[int, int, int]]] = []
-    for y in range(size):
-        row = []
-        for x in range(size):
-            n = heat[y * size + x] / mx
-            v = int(min(255, n * 255))
-            row.append((v, v, v))
-        rows.append(row)
-    return rows
+    mx = float(heat.max()) or 1.0
+    gray = np.minimum(heat / mx * 255.0, 255.0)
+    return np.repeat(gray[:, :, None], 3, axis=2)
 
 
 def _parse_hw(shape) -> tuple[int, int]:
@@ -300,29 +336,20 @@ def _parse_hw(shape) -> tuple[int, int]:
     return 518, 518
 
 
-def _nchw_float(rgb_rows: list[list[tuple[int, int, int]]], h: int, w: int):
-    """ImageNet-ish normalized NCHW float32 contiguous list → numpy if available."""
-    import array
+def _nchw_float(rgb, h: int, w: int):
+    """(H,W,3) float32 0..255 → ImageNet-normalized (1,3,h,w) float32.
+    Nearest-neighbour resize via index arrays — no per-pixel Python."""
+    import numpy as np  # type: ignore
 
-    # Resize nearest if needed
-    src_h, src_w = len(rgb_rows), len(rgb_rows[0]) if rgb_rows else 0
-    mean = (0.485, 0.456, 0.406)
-    std = (0.229, 0.224, 0.225)
-    chw = [0.0] * (3 * h * w)
-    for y in range(h):
-        sy = min(src_h - 1, int(y * src_h / h)) if src_h else 0
-        for x in range(w):
-            sx = min(src_w - 1, int(x * src_w / w)) if src_w else 0
-            r, g, b = rgb_rows[sy][sx] if src_h else (0, 0, 0)
-            for c, val in enumerate((r, g, b)):
-                chw[c * h * w + y * w + x] = ((val / 255.0) - mean[c]) / std[c]
-    try:
-        import numpy as np  # type: ignore
-
-        return np.asarray(chw, dtype=np.float32).reshape(1, 3, h, w)
-    except ImportError:
-        # ORT can accept nested lists on some builds; prefer numpy.
-        raise RuntimeError("numpy required for ORT depth inference")
+    src_h, src_w = rgb.shape[0], rgb.shape[1]
+    if (src_h, src_w) != (h, w):
+        ys = np.minimum((np.arange(h) * src_h // h), src_h - 1)
+        xs = np.minimum((np.arange(w) * src_w // w), src_w - 1)
+        rgb = rgb[ys][:, xs]
+    mean = np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
+    norm = (rgb / 255.0 - mean) / std
+    return np.ascontiguousarray(norm.transpose(2, 0, 1)[None], dtype=np.float32)
 
 
 def _depth_to_plate(depth, meta: dict, out_w: int = 192, out_h: int = 192) -> dict:
@@ -346,23 +373,23 @@ def _depth_to_plate(depth, meta: dict, out_w: int = 192, out_h: int = 192) -> di
     force = float(meta.get("force") or 0)
     intensity = max(0.35, min(1.0, force / 380.0))
     tint = _result_tint(meta)
-    rgba = bytearray(out_w * out_h * 4)
-    for y in range(out_h):
-        for x in range(out_w):
-            n = float(norm[y, x]) ** 0.72
-            a = int(min(255, n * 220 * intensity + (18 if n > 0.02 else 0)))
-            rx = (x / (out_w - 1) - 0.5) * 2
-            ry = (y / (out_h - 1) - 0.5) * 2
-            vig = max(0.0, 1.0 - math.sqrt(rx * rx + ry * ry) * 0.85)
-            a = int(a * (0.35 + 0.65 * vig))
-            o = (y * out_w + x) * 4
-            rgba[o] = tint[0]
-            rgba[o + 1] = tint[1]
-            rgba[o + 2] = tint[2]
-            rgba[o + 3] = a
+    # Vectorized colorize + vignette (was a per-pixel double loop).
+    n = np.power(np.clip(norm, 0.0, 1.0), 0.72)
+    a = np.minimum(255.0, n * 220.0 * intensity + np.where(n > 0.02, 18.0, 0.0))
+    yy, xx = np.mgrid[0:out_h, 0:out_w].astype(np.float32)
+    rx = (xx / (out_w - 1) - 0.5) * 2
+    ry = (yy / (out_h - 1) - 0.5) * 2
+    vig = np.clip(1.0 - np.sqrt(rx * rx + ry * ry) * 0.85, 0.0, None)
+    a = (a * (0.35 + 0.65 * vig)).astype(np.uint8)
+    rgba_arr = np.empty((out_h, out_w, 4), dtype=np.uint8)
+    rgba_arr[:, :, 0] = tint[0]
+    rgba_arr[:, :, 1] = tint[1]
+    rgba_arr[:, :, 2] = tint[2]
+    rgba_arr[:, :, 3] = a
+    png = _png_b64(rgba_arr.tobytes(), out_w, out_h)   # single encode
     return {
-        "depthPreview": _png_b64(bytes(rgba), out_w, out_h),
-        "plate": _png_b64(bytes(rgba), out_w, out_h),
+        "depthPreview": png,
+        "plate": png,
         "backend": _ORT_BACKEND or "cpu",
         "w": out_w,
         "h": out_h,

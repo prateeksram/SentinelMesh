@@ -14,10 +14,18 @@ import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** WebSocket client speaking the same JSON protocol as phone.html. */
+/** WebSocket client speaking the same JSON protocol as phone.html.
+ *
+ * Sends an extended hello with a persisted device_id + capability descriptor
+ * (docs/device-protocol.md). Older hosts ignore the extra fields; hosts with a
+ * registry return a WELCOME and resume the same session across reconnects.
+ * Non-"state" messages (welcome/ack) are already filtered in onMessage.
+ */
 class GameClient(
     url: String = DEFAULT_URL,
     private val listener: Listener,
+    /** Stable device identity; persisted by the caller (MainActivity prefs). */
+    private val deviceId: String? = null,
 ) {
     sealed class ConnectStatus {
         data class Connecting(val url: String) : ConnectStatus()
@@ -86,7 +94,7 @@ class GameClient(
                 userConnectAttempt.set(false)
                 listener.onConnected(true)
                 listener.onConnectStatus(ConnectStatus.Connected(url))
-                webSocket.send(JSONObject().put("type", "hello").put("client", "phone").toString())
+                webSocket.send(hello().toString())
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -198,8 +206,39 @@ class GameClient(
         }.start()
     }
 
+    /** Extended hello: legacy fields + device_id + capability descriptor. */
+    private fun hello(): JSONObject {
+        val o = JSONObject().put("type", "hello").put("client", "phone")
+        if (deviceId != null) {
+            o.put("device_id", deviceId)
+                .put("device", "phone")
+                .put("roles", JSONArray().put("phone"))
+                .put("streams", JSONArray()
+                    .put(JSONObject().put("name", "aim").put("schema", "zone").put("rate_hz", 5))
+                    .put(JSONObject().put("name", "kick").put("schema", "event").put("rate_hz", 0)))
+                .put("compute", JSONObject().put("has_npu", true)
+                    .put("units", JSONArray().put("cpu").put("gpu").put("npu")))
+                .put("proto", 1)
+        }
+        return o
+    }
+
     fun sendAim(zone: String) {
         ws?.send(JSONObject().put("type", "aim").put("zone", zone).toString())
+    }
+
+    /** Per-unit telemetry, 1 Hz (docs/device-protocol.md §4). `metric` is
+     * opaque to the host; the phone NPU cell shows the fallback rung. */
+    fun sendTelem(unit: String, busyPct: Double, metric: JSONObject, state: String) {
+        ws?.send(
+            JSONObject()
+                .put("type", "telem")
+                .put("unit", unit)
+                .put("busy_pct", busyPct)
+                .put("metric", metric)
+                .put("state", state)
+                .toString()
+        )
     }
 
     /** Ask the server to start the match (works while it's in the lobby). */

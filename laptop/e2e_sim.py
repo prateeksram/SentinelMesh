@@ -140,6 +140,43 @@ async def main():
     st, tv_st = await asyncio.gather(phone(), tv())
     elapsed = time.perf_counter() - t0
 
+    print(
+        f"\nFINAL: {st['score']}/{st['kicksTotal']} saves={st['saves']} "
+        f"level={st.get('level')} src={((st.get('sceneMetrics') or {}).get('source'))}"
+    )
+    print(f"line: {st.get('line')}")
+    print(f"report: {tv_st.get('report')}")   # TV-only key since P1 filtering
+    print("shotmap:")
+    for s in tv_st["shotmap"]:
+        print(" ", s)
+    print("phases:", tv_st.get("_phases"))
+
+    # Core match invariants. Heavy / TV-only keys (shotmap, replay, report,
+    # genProgress) are asserted on the TV's snapshot: since the P1 registry,
+    # the phone's frames are filtered and MUST NOT carry them.
+    assert st["phase"] == "end"
+    for key in ("replay", "shotmap", "report", "genProgress"):
+        assert key not in st, f"phone snapshot leaked {key!r}"
+    assert len(tv_st["shotmap"]) == tv_st["kicksTotal"]
+    assert tv_st["score"] == sum(1 for s in tv_st["shotmap"] if s["result"] == "goal")
+    assert tv_st["saves"] == sum(1 for s in tv_st["shotmap"] if s["result"] != "goal")
+    assert tv_st["shotmap"][2]["result"] == "over", "frozen kick 3 should be skied"
+    assert all(s["keeperZone"] in "LCR" for s in tv_st["shotmap"])
+    assert all(s["force"] > 0 for s in tv_st["shotmap"] if s["result"] != "over")
+    assert tv_st["replay"] and tv_st["replay"]["kick"] == tv_st["kicksTotal"]
+
+    # Four-pillar extras
+    assert st.get("_saw_generating") or "generating" in (tv_st.get("_phases") or [])
+    assert st.get("level") >= 1
+    assert st.get("scene"), "scene missing on end snapshot"
+    assert st["scene"].get("atmosphere") and st["scene"].get("difficulty")
+    assert st.get("sceneMetrics", {}).get("source") in ("geniex", "template")
+    assert tv_st.get("report") is not None
+    d = st["scene"]["difficulty"]
+    for k in ("keeperIq", "keeperReaction", "shootWindow", "powerBeat"):
+        assert k in d
+
+    # AI100 post-match report (a71a0af): ready card with working assets
     report = st.get("postGameReport") or {}
     async with aiohttp.ClientSession() as session:
         async with session.get(HTTP + report.get("pngUrl", "")) as response:
@@ -149,41 +186,10 @@ async def main():
             report_pdf = await response.read()
             report_pdf_status = response.status
 
-    print(
-        f"\nFINAL: {st['score']}/{st['kicksTotal']} saves={st['saves']} "
-        f"level={st.get('level')} src={((st.get('sceneMetrics') or {}).get('source'))}"
-    )
-    print(f"line: {st.get('line')}")
-    print(f"report: {st.get('report')}")
-    print("shotmap:")
-    for s in st["shotmap"]:
-        print(" ", s)
-    print("phases:", tv_st.get("_phases"))
-
-    # Core match invariants
-    assert st["phase"] == "end"
-    assert len(st["shotmap"]) == st["kicksTotal"]
-    assert st["score"] == sum(1 for s in st["shotmap"] if s["result"] == "goal")
-    assert st["saves"] == sum(1 for s in st["shotmap"] if s["result"] != "goal")
-    assert st["shotmap"][2]["result"] == "over", "frozen kick 3 should be skied"
-    assert all(s["keeperZone"] in "LCR" for s in st["shotmap"])
-    assert all(s["force"] > 0 for s in st["shotmap"] if s["result"] != "over")
-    assert st["replay"] and st["replay"]["kick"] == st["kicksTotal"]
-
-    # Four-pillar extras
-    assert st.get("_saw_generating") or "generating" in (tv_st.get("_phases") or [])
-    assert st.get("level") >= 1
-    assert st.get("scene"), "scene missing on end snapshot"
-    assert st["scene"].get("atmosphere") and st["scene"].get("difficulty")
-    assert st.get("sceneMetrics", {}).get("source") in ("geniex", "template")
-    assert st.get("report") is not None
     assert report.get("status") == "ready"
     assert report_png_status == 200 and report_png.startswith(b"\x89PNG")
     assert report_pdf_status == 200 and report_pdf.startswith(b"%PDF")
     assert report.get("qrUrl") and report.get("landingUrl")
-    d = st["scene"]["difficulty"]
-    for k in ("keeperIq", "keeperReaction", "shootWindow", "powerBeat"):
-        assert k in d
 
     print(
         f"\nOK — E2E sim passed in {elapsed:.1f}s "

@@ -198,7 +198,7 @@ async def generate(ctx, level, progress_cb=None):
     if progress_cb:
         await progress_cb(5)
     user = json.dumps(ctx)
-    data = await geniex_client.chat_json(SYSTEM, user, timeout=TIMEOUT)
+    data, llm_meta = await geniex_client.chat_json_meta(SYSTEM, user, timeout=TIMEOUT)
     if progress_cb:
         await progress_cb(90)
     if not data:
@@ -224,6 +224,11 @@ async def generate(ctx, level, progress_cb=None):
                 "model": geniex_client.GENIEX_MODEL,
                 "source": "geniex",
                 "total_ms": int((time.perf_counter() - t0) * 1000),
+                # From the response's usage block. No streaming → no true
+                # TTFT; null rather than a fabricated number.
+                "tokens": llm_meta.get("tokens"),
+                "tok_per_s": llm_meta.get("tok_per_s"),
+                "ttft_ms": None,
             },
         }
     (SCENES / f"level_{level}.json").write_text(json.dumps(scene))
