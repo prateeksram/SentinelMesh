@@ -1,0 +1,10 @@
+# Gesture Arena — laptop host (server, bridge, tests)
+# Python 3.13 recommended (matches the rest of the toolchain): py -3.13 -m pip install -r requirements.txt
+aiohttp>=3.9
+
+# Optional — Neural FX NPU upgrade for the TV hero plates (see NEURAL_FX.md):
+# onnxruntime
+
+# The classifier layer (classifier/) has its own heavier requirements
+# (tensorflow, opencv-python, ...) — see classifier/requirements.txt.
+# It is NOT needed to run the game.

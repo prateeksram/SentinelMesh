@@ -1,0 +1,11 @@
+# Laptop (training + game server)
+tensorflow
+opencv-python
+numpy
+flask
+pyopenssl
+pygame
+# Export step only (converts model for the phone browser)
+tensorflowjs
+
+# UNO Q only (not needed on laptop): smbus2
