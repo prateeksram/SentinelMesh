@@ -89,91 +89,105 @@
   #startBtn:disabled{background:#31506a;color:#7d95a8;box-shadow:0 8px 0 #22374a;cursor:default}
   #startBtn.hide{display:none}
   #abortBtn{font:inherit;color:var(--chalk);background:#5a2230;border:1px solid #8a3040;
-            border-radius:8px;padding:5px 10px;cursor:pointer;letter-spacing:1.5px}
+            border-radius:8px;padding:7px 12px;cursor:pointer;letter-spacing:1.5px;
+            justify-content:center}
   #abortBtn.hide{display:none}
   #abortBtn:hover{background:#7a2a3a}
 
-  /* ---------------- lower-third ticker ---------------- */
-  .ticker{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:6;
-          width:min(1280px,95vw);display:flex;align-items:stretch;min-height:54px;
-          background:linear-gradient(180deg,rgba(10,20,31,.92),rgba(5,11,18,.94));
-          border:1px solid #24445c;border-radius:10px;overflow:hidden;
-          box-shadow:0 14px 34px rgba(0,0,0,.55)}
-  .desk{display:flex;align-items:center;gap:10px;
+  /* ---------------- left rail (desk + status; pitch stays clear) ---------------- */
+  .rail-left{
+    position:fixed;left:14px;top:78px;z-index:6;width:min(268px,20vw);
+    max-height:min(560px,76vh);display:flex;flex-direction:column;gap:10px;
+    pointer-events:none}
+  .rail-card{
+    background:linear-gradient(180deg,rgba(10,20,31,.92),rgba(5,11,18,.94));
+    border:1px solid #24445c;border-radius:12px;overflow:hidden;
+    box-shadow:0 14px 34px rgba(0,0,0,.55);pointer-events:auto}
+  .rail-card.desk-card{display:flex;flex-direction:column;min-height:0;
+                       max-height:min(240px,34vh)}
+  .desk{display:flex;align-items:center;gap:10px;flex-shrink:0;
         background:linear-gradient(135deg,#ffd54d,var(--amber) 60%,#e5b000);color:var(--ink);
-        font-family:var(--fBlack);font-size:14px;letter-spacing:1px;
-        padding:0 26px 0 18px;white-space:nowrap;
-        clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%)}
+        font-family:var(--fBlack);font-size:13px;letter-spacing:1px;
+        padding:10px 14px;white-space:nowrap}
   .desk.tmpl{background:linear-gradient(135deg,#3a5c7a,#2a4a66);color:var(--chalk)}
-  .desk .pulse{width:10px;height:10px;border-radius:50%;background:var(--ink)}
+  .desk .pulse{width:9px;height:9px;border-radius:50%;background:var(--ink);flex-shrink:0}
   .desk.live .pulse{background:var(--red);box-shadow:0 0 8px var(--red);animation:blink 1.1s infinite}
   @keyframes blink{50%{opacity:.25}}
-  #line{flex:1;display:flex;align-items:center;padding:8px 18px;font-weight:700;
-        font-size:clamp(14px,1.8vw,20px);color:var(--chalk);
-        overflow:hidden}
-  .links{display:flex;gap:14px;padding:0 16px;font-family:var(--fCond);
-         font-weight:700;letter-spacing:1.5px;font-size:13px;color:var(--mut);align-items:center;
-         border-left:1px solid #1c374c}
+  /* Fixed type — long lines clamp, never grow the rail or the font. */
+  #line{flex:1;min-height:0;padding:12px 14px;font-weight:700;
+        font-size:14px;line-height:1.35;color:var(--chalk);
+        overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;
+        -webkit-line-clamp:5;word-break:break-word}
+  .links{display:flex;flex-direction:column;align-items:stretch;gap:9px;
+         padding:12px 14px;font-family:var(--fCond);font-weight:700;
+         letter-spacing:1.5px;font-size:12px;color:var(--mut)}
+  .links > span,.links > button{display:flex;align-items:center;white-space:nowrap}
   .led{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--red);
-       margin-right:6px;vertical-align:1px;box-shadow:0 0 6px rgba(255,68,56,.8)}
+       margin-right:8px;flex-shrink:0;box-shadow:0 0 6px rgba(255,68,56,.8)}
   .led.on{background:var(--green);box-shadow:0 0 6px rgba(61,220,116,.8)}
   #soundBtn{font:inherit;color:var(--chalk);background:#22374a;border:1px solid #31506a;
-            border-radius:999px;padding:5px 14px;cursor:pointer;letter-spacing:1.5px}
+            border-radius:999px;padding:7px 12px;cursor:pointer;letter-spacing:1.5px;
+            justify-content:center;margin-top:2px}
   #soundBtn.off{color:var(--mut);background:transparent}
   #fxBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
   #fxBadge.on{color:var(--cyan)}
   #fxBadge.qnn{color:var(--amber)}
   #deskBadge,#sceneBadge,#levelBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
   #deskBadge.on,#sceneBadge.on,#levelBadge.on{color:var(--cyan)}
-  #genBarWrap{position:fixed;left:50%;transform:translateX(-50%);bottom:78px;z-index:6;
+  #genBarWrap{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:6;
               width:min(480px,70vw);height:6px;border-radius:999px;background:rgba(20,40,60,.7);
               border:1px solid rgba(158,190,215,.25);overflow:hidden;display:none}
   #genBarWrap.show{display:block}
   #genBar{height:100%;width:0%;background:linear-gradient(90deg,var(--cyan),var(--amber));
           transition:width .2s linear}
-  #genMeta{position:fixed;left:50%;transform:translateX(-50%);bottom:90px;z-index:6;
+  #genMeta{position:fixed;left:50%;transform:translateX(-50%);bottom:34px;z-index:6;
            font-family:var(--fCond);font-weight:700;letter-spacing:1.5px;font-size:12px;
            color:var(--mut);display:none;max-width:min(720px,92vw);text-align:center;
            white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #genMeta.show{display:block}
-  #sceneDebug{position:fixed;left:12px;bottom:78px;z-index:9;display:none;
+  #sceneDebug{position:fixed;left:14px;bottom:18px;z-index:9;display:none;
               font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:1.35;
               color:#cfe6f5;background:rgba(4,10,16,.82);border:1px solid #355873;
               padding:8px 10px;border-radius:8px;max-width:min(420px,70vw);
               white-space:pre-wrap}
   #sceneDebug.show{display:block}
+  @media(max-width:900px){
+    .rail-left{width:min(200px,28vw)}
+    #line{font-size:12px;-webkit-line-clamp:4}
+    .links{font-size:11px;gap:7px;padding:10px}
+  }
   #reportLine{margin-top:10px;font-family:var(--fCond);font-weight:600;letter-spacing:1px;
               font-size:clamp(13px,1.6vw,18px);color:var(--mut);max-width:70vw;display:none}
   #reportLine.show{display:block}
-  #reportPanel{position:fixed;right:18px;top:108px;z-index:8;width:min(310px,24vw);
-               padding:18px;background:linear-gradient(160deg,rgba(9,25,37,.97),rgba(5,13,22,.98));
-               border:1px solid #355873;border-top:4px solid var(--amber);border-radius:18px;
-               box-shadow:0 22px 60px rgba(0,0,0,.65);display:none;pointer-events:auto}
+  #reportPanel{position:fixed;right:14px;top:88px;z-index:8;width:min(168px,16vw);
+               padding:10px;background:linear-gradient(160deg,rgba(9,25,37,.97),rgba(5,13,22,.98));
+               border:1px solid #355873;border-top:3px solid var(--amber);border-radius:12px;
+               box-shadow:0 12px 32px rgba(0,0,0,.55);display:none;pointer-events:auto}
   #reportPanel.show{display:block;animation:reportIn .35s ease-out}
-  @keyframes reportIn{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
-  #reportClose{position:absolute;right:9px;top:9px;width:32px;height:32px;border:1px solid #49677d;
-               border-radius:50%;background:#102536;color:var(--chalk);font:700 22px/1 system-ui,sans-serif;
+  @keyframes reportIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+  #reportClose{position:absolute;right:6px;top:6px;width:24px;height:24px;border:1px solid #49677d;
+               border-radius:50%;background:#102536;color:var(--chalk);font:700 16px/1 system-ui,sans-serif;
                cursor:pointer;display:none;place-items:center;padding:0;transition:background .15s,border-color .15s}
   #reportClose:hover,#reportClose:focus-visible{background:#21445b;border-color:var(--cyan);outline:none}
   #reportPanel.ready #reportClose{display:grid}
-  #reportPanel .eyebrow{font-family:var(--fCond);font-weight:800;letter-spacing:2px;
-                       color:var(--cyan);font-size:12px}
-  #reportTitle{font-family:var(--fBlack);font-size:clamp(18px,2vw,28px);line-height:1.05;margin:7px 30px 4px 0;color:var(--amber)}
-  #reportStatus{font-family:var(--fCond);font-weight:700;color:var(--mut);font-size:14px;line-height:1.3}
-  #reportQr{display:none;width:100%;aspect-ratio:1;margin:14px 0 10px;background:#fff;border-radius:10px;padding:8px}
+  #reportPanel .eyebrow{font-family:var(--fCond);font-weight:800;letter-spacing:1.5px;
+                       color:var(--cyan);font-size:10px}
+  #reportTitle{font-family:var(--fBlack);font-size:14px;line-height:1.1;margin:5px 22px 3px 0;color:var(--amber)}
+  #reportStatus{font-family:var(--fCond);font-weight:700;color:var(--mut);font-size:11px;line-height:1.25}
+  #reportQr{display:none;width:100%;aspect-ratio:1;margin:8px 0 6px;background:#fff;border-radius:8px;padding:5px}
   #reportQr.show{display:block}
-  #reportStats{display:none;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}
+  #reportStats{display:none;grid-template-columns:1fr 1fr;gap:5px;margin-top:6px}
   #reportStats.show{display:grid}
-  #reportStats b{background:#102b3d;border:1px solid #294b62;border-radius:9px;padding:8px;
-                 color:var(--chalk);font-family:var(--fCond);font-size:13px;text-align:center}
+  #reportStats b{background:#102b3d;border:1px solid #294b62;border-radius:7px;padding:5px;
+                 color:var(--chalk);font-family:var(--fCond);font-size:10px;text-align:center}
   #reportOpen{display:none;text-decoration:none;text-align:center;background:var(--amber);color:var(--ink);
-              font-family:var(--fBlack);font-size:13px;letter-spacing:1px;padding:11px;border-radius:10px;margin-top:9px}
+              font-family:var(--fBlack);font-size:11px;letter-spacing:1px;padding:8px;border-radius:8px;margin-top:6px}
   #reportOpen.show{display:block}
-  #reportPanel .spin{display:none;width:34px;height:34px;margin:16px auto 8px;border-radius:50%;
-                     border:4px solid #26465c;border-top-color:var(--amber);animation:reportSpin .8s linear infinite}
+  #reportPanel .spin{display:none;width:24px;height:24px;margin:10px auto 6px;border-radius:50%;
+                     border:3px solid #26465c;border-top-color:var(--amber);animation:reportSpin .8s linear infinite}
   #reportPanel.generating .spin{display:block}
   @keyframes reportSpin{to{transform:rotate(360deg)}}
-  @media(max-width:900px){#reportPanel{width:250px;right:10px;top:94px;padding:13px}}
+  @media(max-width:900px){#reportPanel{width:140px;right:10px;top:80px;padding:8px}}
 </style>
 </head>
 <body>
@@ -220,20 +234,24 @@
 <div id="genMeta"></div>
 <div id="sceneDebug"></div>
 
-<div class="ticker">
-  <div class="desk tmpl" id="desk"><span class="pulse"></span><span id="deskName">TEMPLATE DESK</span></div>
-  <div id="line">Open phone.html on your phone, prop it up so it sees your whole body.</div>
-  <div class="links">
-    <span><span class="led" id="ledP"></span>PHONE</span>
-    <span><span class="led on"></span>THE WALL</span>
-    <span id="deskBadge" title="Commentary desk backend">DESK · …</span>
-    <span id="fxBadge" title="On-device stadium neural FX">FX · …</span>
-    <span id="sceneBadge" title="SceneEngine">SCENE · …</span>
-    <span id="levelBadge" title="Campaign level">LVL —</span>
-    <button id="soundBtn" title="Speak the keeper's lines">SOUND ON</button>
-    <button id="abortBtn" class="hide" title="End the match and return to lobby">END MATCH</button>
+<aside class="rail-left" aria-label="Desk and match status">
+  <div class="rail-card desk-card">
+    <div class="desk tmpl" id="desk"><span class="pulse"></span><span id="deskName">TEMPLATE DESK</span></div>
+    <div id="line">Open phone.html on your phone, prop it up so it sees your whole body.</div>
   </div>
-</div>
+  <div class="rail-card">
+    <div class="links">
+      <span><span class="led" id="ledP"></span>PHONE</span>
+      <span><span class="led on"></span>THE WALL</span>
+      <span id="deskBadge" title="Commentary desk backend">DESK · …</span>
+      <span id="fxBadge" title="On-device stadium neural FX">FX · …</span>
+      <span id="sceneBadge" title="SceneEngine">SCENE · …</span>
+      <span id="levelBadge" title="Campaign level">LVL —</span>
+      <button id="soundBtn" title="Speak the keeper's lines">SOUND ON</button>
+      <button id="abortBtn" class="hide" title="End the match and return to lobby">END MATCH</button>
+    </div>
+  </div>
+</aside>
 
 <script>
 const $=id=>document.getElementById(id);
