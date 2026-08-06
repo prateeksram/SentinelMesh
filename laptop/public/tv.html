@@ -123,6 +123,21 @@
   #fxBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
   #fxBadge.on{color:var(--cyan)}
   #fxBadge.qnn{color:var(--amber)}
+  #deskBadge,#sceneBadge,#levelBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
+  #deskBadge.on,#sceneBadge.on,#levelBadge.on{color:var(--cyan)}
+  #genBarWrap{position:fixed;left:50%;transform:translateX(-50%);bottom:78px;z-index:6;
+              width:min(480px,70vw);height:6px;border-radius:999px;background:rgba(20,40,60,.7);
+              border:1px solid rgba(158,190,215,.25);overflow:hidden;display:none}
+  #genBarWrap.show{display:block}
+  #genBar{height:100%;width:0%;background:linear-gradient(90deg,var(--cyan),var(--amber));
+          transition:width .2s linear}
+  #genMeta{position:fixed;left:50%;transform:translateX(-50%);bottom:90px;z-index:6;
+           font-family:var(--fCond);font-weight:700;letter-spacing:1.5px;font-size:12px;
+           color:var(--mut);display:none}
+  #genMeta.show{display:block}
+  #reportLine{margin-top:10px;font-family:var(--fCond);font-weight:600;letter-spacing:1px;
+              font-size:clamp(13px,1.6vw,18px);color:var(--mut);max-width:70vw;display:none}
+  #reportLine.show{display:block}
 </style>
 </head>
 <body>
@@ -149,9 +164,13 @@
   <div class="overlay">
     <div id="big">GESTURE FOOTBALL</div>
     <div id="sub">waiting for the striker…</div>
+    <div id="reportLine"></div>
     <button id="startBtn" disabled>START MATCH</button>
   </div>
 </div>
+
+<div id="genBarWrap"><div id="genBar"></div></div>
+<div id="genMeta"></div>
 
 <div class="ticker">
   <div class="desk tmpl" id="desk"><span class="pulse"></span><span id="deskName">TEMPLATE DESK</span></div>
@@ -159,7 +178,10 @@
   <div class="links">
     <span><span class="led" id="ledP"></span>PHONE</span>
     <span><span class="led on"></span>THE WALL</span>
+    <span id="deskBadge" title="Commentary desk backend">DESK · …</span>
     <span id="fxBadge" title="On-device stadium neural FX">FX · …</span>
+    <span id="sceneBadge" title="SceneEngine">SCENE · …</span>
+    <span id="levelBadge" title="Campaign level">LVL —</span>
     <button id="soundBtn" title="Speak the keeper's lines">SOUND ON</button>
     <button id="abortBtn" class="hide" title="End the match and return to lobby">END MATCH</button>
   </div>
@@ -244,6 +266,17 @@ function drawPostFX(now){
     cx.fillRect(0,0,W,H);
     cx.globalCompositeOperation="source-over";
   }
+  // Scene grade tint (campaign atmosphere).
+  const grade={
+    day:[200,220,255,0.06], morning:[220,230,210,0.05], afternoon:[255,200,120,0.07],
+    golden:[255,160,60,0.10], night:[10,30,50,0.08],
+  }[SCENE_GRADE];
+  if(grade){
+    cx.fillStyle=`rgba(${grade[0]},${grade[1]},${grade[2]},${grade[3]})`;
+    cx.globalCompositeOperation="multiply";
+    cx.fillRect(0,0,W,H);
+    cx.globalCompositeOperation="source-over";
+  }
 }
 
 /* Neural FX hero plate (from /fx/hero) */
@@ -264,6 +297,49 @@ async function probeFxStatus(){
     const j=await r.json();
     setFxBadge(j.backend||"procedural");
   }catch(_){ setFxBadge(null); }
+}
+async function probeHwStatus(){
+  try{
+    const r=await fetch("/hw/status");
+    const j=await r.json();
+    const desk=$("deskBadge");
+    if(desk){
+      const m=(j.desk||"templates").toUpperCase();
+      desk.textContent="DESK · "+(m==="GENIEX"?"GENIEX":m==="LOCAL"?"LOCAL":m==="CLOUD"?"CLOUD":"TEMPLATES");
+      desk.classList.toggle("on", !!j.desk);
+    }
+    if(j.fx?.backend) setFxBadge(j.fx.backend);
+  }catch(_){}
+}
+function setSceneBadge(source){
+  const el=$("sceneBadge");
+  if(!el) return;
+  if(source==="geniex"){ el.textContent="SCENE · READY"; el.classList.add("on"); }
+  else if(source==="template"){ el.textContent="SCENE · TEMPLATE"; el.classList.remove("on"); }
+  else{ el.textContent="SCENE · …"; el.classList.remove("on"); }
+}
+function setLevelBadge(level){
+  const el=$("levelBadge");
+  if(!el) return;
+  if(level){ el.textContent=`LVL ${level}/5`; el.classList.add("on"); }
+  else{ el.textContent="LVL —"; el.classList.remove("on"); }
+}
+probeFxStatus();
+probeHwStatus();
+
+/* Scene atmosphere (campaign venues) */
+let SCENE_GRADE="night", FLOODLIGHTS=true, CROWD_LEVEL=1;
+function applyScene(scene){
+  if(!scene) return;
+  const a=scene.atmosphere||{};
+  document.documentElement.style.setProperty("--night", a.sky||"#0B1D2A");
+  document.documentElement.style.setProperty("--ink", a.tint||"#07131C");
+  SCENE_GRADE=a.grade||"night";
+  FLOODLIGHTS=!!a.floodlights;
+  CROWD_LEVEL=(typeof a.crowd==="number")?a.crowd:1;
+  if(typeof buildSky==="function"){
+    buildSky(); buildCrowd(); buildBoards(); buildPitch(); buildVig();
+  }
 }
 async function requestHeroPlate(st){
   if(!st?.last || HERO.pending) return;
@@ -297,8 +373,6 @@ async function requestHeroPlate(st){
   }catch(_){ /* degrade silently */ }
   finally{ HERO.pending=false; }
 }
-probeFxStatus();
-
 /* ============================ websocket ============================ */
 function connect(){
   ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
@@ -336,19 +410,28 @@ function onState(st){
   $("sYou").textContent=st.score; $("sWall").textContent=st.saves;
   dots($("dYou"),false); dots($("dWall"),true);
 
-  $("midTop").textContent = st.phase==="lobby"?"LOBBY":st.phase==="end"?"FULL TIME":"SHOOTOUT";
-  $("midBot").textContent = st.phase==="end"||st.phase==="lobby"?"GESTURE FOOTBALL":
+  $("midTop").textContent = st.phase==="lobby"?"LOBBY":st.phase==="end"?"FULL TIME":st.phase==="generating"?"NEXT VENUE":"SHOOTOUT";
+  $("midBot").textContent = st.phase==="end"||st.phase==="lobby"||st.phase==="generating"?(st.level?`LEVEL ${st.level}`:"GESTURE FOOTBALL"):
     `KICK ${st.kick} OF ${st.kicksTotal}`;
 
   $("ledP").classList.toggle("on",!!st.connected?.phone);
 
   const desk=$("desk");
   desk.className="desk "+(st.llm?"live":"tmpl");
-  $("deskName").textContent=st.llm==="cloud"?"CLAUDE DESK":st.llm==="local"?"LOCAL AI DESK":"TEMPLATE DESK";
+  $("deskName").textContent=
+    st.llm==="geniex"?"GENIEX DESK":
+    st.llm==="cloud"?"CLAUDE DESK":
+    st.llm==="local"?"LOCAL AI DESK":"TEMPLATE DESK";
   if(st.line) $("line").textContent=st.line;
 
+  setLevelBadge(st.level);
+  if(st.sceneMetrics?.source) setSceneBadge(st.sceneMetrics.source);
+
   const big=$("big"), sub=$("sub"), btn=$("startBtn"), abort=$("abortBtn");
+  const report=$("reportLine"), genWrap=$("genBarWrap"), genBar=$("genBar"), genMeta=$("genMeta");
   big.className=""; btn.classList.add("hide");
+  report.classList.remove("show"); report.textContent="";
+  genWrap.classList.remove("show"); genMeta.classList.remove("show");
   // END MATCH visible for any live / full-time phase (not lobby).
   abort.classList.toggle("hide", st.phase==="lobby");
   if(st.phase!=="lobby"){ abort.disabled=false; abort.textContent="END MATCH"; }
@@ -388,11 +471,34 @@ function onState(st){
         requestHeroPlate(st);
       }
       break;}
+    case "generating":{
+      big.textContent="NEXT VENUE";
+      const p=st.genProgress||0;
+      sub.textContent=`Designing the ground… ${p}%`;
+      btn.classList.add("hide"); abort.classList.remove("hide");
+      genWrap.classList.add("show"); genBar.style.width=`${p}%`;
+      const m=st.sceneMetrics;
+      if(m&&(m.total_ms||m.tokens)){
+        genMeta.classList.add("show");
+        const bits=[];
+        if(m.total_ms) bits.push(`${m.total_ms} ms`);
+        if(m.tokens) bits.push(`${m.tokens} tok`);
+        genMeta.textContent=bits.join(" · ");
+      }
+      break;}
     case "end":{
+      if(prev?.phase!=="end" && st.scene) applyScene(st.scene);
       big.textContent=`${st.score} / ${st.kicksTotal}`;
       big.className=st.score>st.kicksTotal/2?"goal":"save";
       sub.textContent=st.score>st.kicksTotal/2?"YOU BEAT THE WALL":"THE WALL STANDS";
-      btn.classList.remove("hide"); btn.disabled=false; btn.textContent="PLAY AGAIN"; break;}
+      if(st.report){ report.textContent=st.report; report.classList.add("show"); }
+      btn.classList.remove("hide"); btn.disabled=false;
+      btn.textContent=st.level?"NEXT VENUE":"PLAY AGAIN";
+      if(st.sceneMetrics?.total_ms){
+        genMeta.classList.add("show");
+        genMeta.textContent=`scene ${st.sceneMetrics.total_ms} ms · ${st.sceneMetrics.source||""}`;
+      }
+      break;}
   }
   speakLine(st);
   sceneOnState(st,prev);
@@ -411,9 +517,9 @@ $("soundBtn").onclick=()=>{
 };
 function speakLine(st){
   if(!soundOn||!st.line||!("speechSynthesis"in window))return;
-  if(!["announce","resolve","end"].includes(st.phase))return;
+  if(!["announce","resolve","end","generating"].includes(st.phase))return;
   // one line per kick+phase — the async AI-desk upgrade must not re-speak
-  const key=`${st.phase}:${st.kick}`;
+  const key=`${st.phase}:${st.kick}:${st.level||0}`;
   if(key===spokenKey)return;
   spokenKey=key;
   speechSynthesis.cancel();
@@ -573,9 +679,10 @@ addEventListener("resize",()=>{clearTimeout(rszT);rszT=setTimeout(rebuild,140);}
 /* ---------------------------- static: sky + bowl ---------------------------- */
 function buildSky(){
   LBG=mk(W,H); const c=LBG.getContext("2d");
-  // night sky above the roof line
+  // night sky above the roof line — --night CSS var drives campaign sky
+  const skyHex=(getComputedStyle(document.documentElement).getPropertyValue("--night").trim())||"#0B1D2A";
   const sky=c.createLinearGradient(0,0,0,STOP);
-  sky.addColorStop(0,"#02040a"); sky.addColorStop(0.7,"#071120"); sky.addColorStop(1,"#0b1a2c");
+  sky.addColorStop(0,"#02040a"); sky.addColorStop(0.7,skyHex); sky.addColorStop(1,skyHex);
   c.fillStyle=sky; c.fillRect(0,0,W,STOP+4);
   for(let i=0;i<90;i++){ // stars
     c.fillStyle=`rgba(220,235,255,${0.2+Math.random()*0.5})`;
@@ -617,8 +724,8 @@ function buildSky(){
   c.fillStyle="rgba(160,215,255,.42)"; c.fillRect(0,STOP-2,W,2);
   c.fillStyle="rgba(3,6,10,.8)";
   for(let x=W*0.04;x<W;x+=W/13) c.fillRect(x,roofTop+H*0.004,Math.max(2,W*0.0022),STOP-roofTop);
-  // floodlight towers rising above the roof
-  FLP.forEach(([fx,fy])=>{
+  // floodlight towers rising above the roof (hidden when FLOODLIGHTS false)
+  if(FLOODLIGHTS) FLP.forEach(([fx,fy])=>{
     const fw=W*0.052, fh=H*0.034;
     c.fillStyle="#0d141c";
     c.fillRect(fx-fw*0.09,fy,fw*0.18,STOP-fy);            // mast
@@ -827,7 +934,7 @@ function updateCrowd(now,dt){
       e+=(1-ct)*(0.55+0.45*Math.sin(now/92+colSeed[i]*9));
     FX.exc[i]+=(clamp(e,0,1)-FX.exc[i])*Math.min(1,dt*9);
   }
-  const rate=FX.flashRate+(now<FX.flashBurst?26:0);
+  const rate=(FX.flashRate+(now<FX.flashBurst?26:0))*Math.max(0.15, CROWD_LEVEL||1);
   if(Math.random()<rate*dt)
     FX.flashes.push({x:Math.random()*W,y:STOP+Math.random()*CH*0.95,t0:now});
 }
@@ -1703,7 +1810,10 @@ function sceneOnState(st,p){
       FX.flashRate=2; sfxWhistle(); rampAmb(0.035,0.3); break;   // stadium holds its breath
     case "resolve":
       FX.flashRate=3; break;                                     // ball + dive set by shoot()
+    case "generating":
+      FX.flashRate=3; rampAmb(0.05,1.0); break;
     case "end":{
+      if(p?.phase!=="end" && st.scene) applyScene(st.scene);
       FX.flashRate=10; dive=null;
       const won=st.score>st.kicksTotal/2;
       if(won){ celebrate(null,6000); burstConfetti(220); sfxCheer(true); FX.flashBurst=performance.now()+2500; }
