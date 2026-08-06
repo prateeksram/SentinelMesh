@@ -1,438 +1,241 @@
-# Gesture Football — End-to-End Guide
+# GESTURE ARENA
 
-Body-controlled penalty shootout on Snapdragon silicon.
+Body-controlled **football · darts · basketball** on one stadium TV.
 
-**Hand aims. Leg kicks. ForcePose measures Newtons on-device. Whisper hears you. A private coach talks back — no camera video leaves the phone.** The laptop runs the match, THE WALL (AI keeper), the TV stadium, on-device GenieX venue generation, and the AI100 post-match scouting report.
+Your body is the controller: a **leg swing** takes the penalty, a **hand
+throw** launches the dart, a **jump shot** sends the basketball. Motion is
+measured on-device (Arduino **UNO Q** pose pipeline and/or a Snapdragon
+phone), only tiny JSON crosses the LAN, and the laptop renders a
+broadcast-style venue that follows the sport — floodlit stadium, wood-panelled
+darts hall, or indoor arena with a parquet court — with an AI goalkeeper,
+ring targets, commentary, replays, and a **GenieX-driven campaign** that
+redesigns the venue and raises the difficulty after every match.
 
-This document is the full path from zero → first goal → next venue → scouting QR.
+This folder is the **merged, canonical project** — it combines the original
+`ball-game` (UNO Q snapkick trajectory pipeline + object classifier),
+`SentinelMesh-prateek` (match server, AI keeper, stadium TV, Android striker)
+and the SceneEngine branch (GenieX venue design + campaign difficulty).
 
 ---
 
-## What you are building
+## Architecture
 
-| Role | Device | Responsibility |
+```
+                    ┌──────────────────────── LAPTOP ────────────────────────┐
+UNO Q pose pipeline │                                                        │
+(snapkick.pose.v1)  │  snapkick_bridge.py ──ws "unoq"──┐                     │
+ ──UDP :5005──────────►  (UDP → WebSocket)             ▼                     │
+                    │                            server.py :8080             │
+Phone (Android app  │                            · match engine (5 attempts) │
+or public/phone.html│  ──ws "phone"─────────────► · hybrid referee           │
+in a browser)       │                            · AI keeper (THE WALL)      │
+                    │                            · AI commentary desk        │
+                    │                                   │ ws "tv"            │
+                    │                                   ▼                    │
+                    │                        public/tv.html (stadium TV)     │
+                    └────────────────────────────────────────────────────────┘
+```
+
+Everything runs on one Wi-Fi / hotspot. No internet needed for the game
+(the optional LLM commentary desk is the only cloud-touching feature).
+
+## Folder layout
+
+| Path | What it is |
+|---|---|
+| `server.py` | Match host: WebSocket hub, game engine, hybrid referee, AI keeper, commentary |
+| `snapkick_bridge.py` | UNO Q adapter: `snapkick.pose.v1` UDP :5005 → striker client over WebSocket |
+| `snapkick_sim.py` | Fake UNO Q — schema-faithful packets, a kick every ~4 s (test without hardware) |
+| `public/tv.html` | The stadium TV: all three sports, sport-true striker animation, replays, VFX |
+| `public/phone.html` | Browser striker fallback (MediaPipe pose + ForcePose in the phone browser) |
+| `neural_fx.py` / `NEURAL_FX.md` | Hero-plate FX for the TV: procedural, or Depth-Anything-V2 via ONNX/QNN if a model is in `models/` |
+| `scene_engine.py` / `SCENE_ENGINE.md` | SceneEngine: GenieX designs the next venue + difficulty after full time |
+| `geniex_client.py` | Shared async GenieX client (commentary desk + SceneEngine) |
+| `test_combined.py` | End-to-end test: all three sports + campaign progression through bridge + server (self-launching) |
+| `test_match.py` | Original phone-striker regression test |
+| `test_scene_gen.py` / `e2e_sim.py` | SceneEngine smoke test / scripted match simulator |
+| `docs/phone_protocol.md` | The WebSocket protocol (phone / unoq / tv clients) |
+| `android/` | Native Android striker app (Hexagon NPU pose, ForcePose, Whisper voice, private coach) |
+| `tools/` | Model push/fetch scripts for the Android app + legacy UNO Q IMU sender |
+| `classifier/` | **Future layer**: phone object classifier (show a ball → arena switches). Not wired in yet |
+| `models/` | Drop `hero_depth.onnx` here to upgrade TV neural FX (optional) |
+
+---
+
+## Setup (laptop, one-time)
+
+Needs **Python 3.13** (`py -3.13` on Windows) and one dependency:
+
+```powershell
+cd gesture-arena
+py -3.13 -m pip install -r requirements.txt
+```
+
+macOS / Linux: `python3 -m pip install -r requirements.txt`.
+
+Firewall: allow Python inbound on **TCP 8080** (TV/phone/WS) and **UDP 5005**
+(UNO Q). For the *browser* phone striker's camera you also need HTTPS :8443 —
+generate certs next to `server.py`:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 365 -subj "/CN=gesture-arena"
+```
+
+(The native Android app and the TV do **not** need HTTPS.)
+
+## Run it
+
+**Terminal 1 — match host + TV:**
+```powershell
+py -3.13 server.py
+```
+Open `http://localhost:8080/tv.html` on the TV/laptop screen.
+
+**Terminal 2 — UNO Q bridge:**
+```powershell
+py -3.13 snapkick_bridge.py
+```
+Options: `--host <ip>:8080` if the server is on another machine,
+`--udp-port` if the board sends elsewhere. The TV's **UNO Q** LED turns
+green when the bridge connects.
+
+**Terminal 3 — motion source (pick one):**
+
+| Source | How |
+|---|---|
+| No hardware (demo/test) | `py -3.13 snapkick_sim.py` — random kick every ~4 s |
+| Real UNO Q | Point its pipeline's UDP output at `<laptop-ip>:5005`. No code changes — the bridge accepts `snapkick.pose.v1` as-is |
+| Phone (native app) | Install the `android/` app, set HOST to `<laptop-ip>:8080`, tap HOST |
+| Phone (browser) | `https://<laptop-ip>:8443/phone.html` (accept the cert warning) |
+
+Phone and UNO Q can be connected **at the same time** — the first action in
+each shoot window counts.
+
+**On the TV:** pick a sport in the lobby (⚽ 🎯 🏀), then **START MATCH**.
+5 attempts per match; **PLAY AGAIN** re-enters the lobby where you can switch
+sport.
+
+## The three sports — gesture, referee, scoring
+
+The UNO Q pipeline always speaks the same `snapkick.pose.v1` schema — whatever
+physical gesture its model detects becomes `kick_candidate` + a solved
+`trajectory` (impact point in metres at the target plane). The TV mirrors the
+gesture: the on-pitch athlete **kicks**, **throws**, or **rises into a jump
+shot** to match the sport, and the projectile (ball / dart / basketball)
+leaves from the right place — turf, ear height, or overhead.
+
+### ⚽ Football — hybrid referee
+1. **Geometry first** (from `goalX`/`goalZ`, the real trajectory impact):
+   outside the 7.32 × 2.44 m goal → **WIDE**; within 15 cm of the frame →
+   **POST**. The keeper never touches off-target shots.
+2. **THE WALL second**: on-target shots face the AI keeper. It read your aim
+   hand ~0.45 s before the strike (late feints beat it), studies your shot
+   history, and dives at the goal-mouth third your ball is heading for.
+   Same-third dives usually save — unless the impact is deep in the corner or
+   `power` beats the glove (> 0.82).
+3. Scorebug: goals vs saves.
+
+### 🎯 Darts — ring geometry, no keeper
+Metric rings around the bull at 1.73 m: **≤0.10 m = 100 · ≤0.30 m = 60 ·
+≤0.60 m = 30 · ≤0.95 m = 10**, else miss. Darts fly fast and flat, and stick
+in the board. Scorebug: points vs misses.
+
+### 🏀 Basketball — ring geometry, no keeper
+Rings around the hoop centre at 2.0 m: **≤0.25 m = 100 (swish) ·
+≤0.55 m = 40 · ≤0.95 m = 10**. Scorebug: points vs misses.
+
+Strikers that only send a zone (phone browser / Android today) still work
+everywhere: football falls back to the original probabilistic referee, and
+target sports synthesise an impact from zone + height + power.
+
+## Campaign & SceneEngine
+
+After every full time the server enters a **NEXT VENUE** phase: SceneEngine
+feeds your match stats to **GenieX** (local Qwen3, OpenAI-compatible at
+`GF_GENIEX_URL`) which designs the next venue — time of day, sky, floodlights,
+crowd energy, a scouting report — **and the difficulty**:
+
+| Knob | Applies to | Effect as levels rise (1 → 5) |
 |---|---|---|
-| **Player 1** | Android phone (`android/`) | Pose, ForcePose, Whisper, private coach, aim/kick JSON |
-| **Edge pose (optional)** | Arduino UNO Q + USB camera (`unoq/`) | Full-body pose, foot tracking, kick state, preview relay |
-| **Host / TV** | Laptop (`laptop/server.py` + `tv.html`) | Match engine, keeper, stadium UI, SceneEngine, AI100 report |
-| **On-device LLM (laptop)** | GenieX Qwen3-4B | Desk commentary + agentic next-venue TV skins |
-| **Cloud (optional)** | Qualcomm AI100 SDXL | Report artwork only (not HTML, not scores) |
+| `keeperIq` / `keeperReaction` | football | THE WALL reads you better, reacts faster |
+| `powerBeat` | football | harder to beat the glove with raw power |
+| `ringScale` | darts / basketball | scoring rings shrink 1.0× → 0.6× — same throw, fewer points |
+| `shootWindow` | all sports | level 3+ puts you on the clock (3.0 → 2.2 s) |
 
-**Privacy rule:** camera frames stay on the phone. The wire is tiny JSON over WebSocket (`aim`, `kick`, `skel`).
+Campaign level never regresses on **PLAY AGAIN / NEXT VENUE** (progression is
+goals in football, on-target count in darts/basketball); **END MATCH** (abort)
+resets the campaign to level 1. With GenieX offline everything still works —
+template venues and the same difficulty curve, badge shows `SCENE · TEMPLATE`.
 
-```mermaid
-flowchart LR
-  Phone[Galaxy phone NPU] -->|"aim / kick / skel"| Host[laptop server.py :8080]
-  Camera[USB camera] --> UNOQ[Arduino UNO Q pose]
-  UNOQ -->|"UDP pose + HTTP preview"| Host
-  Host --> TV[tv.html stadium]
-  Host --> GenieX[GenieX :18181]
-  Host --> FX[Neural FX depth]
-  Host --> AI100[AI100 report QR]
-  GenieX --> Scene[SceneEngine venue HTML]
-  Scene --> TV
-```
+The TV venue also **follows the sport**: floodlit stadium for football, a
+wood-panelled darts hall with pendant lamps and a brass bar rail, and an
+indoor arena with trusses, light banks and a parquet court for basketball —
+with the scene atmosphere (sky, tint, lights, crowd) layered on top.
 
----
+## Protocol
 
-## Prerequisites
+Full spec: [`docs/phone_protocol.md`](docs/phone_protocol.md). Summary:
 
-| Need | Notes |
-|---|---|
-| Windows laptop (Snapdragon X Elite recommended) | Host + GenieX |
-| Python 3.10+ (ARM64 OK) | `pip install -r requirements.txt` |
-| Same Wi‑Fi / hotspot as the phone | LAN only — match does not need internet |
-| Android phone (Galaxy S25 Ultra target) | Native app, not browser |
-| Optional: GenieX CLI | Desk + SceneEngine quality |
-| Optional: `AI100_API_KEY` | Cloud report art; procedural fallback works |
-| Optional: JDK 17 + Android SDK | Rebuild APK |
+- Clients `hello` as `phone`, `unoq`, or `tv`.
+- Strikers stream `{"type":"aim","zone":"L|C|R"}` and fire one
+  `{"type":"kick", zone, power, force, dirDeg, height, spin, strike, foot,
+  goalX, goalZ, apexM, speed}` per shoot window (metric fields optional —
+  the UNO Q bridge always includes them).
+- TV sends `{"type":"sport"}` (lobby), `start`, `again`, `abort`.
+- Server broadcasts full `state` snapshots to everyone.
 
----
+The bridge's UNO Q input contract is exactly what `snapkick_sim.py` emits:
+`kick_confidence ≥ 0.60` gates a kick, 0.8 s per-track cooldown, and
+`trajectory.predicted_goal_x/z` (metres; x lateral, − = left; z = height)
+is authoritative.
 
-## One-time setup
-
-### 1. Clone and Python deps
+## Testing
 
 ```powershell
-cd C:\Users\qc_de\SentinelMesh
-python -m pip install -r requirements.txt
-# Optional Neural FX ONNX:
-# python -m pip install onnxruntime
+py -3.13 test_combined.py    # all three sports end-to-end (launches its own server + bridge)
+py -3.13 test_match.py       # phone-striker regression (start server.py first, fast GF_* env)
+py -3.13 test_scene_gen.py   # SceneEngine smoke: score 1/5 vs 3/5 → different venues/difficulty
 ```
 
-### 2. AI100 report key (optional)
-
-```powershell
-Copy-Item ai100\.env.example ai100\.env
-# Edit ai100\.env → set AI100_API_KEY
-```
-
-Without a key, reports still generate with procedural artwork and a QR.
-
-### 3. GenieX (laptop LLM)
-
-```powershell
-$env:QAI_HUB_API_TOKEN = "<your AI Hub token>"   # never commit
-.\laptop\fetch_aihub_models.ps1
-geniex pull ai-hub-models/Qwen3-4B-Instruct-2507
-geniex serve
-# OpenAI-compatible API: http://127.0.0.1:18181/v1
-# Model id: qualcomm/Qwen3-4B-Instruct-2507:W4A16
-```
-
-If GenieX is down, Desk and SceneEngine fall back to templates — the match still runs.
-
-### 4. Laptop depth model (optional Neural FX)
-
-`fetch_aihub_models.ps1` also places depth ONNX under `laptop/models/`. Missing model → procedural hero plates only.
-
-### 5. Android APK
-
-```powershell
-# Set JAVA_HOME / ANDROID_HOME for your machine
-cd android
-.\gradlew.bat :app:assembleDebug
-adb install -r app\build\outputs\apk\debug\app-debug.apk
-```
-
-**On-device models**
-
-| Model | How |
-|---|---|
-| Pose landmark (NPU) | Bundled in APK `assets/npu/` |
-| Whisper Tiny | `.\tools\push_whisper_models.ps1` → app `files/whisper/` |
-| Qwen coach (optional) | `.\tools\push_qwen_models.ps1 -Source <folder>` |
-
-### 6. TLS certs (browser `phone.html` only)
-
-Native app uses plain `ws://…:8080` — **no certs**. For Chrome camera on LAN:
-
-```powershell
-cd laptop
-openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 365 -subj "/CN=gesture-football"
-```
-
-Server then also serves HTTPS on **8443**.
-
----
-
-## Run a full match (startup order)
-
-### Terminal A — GenieX (optional but recommended)
-
-```powershell
-geniex serve
-```
-
-### Terminal B — laptop host
-
-```powershell
-cd C:\Users\qc_de\SentinelMesh\laptop
-python server.py
-```
-
-Expected console lines:
-
-- `HTTP : http://0.0.0.0:8080`
-- Desk / FX / Scene readiness
-
-### TV browser
-
-Open **`http://localhost:8080/tv.html`**  
-Debug scene HUD: **`http://localhost:8080/tv.html?debug=1`**
-
-### Phone
-
-1. Same Wi‑Fi as the laptop.
-2. Note laptop LAN IP (`ipconfig`) — e.g. `10.73.51.224`.
-3. Open **Gesture Football** → HOST = `10.73.51.224:8080` → tap **HOST**.
-4. TV **PHONE** LED turns green.
-5. Calibrate once if prompted → step back until **FULL BODY ✓**.
-6. On TV → **START MATCH**.
-
-**Do not** put `localhost` in the phone HOST field unless the server is on the phone.
-
----
-
-## Optional UNO Q edge-pose mode
-
-UNO Q can replace phone-side body-pose inference while preserving the same
-calibration, phone UI, ForcePose state, trajectory visualization, and local
-NPU/GPU/CPU fallback. The USB camera observes the player; UNO Q sends normalized
-pose and optical-flow motion to the laptop, which relays it to the Android app.
-
-From the repository root, the one-step supervisor starts the laptop server,
-USB-camera relay, and remote UNO Q streamer, and cleans them up together:
-
-```powershell
-.\start-game.bat -UnoQIp 192.168.150.72 -CameraIndex 1
-```
-
-In the phone app, tap the delegate badge until it reads `UNO Q`, then calibrate
-and play normally. If the edge stream becomes stale, the app restores local
-phone inference automatically.
-
-- Full deployment and troubleshooting: [`docs/unoq_pipeline.md`](docs/unoq_pipeline.md)
-- One-step launcher reference: [`docs/one_step_setup.md`](docs/one_step_setup.md)
-- State-driven trajectory protocol: [`docs/trajectory_pipeline.md`](docs/trajectory_pipeline.md)
-
-UNO Q uses UDP `9999` for pose and the host exposes `/edge/*` camera/status
-routes on HTTP `8080`.
-
----
-
-## Default ports and URLs
-
-| Service | URL |
-|---|---|
-| TV / static / APIs | `http://localhost:8080/` → `/tv.html` |
-| WebSocket | `ws://<lan-ip>:8080/ws` |
-| Optional HTTPS | `https://<lan-ip>:8443/` |
-| GenieX | `http://127.0.0.1:18181/v1` |
-| Hardware status | `GET /hw/status` |
-| Neural FX status | `GET /fx/status` |
-| Scene status | `GET /scene/status` |
-| Scene brief (export) | `GET /scene/brief` |
-| Scene upload | `POST /scene/upload` |
-
----
-
-## How a match works
-
-### Phases
-
-```
-lobby → announce → countdown → shoot → resolve
-  ↑__________________________________|
-         × kicks (default 5)
-                ↓
-         generating  (SceneEngine + progress bar)
-                ↓
-              end  (NEXT VENUE + AI100 report QR)
-```
-
-| Phase | What happens |
-|---|---|
-| **lobby** | Wait for phone + START |
-| **announce** | Kick N/5; aim freely; Desk line |
-| **countdown** | Feint window — switch corners late |
-| **shoot** | **Aim locks**; swing when ready |
-| **resolve** | Goal / save / post / miss + hero FX |
-| **generating** | Progress bar shows exact GenieX/pipeline steps |
-| **end** | Score, next-venue skin, scouting report QR |
-
-### Aim lock
-
-- Live aim streams only in **announce** / **countdown**.
-- When **shoot** starts, phone + server freeze the corner.
-- Feints after the whistle no longer change the shot.
-
-### How to play
-
-- **Aim** — raised hand → L / C / R (or say left / right / center)
-- **Kick** — leg swing on **KICK!** · ~380 N ≈ full power
-- **Feint** — fake a corner, switch late, then swing (before shoot lock)
-- **Voice** — “ready”, trash-talk → private TTS coach on phone
-
-### Campaign levels
-
-After full time, SceneEngine picks the next venue level from score (never regresses on rematch). Higher levels → harder keeper knobs (`keeperIq`, shorter `shootWindow`, etc.). **NEXT VENUE** keeps campaign state; **END MATCH** / abort resets to lobby level 1.
-
----
-
-## Agentic TV venue generation (SceneEngine)
-
-Golden file [`laptop/public/tv.html`](laptop/public/tv.html) is the **functional contract** forever.
-
-After each match:
-
-1. Load golden contract + learning memory  
-2. GenieX **Director** drafts CSS + overlay + difficulty JSON  
-3. Assemble a full candidate HTML from golden + skin  
-4. **Verify** required IDs / WebSocket / `onState` / `applyScene`  
-5. On fail → record lesson → **Critic** reframe (max 3 attempts)  
-6. **Promote** to `/scenes/live/level_N.html` or template fallback  
-7. TV injects skin (and may navigate to the live page)
-
-Progress labels on TV (`genStep`), e.g.:
-
-- Loading golden TV contract…  
-- Director drafting venue HTML (attempt 1/3)…  
-- Validating candidate against golden contract…  
-- Promoting verified TV page… / Fallback to golden TV  
-
-**Human polish loop**
-
-```powershell
-Invoke-RestMethod http://localhost:8080/scene/brief
-# Edit CSS/HTML elsewhere, then:
-Invoke-RestMethod -Method Post http://localhost:8080/scene/upload `
-  -ContentType application/json `
-  -Body '{"level":3,"css":"body{filter:saturate(1.2)}","overlayHtml":"<div id=\"venueTitleCard\">Night Derby</div>"}'
-```
-
-Upload must pass the same golden verifier before promote.
-
-Details: [`laptop/SCENE_ENGINE.md`](laptop/SCENE_ENGINE.md)
-
----
-
-## Four laptop AI pillars
-
-| Pillar | Module | Job |
+`test_combined.py` asserts: football geometry gates (wide/post) + keeper
+outcomes, exact dart/basketball ring points, sport switching, the metric
+fields surviving the full UDP → bridge → server → state round trip, **and the
+campaign** — level from goals / on-target count, scene generated at full time,
+`ringScale` applied to the target-sport referee.
+
+## Server knobs (env vars)
+
+| var | default | meaning |
 |---|---|---|
-| **Desk** | GenieX via `geniex_client.py` | Spoken/ticker commentary |
-| **Neural FX** | `neural_fx.py` + TV Canvas | Kick hero plates (depth ONNX or procedural) |
-| **SceneEngine** | `scene_engine.py` + `scene_contract.py` | Next venue HTML + difficulty |
-| **AI100 report** | `ai100/` | PNG/PDF scouting card + QR |
-
-Desk waits until SceneEngine finishes so GenieX NPU is not contended.
-
----
-
-## Post-match AI100 report
-
-At `end`, the laptop builds a private scouting card from the existing `shotmap` (no extra phone upload):
-
-- conversion, ForcePose Newtons, placement, chip/drive, foot, feint rate  
-- Ronaldo / Messi sample comparison (clearly labeled)  
-- AI100 SDXL artwork **or** procedural art  
-- TV QR → landing / PNG / PDF (unguessable token, ~30 min expiry)
-
-Simulate without playing:
-
-```powershell
-Invoke-RestMethod -Method Post http://localhost:8080/api/report/simulate `
-  -ContentType application/json -Body '{"playerName":"Demo Striker"}'
-# or:
-python ai100\simulate_report.py --player "Demo Striker"
-```
-
-Details: [`ai100/README.md`](ai100/README.md)
-
----
-
-## Phone stack (Player 1)
-
-| Capability | Implementation |
-|---|---|
-| Sees you | CameraX + Hexagon NPU pose (tap **DELEGATE**: NPU → GPU → CPU) |
-| Knows you | One-time calibration → `player_profile.json` on device only |
-| Measures you | ForcePose (Savitzky–Golay → torso metres → F = m × a) |
-| Hears you | Whisper Tiny on Hexagon (pushed models) |
-| Talks back | TTS + private coach (grounded; optional on-device Qwen) |
-
-Protocol: [`docs/phone_protocol.md`](docs/phone_protocol.md)  
-Deep dive: [`README_GalaxyS25.md`](README_GalaxyS25.md) · [`android/README.md`](android/README.md)
-
-### Pitch line
-
-*Snapdragon hears you, measures your kick in Newtons, coaches you privately, and only sends a tiny JSON shot to the TV.*
-
----
-
-## Environment knobs
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `GF_KICKS` | `5` | Kicks per match |
-| `GF_SHOOT_WINDOW` | `0` | ≤0 = wait forever for kick; scenes may override |
-| `GF_KEEPER_REACTION` | `0.45` | Feint window (s) before kick |
-| `GF_KEEPER_IQ` | `0.75` | Base keeper skill |
-| `GF_ANNOUNCE_S` | `3.5` | Announce duration |
-| `GF_COUNTDOWN_S` | `3.0` | Countdown |
-| `GF_RESOLVE_S` | `3.8` | Resolve / replay |
-| `GF_GENIEX` | `1` | Desk uses GenieX |
-| `GF_GENIEX_URL` | `http://127.0.0.1:18181/v1` | GenieX base |
-| `GF_GENIEX_MODEL` | `qualcomm/Qwen3-4B-Instruct-2507:W4A16` | Model id |
-| `GF_SCENE_TIMEOUT_S` | `90` | Director/critic timeout |
-| `GF_SCENE_MAX_LEVEL` | `5` | Campaign cap |
-| `GF_SCENE_MAX_ATTEMPTS` | `3` | Gen → verify retries |
-| `GF_PUBLIC_BASE_URL` | auto LAN | QR origin (use ngrok HTTPS for off-LAN) |
-| `GF_ENABLE_REPORT_SIM` | `0` | Allow simulate endpoint remotely |
-| `AI100_API_KEY` | in `ai100/.env` | Cloud artwork |
-
-Fast pacing for development:
-
-```powershell
-$env:GF_ANNOUNCE_S="0.1"; $env:GF_COUNTDOWN_S="0.2"
-$env:GF_SHOOT_WINDOW="1.0"; $env:GF_RESOLVE_S="0.1"
-python laptop\server.py
-```
-
----
-
-## Verification / smoke tests
-
-```powershell
-# With server running (and GenieX if you want live Desk):
-cd laptop
-python e2e_sim.py          # full phone/TV simulation + report asserts
-python debug_scene.py      # agentic venue gen · two levels · contract check
-python test_scene_gen.py
-python test_scene_upload.py
-python test_match.py
-
-cd ..
-python -m pytest ai100\test_report_engine.py -q
-```
-
----
+| `GF_KICKS` | 5 | attempts per match |
+| `GF_SHOOT_WINDOW` | 0 | seconds to act; ≤ 0 waits forever |
+| `GF_KEEPER_REACTION` | 0.45 | keeper reads aim this many s before the strike |
+| `GF_KEEPER_IQ` | 0.75 | 0 = random · 1 = psychic |
+| `GF_ANNOUNCE_S` / `GF_COUNTDOWN_S` / `GF_RESOLVE_S` | 3.5 / 3.0 / 3.8 | pacing |
+| `GF_GENIEX` | 1 | set 0 to skip the GenieX desk (falls to local/cloud/templates) |
+| `GF_GENIEX_URL` / `GF_GENIEX_MODEL` | `http://127.0.0.1:18181/v1` / Qwen3-4B W4A16 | GenieX endpoint + model id |
+| `GF_SCENE_TIMEOUT_S` / `GF_SCENE_MAX_LEVEL` | 90 / 5 | scene generation timeout · campaign cap |
+| `ANTHROPIC_API_KEY` or `GF_LLM_URL` | — | fallback AI commentary desks |
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| TV **PHONE** red | HOST = laptop **LAN** IP + same Wi‑Fi; tap HOST |
-| START greyed out | Phone WebSocket not connected |
-| HOLD LIKE A MIRROR | Step back — shoulders **and** ankles visible |
-| `VOICE · NO MODEL` | `.\tools\push_whisper_models.ps1` → force-stop app → relaunch |
-| Auto-kick / timeout | Ensure `GF_SHOOT_WINDOW=0` (or unset) for wait-forever |
-| Scene looks identical | Open `tv.html?debug=1`; check `/scene/status` fingerprint + `genStep` |
-| GenieX / SCENE · TEMPLATE | Start `geniex serve`; check `/hw/status` |
-| Report stuck generating | Check `ai100/.env`; procedural art still works without key |
-| QR blank off-LAN | Set `GF_PUBLIC_BASE_URL` to ngrok HTTPS origin |
-| Aim drifts mid-kick | Rebuild phone APK (aim lock); server also freezes on shoot |
-| CAMERA BLOCKED (browser) | Use native app, or HTTPS `:8443` for `phone.html` |
+| Bridge: `WinError 10048` on UDP 5005 | Something else owns the port — usually a leftover `game_server.py` from the old ball-game. Kill stray `python` processes |
+| Random kicks you didn't make | A forgotten `snapkick_sim.py` is still running somewhere — kill it |
+| TV UNO Q LED red | Bridge not running, or wrong `--host` |
+| START MATCH greyed out | No striker connected (need phone **or** UNO Q green) |
+| Board sends but nothing happens | Firewall blocking UDP 5005, wrong laptop IP on the board — test with `snapkick_sim.py` on the laptop first |
+| Phone browser camera black | You used `http://` — camera needs the `https://:8443` page (or use the native app) |
+| Kicks double-count / ghost kicks | Raise the cooldown / confidence constants at the top of `snapkick_bridge.py` |
+| Sport buttons do nothing | Sport can only change in the **lobby** (END MATCH first) |
 
----
+## Roadmap (agreed next steps)
 
-## Repo map
-
-| Path | Purpose |
-|---|---|
-| [`laptop/server.py`](laptop/server.py) | Match host, WS hub, Desk, Scene, FX, reports |
-| [`laptop/public/tv.html`](laptop/public/tv.html) | Golden TV UI |
-| [`laptop/scene_engine.py`](laptop/scene_engine.py) | Agentic venue generation |
-| [`laptop/scene_contract.py`](laptop/scene_contract.py) | Golden functional verifier |
-| [`laptop/neural_fx.py`](laptop/neural_fx.py) | Hero depth / procedural FX |
-| [`laptop/geniex_client.py`](laptop/geniex_client.py) | Shared GenieX client |
-| [`ai100/`](ai100/) | Post-match report engine |
-| [`android/`](android/) | Player 1 native app |
-| [`docs/phone_protocol.md`](docs/phone_protocol.md) | Wire protocol |
-| [`laptop/SCENE_ENGINE.md`](laptop/SCENE_ENGINE.md) | Venue generation deep dive |
-| [`laptop/NEURAL_FX.md`](laptop/NEURAL_FX.md) | Stadium FX deep dive |
-| [`README_GalaxyS25.md`](README_GalaxyS25.md) | Phone-side technical README |
-
----
-
-## 90-second demo beat
-
-1. Tap **DELEGATE** — NPU / GPU / CPU latency changes  
-2. Calibration — profile never leaves this Snapdragon  
-3. Full-body kick — ForcePose Newtons on TV  
-4. Say “ready” — Whisper on Hexagon  
-5. Feint in countdown, swing after aim lock  
-6. Full time — watch **genStep** progress → new venue look  
-7. Scan AI100 report QR  
-
----
-
-## Stretch (not required for demo)
-
-| Item | Notes |
-|---|---|
-| Full GenieX Qwen on phone NPU | Coach works offline today |
-| IMU kick failover | Cover lens, still score |
-| Arduino UNO Q Player 2 | Same WebSocket protocol |
-| Headless Playwright smoke on candidates | Static contract ships today |
+- **Object classifier layer** (`classifier/`): phone camera recognises the
+  physical ball (football / basketball / dart) and switches the arena
+  automatically — the training + TF.js export pipeline is ready in the
+  folder; it needs a `POST /api/object` route on `server.py` and a
+  `sport` broadcast, mirroring how the TV lobby buttons work today.
+- Android app: send `goalX`/`goalZ` from its ForcePose trajectory for
+  hybrid-refereed phone kicks; sport-aware gesture detection (throw / shot).

@@ -3,27 +3,19 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-.env
-.env.*
-!.env.example
 
 # TLS certs for the phone camera — never commit these
 *.pem
 
-# Large AI Hub model binaries (fetch via laptop/fetch_aihub_models.ps1)
-laptop/models/*.onnx
-laptop/models/*.data
-laptop/models/*.zip
-laptop/models/_export_depth/
-laptop/logs/
-laptop/data/reports/
-laptop/data/report_cache/
-laptop/public/scenes/*.json
-laptop/public/scenes/candidates/
-laptop/public/scenes/live/
-laptop/public/scenes/contract.json
-ai100/cache/
-ai100/data/reports/
+# Large AI Hub model binaries (fetch via fetch_aihub_models.ps1)
+models/*.onnx
+models/*.data
+models/*.zip
+models/_export_depth/
+
+# Runtime output — regenerated on every run, never committed
+logs/
+public/scenes/*.json
 
 # editor / OS noise
 .DS_Store
@@ -37,8 +29,3 @@ android/.idea/
 *.iml
 *.apk
 *.aab
-
-# Local USB-camera relay runtime output
-relay.*.log
-server.*.log
-logs/

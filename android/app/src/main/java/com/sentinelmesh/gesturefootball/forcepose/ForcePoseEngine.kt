@@ -1,8 +1,6 @@
 package com.sentinelmesh.gesturefootball.forcepose
 
 import com.sentinelmesh.gesturefootball.profile.PlayerProfile
-import com.sentinelmesh.gesturefootball.pose.KickKinematicState
-import com.sentinelmesh.gesturefootball.pose.ShotTrajectory
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
@@ -44,10 +42,6 @@ class ForcePoseEngine(
         val spin: Float = 0f,
         /** chip | drive */
         val strike: String = "drive",
-        /** Source-neutral motion state used by the visualization model. */
-        val kinematics: KickKinematicState? = null,
-        /** Optional pose-derived trajectory; match scoring still has a legacy fallback. */
-        val trajectory: ShotTrajectory? = null,
     )
 
     /** Per-joint motion track: raw ring for the median tap + smoothed buffer. */
@@ -61,7 +55,6 @@ class ForcePoseEngine(
         var softCount = 0
         var startX = 0f
         var startY = 0f
-        var startT = 0.0
 
         fun clear() {
             raw.clear()
@@ -69,7 +62,6 @@ class ForcePoseEngine(
             restY.clear()
             overCount = 0
             softCount = 0
-            startT = 0.0
         }
     }
 
@@ -132,8 +124,6 @@ class ForcePoseEngine(
         // Kept for call-site compatibility; wrists are not used for kick validation.
         leftWristX: Float = -1f, leftWristY: Float = -1f, leftWristVis: Float = 0f,
         rightWristX: Float = -1f, rightWristY: Float = -1f, rightWristVis: Float = 0f,
-        /** Pixel width / height; used only to make exported motion state metric-like. */
-        frameAspect: Float = 1f,
     ): KickEvent? {
         val torsoLen = hypot(shoulderMidX - hipMidX, shoulderMidY - hipMidY)
         if (torsoLen < 0.05f) return null
@@ -190,7 +180,6 @@ class ForcePoseEngine(
                 if (track.overCount == 0) {
                     track.startX = sm.x
                     track.startY = sm.y
-                    track.startT = sm.t
                 }
                 track.overCount++
                 track.softCount = 0
@@ -223,21 +212,6 @@ class ForcePoseEngine(
                         } else {
                             "drive"
                         }
-                        // Preserve the calibrated detector above, but export
-                        // aspect-correct state so every pose backend shares
-                        // the same physical coordinate convention.
-                        val stateVx = v1.first * frameAspect.coerceIn(0.25f, 4f)
-                        val stateVy = v1.second
-                        val stateSpeed = hypot(stateVx, stateVy)
-                        val stateDx = (sm.x - track.startX) * frameAspect.coerceIn(0.25f, 4f)
-                        val stateDy = sm.y - track.startY
-                        val stateDisplacement = hypot(stateDx, stateDy)
-                        val pathScore = (stateDisplacement / 0.28f).coerceIn(0f, 1f)
-                        val speedScore = (stateSpeed / max(kickMs * 1.8f, 0.1f)).coerceIn(0f, 1f)
-                        val stateConfidence = (
-                            0.35f + 0.20f * vis.coerceIn(0f, 1f) +
-                                0.25f * pathScore + 0.20f * speedScore
-                            ).coerceIn(0f, 1f)
                         event = KickEvent(
                             zone = zone,
                             power = power,
@@ -248,16 +222,6 @@ class ForcePoseEngine(
                             height = height,
                             spin = spin,
                             strike = strike,
-                            kinematics = KickKinematicState(
-                                peakFootSpeedMps = stateSpeed,
-                                lateralVelocityMps = stateVx,
-                                upwardVelocityMps = -stateVy,
-                                pathDisplacementM = stateDisplacement,
-                                liftM = (restingY - sm.y).coerceAtLeast(0f),
-                                swingDurationMs = ((sm.t - track.startT) * 1000.0)
-                                    .toLong().coerceAtLeast(0L),
-                                confidence = stateConfidence,
-                            ),
                         )
                     }
                 }

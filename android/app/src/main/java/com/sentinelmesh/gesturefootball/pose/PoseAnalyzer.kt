@@ -25,7 +25,7 @@ class PoseAnalyzer(
     private val onKick: (ForcePoseEngine.KickEvent) -> Unit,
     private val onSkeleton: (Long, List<FloatArray>) -> Unit,
 ) {
-    enum class Mode { NPU, GPU, CPU, UNO_Q }
+    enum class Mode { NPU, GPU, CPU }
 
     data class Hud(
         val zone: String,
@@ -45,9 +45,6 @@ class PoseAnalyzer(
         val shoulderY: Float? = null,
         /** Why the last near-kick was rejected: soft | short | null. */
         val kickReject: String? = null,
-        /** Detailed UNO Q-only rejection and motion telemetry. */
-        val kickDiagnostics: EdgeKickEngine.Diagnostics? = null,
-        val sourceFps: Float = 0f,
     )
 
     companion object {
@@ -57,12 +54,8 @@ class PoseAnalyzer(
         const val R_WRI = 16
         const val L_HIP = 23
         const val R_HIP = 24
-        const val L_KNEE = 25
-        const val R_KNEE = 26
         const val L_ANK = 27
         const val R_ANK = 28
-        const val L_HEEL = 29
-        const val R_HEEL = 30
         const val L_FOOT = 31
         const val R_FOOT = 32
         private const val MODEL_ASSET = "pose_landmarker_lite.task"
@@ -73,12 +66,11 @@ class PoseAnalyzer(
 
     private val appContext = context.applicationContext
     private val force = ForcePoseEngine()
-    private val edgeForce = EdgeKickEngine()
     private var landmarkerGpu: PoseLandmarker? = null
     private var landmarkerCpu: PoseLandmarker? = null
     private var npu: NpuPoseEngine? = null
     private var npuAvailable = false
-    @Volatile var mode: Mode = Mode.GPU
+    var mode: Mode = Mode.GPU
         private set
     var zone: String = "C"
         private set
@@ -86,10 +78,6 @@ class PoseAnalyzer(
     var calibrationSwing: Boolean = false
     private var lastKickAt = 0L
     private var lastShootPhase = false
-    @Volatile private var remoteEnteredAt = 0L
-    @Volatile private var lastRemoteAt = 0L
-    private var lastRemoteSeq = -1L
-    private var lastRemoteCaptureNs = -1L
     private var bodyOkStreak = 0
     /** Consecutive NPU null inferences — fall back to MediaPipe so calib isn't stuck. */
     private var npuNullStreak = 0
@@ -119,15 +107,13 @@ class PoseAnalyzer(
         }
     }
 
-    /** Cycle NPU → GPU → CPU → UNO Q → NPU (skips NPU if unavailable). */
+    /** Cycle NPU → GPU → CPU → NPU (skips NPU if unavailable). */
     fun cycleDelegate(): String {
         mode = when (mode) {
             Mode.NPU -> Mode.GPU
             Mode.GPU -> Mode.CPU
-            Mode.CPU -> Mode.UNO_Q
-            Mode.UNO_Q -> if (npuAvailable) Mode.NPU else Mode.GPU
+            Mode.CPU -> if (npuAvailable) Mode.NPU else Mode.GPU
         }
-        resetSourceState()
         when (mode) {
             Mode.NPU -> {
                 if (npu == null) npu = NpuPoseEngine.create(appContext)
@@ -142,13 +128,6 @@ class PoseAnalyzer(
             }
             Mode.GPU -> ensureLandmarker(Delegate.GPU)
             Mode.CPU -> ensureLandmarker(Delegate.CPU)
-            Mode.UNO_Q -> {
-                remoteEnteredAt = SystemClock.elapsedRealtime()
-                lastRemoteAt = 0L
-                lastRemoteSeq = -1L
-                lastRemoteCaptureNs = -1L
-                delegateLabel = "UNO Q"
-            }
         }
         Log.i(TAG, "delegate → $delegateLabel")
         return delegateLabel
@@ -182,7 +161,6 @@ class PoseAnalyzer(
 
     fun applyProfile(profile: PlayerProfile) {
         force.applyProfile(profile)
-        edgeForce.applyProfile(profile)
         aimLMax = profile.aimLMax
         aimCMin = profile.aimCMin
         aimCMax = profile.aimCMax
@@ -190,7 +168,7 @@ class PoseAnalyzer(
     }
 
     fun setKickThreshold(ms: Float) {
-        if (mode == Mode.UNO_Q) edgeForce.setKickThreshold(ms) else force.setKickThreshold(ms)
+        force.setKickThreshold(ms)
     }
 
     fun forceZone(z: String) {
@@ -206,79 +184,6 @@ class PoseAnalyzer(
         landmarkerCpu = null
     }
 
-    /** Full 33-point MediaPipe frame received from the UNO Q via the host. */
-    fun ingestRemotePose(
-        seq: Long,
-        captureNs: Long,
-        landmarks: List<FloatArray>,
-        physicsLandmarks: List<FloatArray>,
-        visibility: FloatArray,
-        latencyMs: Long,
-        frameWidth: Int,
-        frameHeight: Int,
-        sourceFps: Float,
-        flowMotion: EdgeKickEngine.FlowMotion?,
-    ) {
-        if (mode != Mode.UNO_Q) return
-        if (captureNs > 0L && captureNs <= lastRemoteCaptureNs) return
-        if (captureNs <= 0L && seq <= lastRemoteSeq) return
-        lastRemoteSeq = seq
-        lastRemoteCaptureNs = captureNs
-        lastRemoteAt = SystemClock.elapsedRealtime()
-        if (landmarks.size != 33 || visibility.size != 33) {
-            bodyOkStreak = 0
-            onHud(Hud(zone, false, 0f, null, latencyMs, "UNO Q", bodyOkStreak = 0))
-            return
-        }
-        val timestampMs = if (captureNs > 0L) captureNs / 1_000_000L else lastRemoteAt
-        processLandmarks(
-            landmarks = landmarks,
-            vis = { i -> visibility[i] },
-            world = physicsLandmarks.map { floatArrayOf(it[0], it[1], it.getOrElse(2) { 0f }) },
-            latency = latencyMs,
-            timestampMs = timestampMs,
-            label = "UNO Q",
-            edgeInput = EdgeInput(
-                landmarks = physicsLandmarks,
-                visibility = visibility,
-                frameWidth = frameWidth,
-                frameHeight = frameHeight,
-                sourceFps = sourceFps,
-                flowMotion = flowMotion,
-            ),
-        )
-    }
-
-    fun isRemoteStale(timeoutMs: Long = 2500L): Boolean {
-        if (mode != Mode.UNO_Q) return false
-        val newest = maxOf(remoteEnteredAt, lastRemoteAt)
-        return newest > 0L && SystemClock.elapsedRealtime() - newest > timeoutMs
-    }
-
-    /** Automatic recovery path; local inference remains initialized and available. */
-    fun fallbackFromRemote(): String {
-        if (mode != Mode.UNO_Q) return delegateLabel
-        mode = if (npuAvailable) Mode.NPU else Mode.GPU
-        resetSourceState()
-        if (mode == Mode.NPU) {
-            delegateLabel = "NPU"
-        } else {
-            ensureLandmarker(Delegate.GPU)
-        }
-        return delegateLabel
-    }
-
-    private fun resetSourceState() {
-        force.resetBuffers()
-        force.resetSwing()
-        edgeForce.reset()
-        bodyOkStreak = 0
-        lastKickAt = 0L
-        lastShootPhase = false
-        lastTorsoX = Float.NaN
-        lastTorsoY = Float.NaN
-    }
-
     fun analyze(bitmap: Bitmap, timestampMs: Long) {
         when (mode) {
             Mode.NPU -> {
@@ -292,7 +197,6 @@ class PoseAnalyzer(
             }
             Mode.GPU -> analyzeMp(bitmap, timestampMs, landmarkerGpu, "GPU")
             Mode.CPU -> analyzeMp(bitmap, timestampMs, landmarkerCpu, "CPU")
-            Mode.UNO_Q -> Unit
         }
     }
 
@@ -336,7 +240,6 @@ class PoseAnalyzer(
             latency = result.latencyMs,
             timestampMs = timestampMs,
             label = "NPU",
-            frameAspect = bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1).toFloat(),
         )
     }
 
@@ -374,7 +277,6 @@ class PoseAnalyzer(
             latency = latency,
             timestampMs = timestampMs,
             label = label,
-            frameAspect = bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1).toFloat(),
         )
     }
 
@@ -385,8 +287,6 @@ class PoseAnalyzer(
         latency: Long,
         timestampMs: Long,
         label: String,
-        edgeInput: EdgeInput? = null,
-        frameAspect: Float = 1f,
     ) {
         fun x(i: Int) = landmarks[i][0]
         fun y(i: Int) = landmarks[i][1]
@@ -411,7 +311,6 @@ class PoseAnalyzer(
             val jump = hypot(torsoX - lastTorsoX, torsoY - lastTorsoY)
             if (jump > 0.15f) {
                 force.resetBuffers()
-                edgeForce.reset()
                 bodyOkStreak = 0
                 Log.i(TAG, "person-switch jump=$jump — buffers cleared")
             }
@@ -442,9 +341,7 @@ class PoseAnalyzer(
         }
 
         val shoot = phase == "shoot"
-        if ((shoot || calibrationSwing) && !lastShootPhase) {
-            if (edgeInput != null) edgeForce.resetSwing() else force.resetSwing()
-        }
+        if ((shoot || calibrationSwing) && !lastShootPhase) force.resetSwing()
         lastShootPhase = shoot || calibrationSwing
 
         val lfX = (x(L_ANK) + x(L_FOOT)) / 2f
@@ -452,68 +349,22 @@ class PoseAnalyzer(
         val rfX = (x(R_ANK) + x(R_FOOT)) / 2f
         val rfY = (y(R_ANK) + y(R_FOOT)) / 2f
         val framedOk = calibrationSwing || bodyOkStreak >= BODY_OK_FRAMES
-        val phaseOk = shoot || calibrationSwing
-        val cooldownOk = timestampMs - lastKickAt > 900
-        val canKick = phaseOk && framedOk && cooldownOk
-        val gateReject = when {
-            !phaseOk -> "not in shoot"
-            !framedOk -> "not framed"
-            !cooldownOk -> "cooldown"
-            else -> null
-        }
+        val canKick = (shoot || calibrationSwing) && framedOk && timestampMs - lastKickAt > 900
 
-        val edgeResult = edgeInput?.let { input ->
-            edgeForce.update(
-                nowMs = timestampMs,
-                landmarks = input.landmarks,
-                visibility = input.visibility,
-                frameWidth = input.frameWidth,
-                frameHeight = input.frameHeight,
-                zone = zone,
-                canKick = canKick,
-                gateReject = gateReject,
-                aimHandY = wristY,
-                flow = input.flowMotion,
-            )
-        }
-        val detectedKick = edgeResult?.kick ?: if (edgeInput == null) {
-            force.update(
-                nowMs = timestampMs,
-                leftFootX = lfX, leftFootY = lfY, leftVis = vis(L_ANK),
-                rightFootX = rfX, rightFootY = rfY, rightVis = vis(R_ANK),
-                shoulderMidX = shoulderMidX,
-                shoulderMidY = shoulderMidY,
-                hipMidX = hipMidX,
-                hipMidY = hipMidY,
-                zone = zone,
-                canKick = canKick,
-                aimHandY = wristY,
-                leftWristX = x(L_WRI), leftWristY = y(L_WRI), leftWristVis = vis(L_WRI),
-                rightWristX = x(R_WRI), rightWristY = y(R_WRI), rightWristVis = vis(R_WRI),
-                frameAspect = frameAspect,
-            )
-        } else {
-            null
-        }
-        // This is the single source-normalization seam. Every inference mode
-        // contributes the same kinematic state; the estimator is deliberately
-        // unaware of whether those landmarks came from NPU, GPU, CPU or UNO Q.
-        val kick = detectedKick?.let { raw ->
-            val state = raw.kinematics?.copy(source = label)
-            raw.copy(
-                kinematics = state,
-                trajectory = state?.let {
-                    ShotTrajectoryEstimator.estimate(
-                        zone = raw.zone,
-                        power = raw.power,
-                        height = raw.height,
-                        spin = raw.spin,
-                        strike = raw.strike,
-                        state = it,
-                    )
-                },
-            )
-        }
+        val kick = force.update(
+            nowMs = timestampMs,
+            leftFootX = lfX, leftFootY = lfY, leftVis = vis(L_ANK),
+            rightFootX = rfX, rightFootY = rfY, rightVis = vis(R_ANK),
+            shoulderMidX = shoulderMidX,
+            shoulderMidY = shoulderMidY,
+            hipMidX = hipMidX,
+            hipMidY = hipMidY,
+            zone = zone,
+            canKick = canKick,
+            aimHandY = wristY,
+            leftWristX = x(L_WRI), leftWristY = y(L_WRI), leftWristVis = vis(L_WRI),
+            rightWristX = x(R_WRI), rightWristY = y(R_WRI), rightWristVis = vis(R_WRI),
+        )
         if (kick != null) {
             lastKickAt = timestampMs
             onKick(kick)
@@ -525,33 +376,16 @@ class PoseAnalyzer(
 
         onHud(
             Hud(
-                zone, bodyOk,
-                if (edgeInput != null) edgeForce.liveForce else force.liveForce,
-                landmarks, latency, label,
+                zone, bodyOk, force.liveForce, landmarks, latency, label,
                 wristXMirrored = wristXMirrored,
                 wristY = wristY,
-                liveSpeed = if (edgeInput != null) edgeForce.liveSpeed else force.liveSpeed,
-                liveFoot = if (edgeInput != null) edgeForce.liveFoot else force.liveFoot,
+                liveSpeed = force.liveSpeed,
+                liveFoot = force.liveFoot,
                 bodyOkStreak = bodyOkStreak,
                 inGuide = inGuide,
                 shoulderY = shoulderMidY,
-                kickReject = edgeResult?.diagnostics?.reject ?: if (edgeInput == null) {
-                    force.consumeReject()
-                } else {
-                    gateReject
-                },
-                kickDiagnostics = edgeResult?.diagnostics,
-                sourceFps = edgeInput?.sourceFps ?: 0f,
+                kickReject = force.consumeReject(),
             )
         )
     }
-
-    private data class EdgeInput(
-        val landmarks: List<FloatArray>,
-        val visibility: FloatArray,
-        val frameWidth: Int,
-        val frameHeight: Int,
-        val sourceFps: Float,
-        val flowMotion: EdgeKickEngine.FlowMotion?,
-    )
 }

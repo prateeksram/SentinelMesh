@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ball Classifier</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<style>
+  body { margin:0; background:#111; color:#eee; font-family:sans-serif; text-align:center; }
+  video { width:100%; max-height:70vh; object-fit:cover; }
+  #label { font-size:2em; margin:16px; min-height:1.2em; }
+  #status { color:#6f6; font-size:1.1em; min-height:1.2em; }
+</style>
+</head>
+<body>
+<video id="v" autoplay playsinline muted></video>
+<div id="label">loading model…</div>
+<div id="status"></div>
+
+<script>
+const SEND_CONF = 0.70;    // min confidence to consider a detection
+const STABLE_MS = 1200;    // label must hold this long before sending
+const SMOOTH = 6;          // frames to average
+
+let model, classes, history = [];
+let stableLabel = null, stableSince = 0, lastSent = null;
+
+const cnv = document.createElement("canvas");
+cnv.width = 224; cnv.height = 224;
+const v = document.getElementById("v");
+const labelEl = document.getElementById("label");
+const statusEl = document.getElementById("status");
+
+async function main() {
+  classes = await (await fetch("web_model/classes.json")).json();
+  model = await tf.loadLayersModel("web_model/model.json");
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: "environment" }   // rear camera
+  });
+  v.srcObject = stream;
+  labelEl.textContent = "point camera at an object";
+  setInterval(classify, 250);
+}
+
+async function classify() {
+  if (v.videoWidth === 0) return;
+  // center-crop the frame to a square, then resize to 224x224
+  const s = Math.min(v.videoWidth, v.videoHeight);
+  cnv.getContext("2d").drawImage(
+    v, (v.videoWidth - s) / 2, (v.videoHeight - s) / 2, s, s, 0, 0, 224, 224);
+
+  const probs = tf.tidy(() =>
+    model.predict(tf.browser.fromPixels(cnv).toFloat().expandDims(0)).dataSync());
+
+  history.push(Array.from(probs));
+  if (history.length > SMOOTH) history.shift();
+  const avg = history[0].map((_, i) =>
+    history.reduce((a, h) => a + h[i], 0) / history.length);
+
+  let idx = 0;
+  avg.forEach((p, i) => { if (p > avg[idx]) idx = i; });
+  const name = classes[idx], conf = avg[idx];
+  labelEl.textContent = `${name}  ${(conf * 100).toFixed(0)}%`;
+
+  if (conf >= SEND_CONF && name !== "nothing") {
+    if (stableLabel !== name) {
+      stableLabel = name; stableSince = Date.now();
+    } else if (Date.now() - stableSince > STABLE_MS && lastSent !== name) {
+      lastSent = name;
+      await fetch("/api/object", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ object: name, confidence: conf }),
+      });
+      statusEl.textContent = `sent "${name}" to game ✔`;
+    }
+  } else {
+    stableLabel = null;
+  }
+}
+
+main().catch(e => { labelEl.textContent = "Error: " + e.message; });
+</script>
+</body>
+</html>

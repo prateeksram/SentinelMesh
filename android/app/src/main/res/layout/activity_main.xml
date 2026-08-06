@@ -20,18 +20,6 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- Same full-bleed visual surface, enabled only for the optional UNO Q source. -->
-    <com.sentinelmesh.gesturefootball.ui.RemoteCameraView
-        android:id="@+id/edgePreview"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:background="#000000"
-        android:visibility="gone"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent" />
-
     <com.sentinelmesh.gesturefootball.ui.OverlayView
         android:id="@+id/overlay"
         android:layout_width="0dp"
@@ -457,12 +445,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:visibility="gone"
-            android:paddingTop="10dp"
-            android:text=""
-            android:textColor="@color/muted"
-            android:textSize="9sp"
-            android:fontFamily="monospace"
-            android:lineSpacingExtra="2dp" />
+            android:text="" />
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
