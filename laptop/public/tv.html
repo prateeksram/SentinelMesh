@@ -120,6 +120,24 @@
   #soundBtn{font:inherit;color:var(--chalk);background:#22374a;border:1px solid #31506a;
             border-radius:999px;padding:5px 14px;cursor:pointer;letter-spacing:1.5px}
   #soundBtn.off{color:var(--mut);background:transparent}
+  #fxBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
+  #fxBadge.on{color:var(--cyan)}
+  #fxBadge.qnn{color:var(--amber)}
+  #deskBadge,#sceneBadge,#levelBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
+  #deskBadge.on,#sceneBadge.on,#levelBadge.on{color:var(--cyan)}
+  #genBarWrap{position:fixed;left:50%;transform:translateX(-50%);bottom:78px;z-index:6;
+              width:min(480px,70vw);height:6px;border-radius:999px;background:rgba(20,40,60,.7);
+              border:1px solid rgba(158,190,215,.25);overflow:hidden;display:none}
+  #genBarWrap.show{display:block}
+  #genBar{height:100%;width:0%;background:linear-gradient(90deg,var(--cyan),var(--amber));
+          transition:width .2s linear}
+  #genMeta{position:fixed;left:50%;transform:translateX(-50%);bottom:90px;z-index:6;
+           font-family:var(--fCond);font-weight:700;letter-spacing:1.5px;font-size:12px;
+           color:var(--mut);display:none}
+  #genMeta.show{display:block}
+  #reportLine{margin-top:10px;font-family:var(--fCond);font-weight:600;letter-spacing:1px;
+              font-size:clamp(13px,1.6vw,18px);color:var(--mut);max-width:70vw;display:none}
+  #reportLine.show{display:block}
 </style>
 </head>
 <body>
@@ -146,9 +164,13 @@
   <div class="overlay">
     <div id="big">GESTURE FOOTBALL</div>
     <div id="sub">waiting for the striker…</div>
+    <div id="reportLine"></div>
     <button id="startBtn" disabled>START MATCH</button>
   </div>
 </div>
+
+<div id="genBarWrap"><div id="genBar"></div></div>
+<div id="genMeta"></div>
 
 <div class="ticker">
   <div class="desk tmpl" id="desk"><span class="pulse"></span><span id="deskName">TEMPLATE DESK</span></div>
@@ -156,6 +178,10 @@
   <div class="links">
     <span><span class="led" id="ledP"></span>PHONE</span>
     <span><span class="led on"></span>THE WALL</span>
+    <span id="deskBadge" title="Commentary desk backend">DESK · …</span>
+    <span id="fxBadge" title="On-device stadium neural FX">FX · …</span>
+    <span id="sceneBadge" title="SceneEngine">SCENE · …</span>
+    <span id="levelBadge" title="Campaign level">LVL —</span>
     <button id="soundBtn" title="Speak the keeper's lines">SOUND ON</button>
     <button id="abortBtn" class="hide" title="End the match and return to lobby">END MATCH</button>
   </div>
@@ -165,6 +191,188 @@
 const $=id=>document.getElementById(id);
 let S=null, prev=null, ws=null;
 
+/* ============================ VFX director ============================ */
+const VFX={
+  force:0, power:0.5, spin:0, strike:"drive", height:"L", result:null, zone:null,
+  kickFlashT:-1e9, shockT:-1e9, washT:-1e9, washColor:"amber",
+  bloom:0, chroma:0, intensity:0.5,
+};
+function vfxTier(force){
+  return clamp((Number(force)||0)/380, 0, 1.35);
+}
+function vfxArmFromLast(last){
+  if(!last) return;
+  VFX.force=last.force||0;
+  VFX.power=last.power??0.5;
+  VFX.spin=typeof last.spin==="number"?clamp(last.spin,-1,1)
+    :clamp((last.dirDeg||0)/45,-1,1);
+  VFX.strike=last.strike==="chip"?"chip":"drive";
+  VFX.height=last.height==="H"?"H":"L";
+  VFX.result=last.result||null;
+  VFX.zone=last.zone||null;
+  VFX.intensity=vfxTier(VFX.force);
+}
+function vfxOnImpact(now, res){
+  const I=VFX.intensity;
+  VFX.kickFlashT=now;
+  VFX.shockT=now;
+  VFX.washT=now;
+  VFX.washColor=res==="goal"?"amber":res==="save"?"cyan":"white";
+  VFX.bloom=0.35+0.65*I;
+  VFX.chroma=0.25+0.55*I;
+}
+function drawPostFX(now){
+  // Canvas2D broadcast post pass (Adreno-friendly). WebGPU bloom when available.
+  const flashQ=(now-VFX.kickFlashT)/280;
+  const shockQ=(now-VFX.shockT)/520;
+  const washQ=(now-VFX.washT)/900;
+  if(flashQ>=0&&flashQ<1){
+    const a=(1-flashQ)*VFX.chroma*0.55;
+    cx.save();
+    cx.globalCompositeOperation="screen";
+    cx.fillStyle=`rgba(255,60,40,${a*0.55})`;
+    cx.fillRect(-3,0,W,H);
+    cx.fillStyle=`rgba(40,200,255,${a*0.45})`;
+    cx.fillRect(3,0,W,H);
+    cx.restore();
+  }
+  if(shockQ>=0&&shockQ<1){
+    const R=(0.08+0.55*shockQ)*Math.min(W,H)*(0.7+0.5*VFX.intensity);
+    const a=(1-shockQ)*0.55*VFX.intensity;
+    cx.save();
+    cx.strokeStyle=VFX.washColor==="amber"?`rgba(255,196,0,${a})`
+      :VFX.washColor==="cyan"?`rgba(62,199,244,${a})`:`rgba(255,255,255,${a})`;
+    cx.lineWidth=Math.max(2, H*0.006*(1-shockQ*0.6));
+    cx.beginPath(); cx.arc(W/2, H*0.58, R, 0, 7); cx.stroke();
+    cx.restore();
+  }
+  if(washQ>=0&&washQ<1){
+    const a=(1-washQ)*VFX.bloom*0.35;
+    const g=cx.createRadialGradient(W/2,H*0.48,Math.min(W,H)*0.12,W/2,H*0.5,Math.max(W,H)*0.7);
+    if(VFX.washColor==="amber"){
+      g.addColorStop(0,`rgba(255,196,0,${a})`); g.addColorStop(1,"rgba(255,196,0,0)");
+    }else if(VFX.washColor==="cyan"){
+      g.addColorStop(0,`rgba(62,199,244,${a})`); g.addColorStop(1,"rgba(62,199,244,0)");
+    }else{
+      g.addColorStop(0,`rgba(244,247,241,${a*0.7})`); g.addColorStop(1,"rgba(244,247,241,0)");
+    }
+    cx.fillStyle=g; cx.fillRect(0,0,W,H);
+  }
+  // Soft always-on bloom lift during resolve for high-force kicks.
+  if(S?.phase==="resolve" && VFX.intensity>0.45){
+    const a=0.06*VFX.intensity;
+    cx.fillStyle=`rgba(255,220,140,${a})`;
+    cx.globalCompositeOperation="screen";
+    cx.fillRect(0,0,W,H);
+    cx.globalCompositeOperation="source-over";
+  }
+  // Scene grade tint (campaign atmosphere).
+  const grade={
+    day:[200,220,255,0.06], morning:[220,230,210,0.05], afternoon:[255,200,120,0.07],
+    golden:[255,160,60,0.10], night:[10,30,50,0.08],
+  }[SCENE_GRADE];
+  if(grade){
+    cx.fillStyle=`rgba(${grade[0]},${grade[1]},${grade[2]},${grade[3]})`;
+    cx.globalCompositeOperation="multiply";
+    cx.fillRect(0,0,W,H);
+    cx.globalCompositeOperation="source-over";
+  }
+}
+
+/* Neural FX hero plate (from /fx/hero) */
+const HERO={img:null, kick:-1, backend:null, pending:false, ms:0};
+function setFxBadge(backend){
+  const el=$("fxBadge");
+  if(!el) return;
+  el.classList.remove("on","qnn");
+  if(backend==="qnn"){ el.textContent="FX · QNN"; el.classList.add("qnn"); }
+  else if(backend==="cpu"){ el.textContent="FX · CPU"; el.classList.add("on"); }
+  else if(backend==="procedural"){ el.textContent="FX · NPU-READY"; el.classList.add("on"); }
+  else if(backend){ el.textContent="FX · "+String(backend).toUpperCase(); el.classList.add("on"); }
+  else el.textContent="FX · OFF";
+}
+async function probeFxStatus(){
+  try{
+    const r=await fetch("/fx/status");
+    const j=await r.json();
+    setFxBadge(j.backend||"procedural");
+  }catch(_){ setFxBadge(null); }
+}
+async function probeHwStatus(){
+  try{
+    const r=await fetch("/hw/status");
+    const j=await r.json();
+    const desk=$("deskBadge");
+    if(desk){
+      const m=(j.desk||"templates").toUpperCase();
+      desk.textContent="DESK · "+(m==="GENIEX"?"GENIEX":m==="LOCAL"?"LOCAL":m==="CLOUD"?"CLOUD":"TEMPLATES");
+      desk.classList.toggle("on", !!j.desk);
+    }
+    if(j.fx?.backend) setFxBadge(j.fx.backend);
+  }catch(_){}
+}
+function setSceneBadge(source){
+  const el=$("sceneBadge");
+  if(!el) return;
+  if(source==="geniex"){ el.textContent="SCENE · READY"; el.classList.add("on"); }
+  else if(source==="template"){ el.textContent="SCENE · TEMPLATE"; el.classList.remove("on"); }
+  else{ el.textContent="SCENE · …"; el.classList.remove("on"); }
+}
+function setLevelBadge(level){
+  const el=$("levelBadge");
+  if(!el) return;
+  if(level){ el.textContent=`LVL ${level}/5`; el.classList.add("on"); }
+  else{ el.textContent="LVL —"; el.classList.remove("on"); }
+}
+probeFxStatus();
+probeHwStatus();
+
+/* Scene atmosphere (campaign venues) */
+let SCENE_GRADE="night", FLOODLIGHTS=true, CROWD_LEVEL=1;
+function applyScene(scene){
+  if(!scene) return;
+  const a=scene.atmosphere||{};
+  document.documentElement.style.setProperty("--night", a.sky||"#0B1D2A");
+  document.documentElement.style.setProperty("--ink", a.tint||"#07131C");
+  SCENE_GRADE=a.grade||"night";
+  FLOODLIGHTS=!!a.floodlights;
+  CROWD_LEVEL=(typeof a.crowd==="number")?a.crowd:1;
+  if(typeof buildSky==="function"){
+    buildSky(); buildCrowd(); buildBoards(); buildPitch(); buildVig();
+  }
+}
+async function requestHeroPlate(st){
+  if(!st?.last || HERO.pending) return;
+  if(!["goal","save","post"].includes(st.last.result)) return;
+  const kick=st.kick;
+  if(HERO.kick===kick && HERO.img) return;
+  HERO.pending=true;
+  try{
+    const body={
+      frames: st.replay?.frames||[],
+      force: st.last.force,
+      result: st.last.result,
+      height: st.last.height,
+      spin: st.last.spin,
+      strike: st.last.strike,
+      foot: st.last.foot,
+    };
+    const r=await fetch("/fx/hero",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(body),
+    });
+    const j=await r.json();
+    if(!j?.ok || !j.plate) return;
+    const im=new Image();
+    im.onload=()=>{
+      if(S?.kick===kick){ HERO.img=im; HERO.kick=kick; HERO.backend=j.backend; HERO.ms=j.ms||0; setFxBadge(j.backend); }
+    };
+    im.src=j.plate;
+    setFxBadge(j.backend||"procedural");
+  }catch(_){ /* degrade silently */ }
+  finally{ HERO.pending=false; }
+}
 /* ============================ websocket ============================ */
 function connect(){
   ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
@@ -202,19 +410,28 @@ function onState(st){
   $("sYou").textContent=st.score; $("sWall").textContent=st.saves;
   dots($("dYou"),false); dots($("dWall"),true);
 
-  $("midTop").textContent = st.phase==="lobby"?"LOBBY":st.phase==="end"?"FULL TIME":"SHOOTOUT";
-  $("midBot").textContent = st.phase==="end"||st.phase==="lobby"?"GESTURE FOOTBALL":
+  $("midTop").textContent = st.phase==="lobby"?"LOBBY":st.phase==="end"?"FULL TIME":st.phase==="generating"?"NEXT VENUE":"SHOOTOUT";
+  $("midBot").textContent = st.phase==="end"||st.phase==="lobby"||st.phase==="generating"?(st.level?`LEVEL ${st.level}`:"GESTURE FOOTBALL"):
     `KICK ${st.kick} OF ${st.kicksTotal}`;
 
   $("ledP").classList.toggle("on",!!st.connected?.phone);
 
   const desk=$("desk");
   desk.className="desk "+(st.llm?"live":"tmpl");
-  $("deskName").textContent=st.llm==="cloud"?"CLAUDE DESK":st.llm==="local"?"LOCAL AI DESK":"TEMPLATE DESK";
+  $("deskName").textContent=
+    st.llm==="geniex"?"GENIEX DESK":
+    st.llm==="cloud"?"CLAUDE DESK":
+    st.llm==="local"?"LOCAL AI DESK":"TEMPLATE DESK";
   if(st.line) $("line").textContent=st.line;
 
+  setLevelBadge(st.level);
+  if(st.sceneMetrics?.source) setSceneBadge(st.sceneMetrics.source);
+
   const big=$("big"), sub=$("sub"), btn=$("startBtn"), abort=$("abortBtn");
+  const report=$("reportLine"), genWrap=$("genBarWrap"), genBar=$("genBar"), genMeta=$("genMeta");
   big.className=""; btn.classList.add("hide");
+  report.classList.remove("show"); report.textContent="";
+  genWrap.classList.remove("show"); genMeta.classList.remove("show");
   // END MATCH visible for any live / full-time phase (not lobby).
   abort.classList.toggle("hide", st.phase==="lobby");
   if(st.phase!=="lobby"){ abort.disabled=false; abort.textContent="END MATCH"; }
@@ -238,13 +455,50 @@ function onState(st){
       const r=st.last?.result;
       big.textContent=r==="goal"?"GOAL!":r==="save"?"SAVED!":r==="post"?"POST!":"SKIED!";
       big.className=r==="goal"?"goal":r==="save"?"save":"warn";
-      sub.textContent=st.last?.force?`${st.last.force} N STRIKE · FORCEPOSE`:"";
-      if(prev?.phase!=="resolve"){pop(); shoot(st.last);} break;}
+      const bits=[];
+      if(st.last?.force) bits.push(`${st.last.force} N`);
+      if(st.last?.strike) bits.push(String(st.last.strike).toUpperCase());
+      if(st.last?.height==="H") bits.push("HIGH");
+      else if(st.last?.height==="L") bits.push("LOW");
+      bits.push("FORCEPOSE");
+      sub.textContent=bits.join(" · ");
+      if(prev?.phase!=="resolve"){
+        pop();
+        vfxArmFromLast(st.last);
+        shoot(st.last);
+        requestHeroPlate(st);
+      } else if(st.replay?.frames?.length && HERO.kick!==st.kick){
+        requestHeroPlate(st);
+      }
+      break;}
+    case "generating":{
+      big.textContent="NEXT VENUE";
+      const p=st.genProgress||0;
+      sub.textContent=`Designing the ground… ${p}%`;
+      btn.classList.add("hide"); abort.classList.remove("hide");
+      genWrap.classList.add("show"); genBar.style.width=`${p}%`;
+      const m=st.sceneMetrics;
+      if(m&&(m.total_ms||m.tokens)){
+        genMeta.classList.add("show");
+        const bits=[];
+        if(m.total_ms) bits.push(`${m.total_ms} ms`);
+        if(m.tokens) bits.push(`${m.tokens} tok`);
+        genMeta.textContent=bits.join(" · ");
+      }
+      break;}
     case "end":{
+      if(prev?.phase!=="end" && st.scene) applyScene(st.scene);
       big.textContent=`${st.score} / ${st.kicksTotal}`;
       big.className=st.score>st.kicksTotal/2?"goal":"save";
       sub.textContent=st.score>st.kicksTotal/2?"YOU BEAT THE WALL":"THE WALL STANDS";
-      btn.classList.remove("hide"); btn.disabled=false; btn.textContent="PLAY AGAIN"; break;}
+      if(st.report){ report.textContent=st.report; report.classList.add("show"); }
+      btn.classList.remove("hide"); btn.disabled=false;
+      btn.textContent=st.level?"NEXT VENUE":"PLAY AGAIN";
+      if(st.sceneMetrics?.total_ms){
+        genMeta.classList.add("show");
+        genMeta.textContent=`scene ${st.sceneMetrics.total_ms} ms · ${st.sceneMetrics.source||""}`;
+      }
+      break;}
   }
   speakLine(st);
   sceneOnState(st,prev);
@@ -263,9 +517,9 @@ $("soundBtn").onclick=()=>{
 };
 function speakLine(st){
   if(!soundOn||!st.line||!("speechSynthesis"in window))return;
-  if(!["announce","resolve","end"].includes(st.phase))return;
+  if(!["announce","resolve","end","generating"].includes(st.phase))return;
   // one line per kick+phase — the async AI-desk upgrade must not re-speak
-  const key=`${st.phase}:${st.kick}`;
+  const key=`${st.phase}:${st.kick}:${st.level||0}`;
   if(key===spokenKey)return;
   spokenKey=key;
   speechSynthesis.cancel();
@@ -425,9 +679,10 @@ addEventListener("resize",()=>{clearTimeout(rszT);rszT=setTimeout(rebuild,140);}
 /* ---------------------------- static: sky + bowl ---------------------------- */
 function buildSky(){
   LBG=mk(W,H); const c=LBG.getContext("2d");
-  // night sky above the roof line
+  // night sky above the roof line — --night CSS var drives campaign sky
+  const skyHex=(getComputedStyle(document.documentElement).getPropertyValue("--night").trim())||"#0B1D2A";
   const sky=c.createLinearGradient(0,0,0,STOP);
-  sky.addColorStop(0,"#02040a"); sky.addColorStop(0.7,"#071120"); sky.addColorStop(1,"#0b1a2c");
+  sky.addColorStop(0,"#02040a"); sky.addColorStop(0.7,skyHex); sky.addColorStop(1,skyHex);
   c.fillStyle=sky; c.fillRect(0,0,W,STOP+4);
   for(let i=0;i<90;i++){ // stars
     c.fillStyle=`rgba(220,235,255,${0.2+Math.random()*0.5})`;
@@ -469,8 +724,8 @@ function buildSky(){
   c.fillStyle="rgba(160,215,255,.42)"; c.fillRect(0,STOP-2,W,2);
   c.fillStyle="rgba(3,6,10,.8)";
   for(let x=W*0.04;x<W;x+=W/13) c.fillRect(x,roofTop+H*0.004,Math.max(2,W*0.0022),STOP-roofTop);
-  // floodlight towers rising above the roof
-  FLP.forEach(([fx,fy])=>{
+  // floodlight towers rising above the roof (hidden when FLOODLIGHTS false)
+  if(FLOODLIGHTS) FLP.forEach(([fx,fy])=>{
     const fw=W*0.052, fh=H*0.034;
     c.fillStyle="#0d141c";
     c.fillRect(fx-fw*0.09,fy,fw*0.18,STOP-fy);            // mast
@@ -679,7 +934,7 @@ function updateCrowd(now,dt){
       e+=(1-ct)*(0.55+0.45*Math.sin(now/92+colSeed[i]*9));
     FX.exc[i]+=(clamp(e,0,1)-FX.exc[i])*Math.min(1,dt*9);
   }
-  const rate=FX.flashRate+(now<FX.flashBurst?26:0);
+  const rate=(FX.flashRate+(now<FX.flashBurst?26:0))*Math.max(0.15, CROWD_LEVEL||1);
   if(Math.random()<rate*dt)
     FX.flashes.push({x:Math.random()*W,y:STOP+Math.random()*CH*0.95,t0:now});
 }
@@ -742,6 +997,7 @@ function ballReset(){ B.mode="rest"; B.x=0; B.y=0.11; B.d=M.DSPOT; B.trail=[]; }
 
 function shoot(last){                       // called by the HUD on resolve entry
   if(!last) return;
+  vfxArmFromLast(last);
   const res=last.result, z=last.zone, kz=last.keeperZone||"C";
   const power=last.power??0.5;
   let tx,ty,td=M.DG;
@@ -753,7 +1009,7 @@ function shoot(last){                       // called by the HUD on resolve entr
     else{ tx=(z==="L"?-1:1)*(M.GW/2); ty=0.9+Math.random()*1.1; }
   }else{
     // Prefer height band from ForcePose when present.
-    const high=last.height==="H";
+    const high=last.height==="H" || last.strike==="chip";
     tx=Z2X(z)+(Math.random()*2-1)*0.28;
     ty=high?(1.45+Math.random()*0.55):(z==="C"?0.45+Math.random()*0.7:0.55+Math.random()*0.95);
   }
@@ -762,14 +1018,16 @@ function shoot(last){                       // called by the HUD on resolve entr
   // Plant/load first, then ball leaves at foot contact (~35% of kick anim).
   const contact=0.17;
   const kickT=contact/0.35;
-  // Curve from ForcePose swing direction (dirDeg).
+  // Curve: prefer explicit spin; fall back to dirDeg.
   const dirDeg=typeof last.dirDeg==="number"?last.dirDeg:0;
-  const spin=clamp(dirDeg/45,-1,1)*(Math.random()*0.35+0.65)+(Math.random()*2-1)*0.25;
+  const spinIn=typeof last.spin==="number"?clamp(last.spin,-1,1):clamp(dirDeg/45,-1,1);
+  const driveBoost=last.strike==="drive"?1.15:last.strike==="chip"?0.72:1;
+  const spin=(spinIn*(Math.random()*0.25+0.8)+(Math.random()*2-1)*0.12)*driveBoost;
   const tFly=t0+contact*1000;
   B={x:0,y:0.11,d:M.DSPOT,mode:"windup",rot:0,res,zone:z,t0,tFly,tImpact:tFly+T*1000,trail:[],
      curve:spin*2.4,
      katch:res==="save"&&power<0.62&&z===kz,netFrom:null,netTo:null,
-     tx,ty,td,T};
+     tx,ty,td,T,strike:last.strike||"drive",force:last.force||0};
   B.vx=(tx-0-0.5*B.curve*T*T)/T;
   B.vy=(ty-0.11+4.9*T*T)/T;
   B.vd=(td-M.DSPOT)/T;
@@ -786,24 +1044,29 @@ function shoot(last){                       // called by the HUD on resolve entr
 }
 function ballImpact(now){
   const res=B.res;
+  const I=vfxTier(B.force||VFX.force);
+  vfxOnImpact(now, res);
   if(res==="goal"){
     FX.ripple={x:B.x,y:B.y,t0:now};
     B.netFrom={x:B.x,y:B.y,d:B.d};
     B.netTo={x:B.x*0.9,y:Math.min(B.y*0.55,0.75),d:M.DG+1.05};
     B.mode="net"; B.t0=now;
-    sfxCheer(true); celebrate(null,3600); burstConfetti(170); shake(8);
+    sfxCheer(true); celebrate(null,3600);
+    burstConfetti(Math.round(110+140*I));
+    shake(5+10*I);
     FX.flashBurst=now+1700;
   }else if(res==="save"){
     if(B.katch){ B.mode="held"; }
     else{ B.mode="free"; B.vx=Math.sign(B.x||1)*2.6; B.vy=1.3; B.vd=-6.5; }
     sfxGroan(); dimStands(); celebrate(cyanCol,2200);
+    shake(3+4*I);
   }else if(res==="post"){
     B.mode="free";
     if(B.zone==="C"){ B.vy=-Math.abs(B.vy)*0.4-1.6; B.vd=-4.4; B.vx*=0.3; }
     else{ B.vx=-Math.sign(B.x)*3.4; B.vd=-5.2; B.vy=Math.abs(B.vy)*0.25; }
     ringAt(W/2+B.x*sc(B.d),gy(B.d)-B.y*sc(B.d));
     FX.postHitT=now;
-    sfxClang(); sfxGroan(); dimStands(); shake(4);
+    sfxClang(); sfxGroan(); dimStands(); shake(3+5*I);
   }else{ // over
     B.mode="fly2";
     sfxGroan(); dimStands();
@@ -873,12 +1136,17 @@ function drawFlightGuide(){
 function drawBall(){
   if(B.mode==="gone") return;
   const s=sc(B.d), x=W/2+B.x*s, y=gy(B.d)-B.y*s, r=Math.max(4,0.11*s);
-  // Connected streak to the goal.
+  const I=vfxTier(B.force||VFX.force);
+  const drive=B.strike!=="chip";
+  // Connected streak — laser drive vs soft chip loft.
   if(B.trail.length>1){
     cx.save();
     cx.lineCap="round"; cx.lineJoin="round";
-    cx.strokeStyle="rgba(255,220,120,.55)";
-    cx.lineWidth=Math.max(2,r*0.55);
+    cx.strokeStyle=drive?`rgba(255,${Math.round(180+40*I)},80,${0.45+0.25*I})`
+      :`rgba(180,220,255,${0.4+0.2*I})`;
+    cx.lineWidth=Math.max(2,r*(drive?0.55:0.85)*(0.85+0.35*I));
+    cx.shadowColor=drive?"rgba(255,160,40,.7)":"rgba(120,200,255,.55)";
+    cx.shadowBlur=drive?8+10*I:6+6*I;
     cx.beginPath();
     for(let i=0;i<B.trail.length;i++){
       const p=B.trail[i];
@@ -1532,6 +1800,7 @@ function sceneOnState(st,p){
   switch(st.phase){
     case "lobby":
       ballReset(); dive=null; strikerReset(); poseKick=-1; FX.flashRate=1.2; FX.confetti.length=0;
+      HERO.img=null; HERO.kick=-1;
       rampAmb(0.045,1.2); break;
     case "announce":
       ballRollIn(); dive=null; strikerReset(); poseKick=-1; FX.flashRate=4; rampAmb(0.06,1); break;
@@ -1541,7 +1810,10 @@ function sceneOnState(st,p){
       FX.flashRate=2; sfxWhistle(); rampAmb(0.035,0.3); break;   // stadium holds its breath
     case "resolve":
       FX.flashRate=3; break;                                     // ball + dive set by shoot()
+    case "generating":
+      FX.flashRate=3; rampAmb(0.05,1.0); break;
     case "end":{
+      if(p?.phase!=="end" && st.scene) applyScene(st.scene);
       FX.flashRate=10; dive=null;
       const won=st.score>st.kicksTotal/2;
       if(won){ celebrate(null,6000); burstConfetti(220); sfxCheer(true); FX.flashBurst=performance.now()+2500; }
@@ -1586,6 +1858,7 @@ function draw(now){
   drawFX(now,dt);
   cx.restore();
   cx.drawImage(LVIG,0,0);
+  drawPostFX(now);
   if(S?.phase==="resolve" && S.replay?.frames?.length>1) drawReplay(now);
   else replayKick=-1;
 }
@@ -1608,6 +1881,18 @@ function drawReplay(now){
   cx.fillStyle="rgba(5,13,21,.82)";
   cx.beginPath(); cx.roundRect(px-R,py-R*1.18,R*2,R*2.4,H*0.016); cx.fill();
   cx.strokeStyle="rgba(62,199,244,.5)"; cx.lineWidth=Math.max(1.5,H*0.0018); cx.stroke();
+
+  // Neural / procedural depth plate — 2.5D parallax under the skeleton.
+  if(HERO.img && HERO.kick===S.kick){
+    const parallax=Math.sin((now-replayT0)/900)*R*0.06;
+    cx.save();
+    cx.beginPath(); cx.roundRect(px-R+4,py-R*1.05,R*2-8,R*2.05,H*0.012); cx.clip();
+    cx.globalAlpha=0.72;
+    cx.drawImage(HERO.img, px-R+4+parallax, py-R*1.05, R*2-8, R*2.05);
+    cx.globalAlpha=1;
+    cx.restore();
+  }
+
   // REPLAY tab
   const tw=R*0.9, th=Math.max(18,H*0.03);
   cx.fillStyle="#FF4438";
@@ -1618,7 +1903,10 @@ function drawReplay(now){
     cx.beginPath(); cx.arc(px-R+tw*0.09,py-R*1.18-th*0.05,th*0.14,0,7); cx.fill(); }
   cx.font=`800 ${Math.max(10,H*0.017)}px ${FCND}`;
   cx.fillStyle="#3EC7F4";
-  cx.fillText("BULLET TIME · ON-DEVICE 3D",px,py-R*1.18+Math.max(16,H*0.028));
+  const heroTag=HERO.img&&HERO.kick===S.kick
+    ?(HERO.backend==="qnn"?"NEURAL FX · QNN":HERO.backend==="cpu"?"NEURAL FX · CPU":"NEURAL FX · ON-DEVICE")
+    :"BULLET TIME · ON-DEVICE 3D";
+  cx.fillText(heroTag,px,py-R*1.18+Math.max(16,H*0.028));
   if(S.last?.force){ cx.fillStyle="#FFC400";
     cx.font=`900 ${Math.max(12,H*0.022)}px ${FCND}`;
     cx.fillText(`${S.last.force} N`,px,py+R*1.16); }

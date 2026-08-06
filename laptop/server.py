@@ -32,6 +32,10 @@ from pathlib import Path
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
+import geniex_client
+import neural_fx
+import scene_engine
+
 ROOT = Path(__file__).parent
 PUBLIC = ROOT / "public"
 
@@ -54,14 +58,18 @@ ZONES = ("L", "C", "R")
 
 # ============================================================== AI DESK =====
 class Desk:
-    """LLM commentary desk. Local (Ollama, Messages-format) beats cloud
-    (Anthropic API) beats nothing. Every call is fire-and-forget; the game
-    never waits on it. Falls back silently to templates."""
+    """LLM commentary desk. GenieX (default) > local Ollama > Anthropic cloud
+    > templates. Every call is fire-and-forget; the game never waits on it."""
 
     def __init__(self):
         self.local_url = os.environ.get("GF_LLM_URL")           # e.g. http://localhost:11434/v1/messages
         self.api_key   = os.environ.get("ANTHROPIC_API_KEY")
-        if self.local_url:
+        # GenieX is default; set GF_GENIEX=0 to fall through to local/cloud.
+        self.geniex = os.environ.get("GF_GENIEX", "1").lower() not in ("0", "false", "no")
+        if self.geniex:
+            self.mode  = "geniex"
+            self.model = geniex_client.GENIEX_MODEL
+        elif self.local_url:
             self.mode  = "local"
             self.model = os.environ.get("GF_MODEL", "llama3.2:3b")
         elif self.api_key:
@@ -90,6 +98,19 @@ class Desk:
             "end":  "The shootout is over. Deliver the verdict on the human.\n",
         }
         ctx = dict(ctx, recent_lines=self.recent[-3:])
+        if self.mode == "geniex":
+            try:
+                text = await geniex_client.chat(
+                    self.SYSTEM, prompts[kind] + json.dumps(ctx), max_tokens=110, timeout=20.0
+                )
+                if text:
+                    self.recent = (self.recent + [text])[-6:]
+                    return text
+            except Exception as e:
+                if not self._warned:
+                    print(f"[desk] geniex unreachable ({e}) — template commentary continues")
+                    self._warned = True
+            return None
         body = {
             "model": self.model,
             "max_tokens": 110,
@@ -173,10 +194,17 @@ class Game:
         self.sockets: dict[web.WebSocketResponse, str] = {}   # ws -> client id
         self.task: asyncio.Task | None = None
         self.match_gen = 0                      # bumped on abort so a dying match can't clobber lobby
+        # Campaign state survives rematch (cleared only on full _reset / abort).
+        self.campaign_level = 1
+        self.scene = None
+        self.report = ""
+        self.gen_progress = 0
+        self.scene_metrics = None
         self._reset()
 
     # ------------------------------------------------------------ state ----
-    def _reset(self):
+    def _reset_match(self):
+        """Per-match fields only — keeps campaign_level / scene / k_* knobs."""
         self.phase = "lobby"
         self.kick = 0
         self.score = 0                          # striker goals
@@ -191,6 +219,19 @@ class Game:
         self.kick_msg = None
         self.kick_evt = asyncio.Event()
         self.key = 0                            # kick key — guards stale desk lines
+
+    def _reset(self):
+        """Full reset — lobby from cold / abort. Wipes campaign."""
+        self._reset_match()
+        self.campaign_level = 1
+        self.scene = None
+        self.report = ""
+        self.gen_progress = 0
+        self.scene_metrics = None
+        self.k_iq = KEEPER_IQ
+        self.k_react = KEEPER_REACT
+        self.k_window = SHOOT_WINDOW
+        self.k_beat = POWER_BEAT
 
     def _alive(self, gen: int) -> bool:
         return gen == self.match_gen
@@ -211,6 +252,11 @@ class Game:
             "line": self.line,
             "llm": self.desk.mode,
             "connected": {"phone": "phone" in self.sockets.values()},
+            "level": self.campaign_level,
+            "scene": self.scene,
+            "report": self.report,
+            "genProgress": self.gen_progress,
+            "sceneMetrics": self.scene_metrics,
         }
 
     async def broadcast(self):
@@ -249,7 +295,7 @@ class Game:
 
     def keeper_iq(self):
         """Rubber-band: ease off a struggling human, punish a perfect one."""
-        iq = KEEPER_IQ
+        iq = self.k_iq
         taken = len(self.shotmap)
         if taken >= 3:
             rate = self.score / taken
@@ -261,10 +307,10 @@ class Game:
 
     def keeper_pick(self, kick_t):
         """Dive decision. The keeper 'watched' your hand but reacts late:
-        it sees the aim as it was KEEPER_REACT seconds before the kick,
+        it sees the aim as it was k_react seconds before the kick,
         so a last-moment feint sends it the wrong way."""
         seen = None
-        cutoff = kick_t - KEEPER_REACT
+        cutoff = kick_t - self.k_react
         for t, z in reversed(self.aim_trail):
             if t <= cutoff:
                 seen = z
@@ -293,7 +339,7 @@ class Game:
     # ------------------------------------------------------------- referee --
     def referee(self, shot_zone, power, keeper_zone):
         if shot_zone == keeper_zone:
-            p_goal = 0.10 + max(0.0, power - POWER_BEAT) * 2.5   # power can beat the glove
+            p_goal = 0.10 + max(0.0, power - self.k_beat) * 2.5   # power can beat the glove
         else:
             p_goal = 0.90
         p_goal = min(0.98, max(0.02, p_goal))
@@ -349,13 +395,13 @@ class Game:
 
                 # ---------------- shoot -------------------
                 self.phase = "shoot"
-                if SHOOT_WINDOW > 0:
-                    self.timer_end = time.monotonic() + SHOOT_WINDOW
+                if self.k_window > 0:
+                    self.timer_end = time.monotonic() + self.k_window
                     await self.broadcast()
                     if not self._alive(gen):
                         return
                     try:
-                        await asyncio.wait_for(self.kick_evt.wait(), SHOOT_WINDOW)
+                        await asyncio.wait_for(self.kick_evt.wait(), self.k_window)
                     except asyncio.TimeoutError:
                         pass
                 else:
@@ -374,11 +420,16 @@ class Game:
                                          self.kick_msg["power"],
                                          self.kick_msg["t"])
                     force, dir_deg = self.kick_msg["force"], self.kick_msg["dirDeg"]
+                    height = self.kick_msg.get("height")
+                    spin = self.kick_msg.get("spin")
+                    strike = self.kick_msg.get("strike")
+                    foot = self.kick_msg.get("foot")
                     kz = self.keeper_pick(kick_t)
                     result = self.referee(sz, power, kz)
                 else:
                     sz, power, kz, result = None, 0.0, random.choice(ZONES), "over"
                     force, dir_deg = 0, 0
+                    height = spin = strike = foot = None
 
                 if not self._alive(gen):
                     return
@@ -386,10 +437,19 @@ class Game:
                     self.score += 1
                 else:
                     self.saves += 1
-                self.shotmap.append({"kick": self.kick, "zone": sz,
-                                     "keeperZone": kz, "power": round(power, 2),
-                                     "force": force, "dirDeg": dir_deg,
-                                     "result": result})
+                entry = {"kick": self.kick, "zone": sz,
+                         "keeperZone": kz, "power": round(power, 2),
+                         "force": force, "dirDeg": dir_deg,
+                         "result": result}
+                if height in ("H", "L"):
+                    entry["height"] = height
+                if isinstance(spin, (int, float)):
+                    entry["spin"] = round(float(spin), 3)
+                if strike in ("chip", "drive"):
+                    entry["strike"] = strike
+                if foot in ("L", "R"):
+                    entry["foot"] = foot
+                self.shotmap.append(entry)
                 self.last = self.shotmap[-1]
 
                 tkey = result
@@ -410,8 +470,44 @@ class Game:
 
     async def full_time(self):
         self.key += 1
-        self.phase = "end"
+        # 1) end line as today
         self.line = random.choice(T["end"].get(self.score, T["end"][3]))
+        # 2) generating phase — SceneEngine owns the NPU; desk verdict waits until after
+        self.phase = "generating"
+        self.gen_progress = 0
+        await self.broadcast()
+        gen = self.match_gen
+        # 3) pick + generate
+        level = scene_engine.pick_next_level(self.score, self.campaign_level)
+        ctx = scene_engine.build_context(self.score, self.saves, KICKS, self.shotmap)
+        last_bcast = 0.0
+
+        async def progress(p):
+            nonlocal last_bcast
+            self.gen_progress = p
+            now = time.monotonic()
+            if p in (5, 100) or now - last_bcast > 0.25:
+                last_bcast = now
+                if self._alive(gen):
+                    await self.broadcast()
+
+        try:
+            scene = await scene_engine.generate(ctx, level, progress)
+        except asyncio.CancelledError:
+            return
+        if not self._alive(gen):
+            return
+        # 4) apply difficulty + scene
+        d = scene["difficulty"]
+        self.k_iq, self.k_react = d["keeperIq"], d["keeperReaction"]
+        self.k_window, self.k_beat = d["shootWindow"], d["powerBeat"]
+        self.scene = scene
+        self.report = scene.get("report", "")
+        self.scene_metrics = scene.get("metrics")
+        self.campaign_level = level
+        self.line = scene["copy"].get("lobbyLine") or self.line
+        # 5) end — desk verdict can upgrade the line now that scene gen is done
+        self.phase = "end"
         await self.broadcast()
         self.ask_desk("end", self.ctx(), {"end"})
 
@@ -433,10 +529,29 @@ class Game:
         elif t == "kick":
             if (self.sockets.get(ws) == "phone" and self.phase == "shoot"
                     and not self.kick_msg and msg.get("zone") in ZONES):
+                height = msg.get("height")
+                if height not in ("H", "L"):
+                    height = None
+                try:
+                    spin = float(msg["spin"]) if msg.get("spin") is not None else None
+                    if spin is not None:
+                        spin = max(-1.0, min(1.0, spin))
+                except (TypeError, ValueError):
+                    spin = None
+                strike = msg.get("strike")
+                if strike not in ("chip", "drive"):
+                    strike = None
+                foot = msg.get("foot")
+                if foot not in ("L", "R"):
+                    foot = None
                 self.kick_msg = {"zone": msg["zone"],
                                  "power": min(1.0, max(0.0, float(msg.get("power", 0.5)))),
                                  "force": max(0, int(msg.get("force") or 0)),   # Newtons, from ForcePose
                                  "dirDeg": int(msg.get("dirDeg") or 0),
+                                 "height": height,
+                                 "spin": spin,
+                                 "strike": strike,
+                                 "foot": foot,
                                  "t": time.monotonic()}
                 self.kick_evt.set()
         elif t == "skel":
@@ -457,7 +572,7 @@ class Game:
                 if self.task:
                     self.task.cancel()
                 self.desk.recent.clear()
-                self._reset()
+                self._reset_match()          # keep campaign_level, scene, k_* knobs
                 await self.broadcast()
         elif t == "abort":
             # End / restart from lobby mid-match (or from full time).
@@ -498,9 +613,45 @@ async def ws_handler(request):
     return ws
 
 
+async def fx_status(_request):
+    return web.json_response(neural_fx.status())
+
+
+async def fx_hero(request):
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return web.json_response(neural_fx.hero(payload))
+
+
+async def scene_status(_request):
+    return web.json_response({
+        "level": game.campaign_level,
+        "progress": game.gen_progress,
+        "metrics": game.scene_metrics,
+        "phase": game.phase,
+    })
+
+
+async def hw_status(_request):
+    return web.json_response({
+        "desk": game.desk.mode,
+        "fx": neural_fx.status(),
+        "geniex_url": geniex_client.GENIEX_URL,
+        "model": geniex_client.GENIEX_MODEL,
+    })
+
+
 def make_app():
-    app = web.Application()
+    app = web.Application(client_max_size=8 * 1024 * 1024)
     app.router.add_get("/ws", ws_handler)
+    app.router.add_get("/fx/status", fx_status)
+    app.router.add_post("/fx/hero", fx_hero)
+    app.router.add_get("/scene/status", scene_status)
+    app.router.add_get("/hw/status", hw_status)
     app.router.add_get("/", lambda r: web.HTTPFound("/tv.html"))
     app.router.add_static("/", PUBLIC, show_index=True)
     return app
@@ -524,7 +675,21 @@ async def main():
         print('  openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 365 -subj "/CN=gesture-football"')
 
     desk = game.desk
-    print(f"Desk  :  {'LOCAL AI DESK · ' + desk.model if desk.mode == 'local' else 'CLAUDE DESK · ' + desk.model if desk.mode == 'cloud' else 'templates only (set ANTHROPIC_API_KEY or GF_LLM_URL to upgrade)'}")
+    if desk.mode == "geniex":
+        desk_label = f"GenieX · {desk.model}"
+    elif desk.mode == "local":
+        desk_label = f"LOCAL AI DESK · {desk.model}"
+    elif desk.mode == "cloud":
+        desk_label = f"CLAUDE DESK · {desk.model}"
+    else:
+        desk_label = "templates only"
+    print(f"Desk  = {desk_label}")
+    fx = neural_fx.status()
+    fx_model = fx.get("model") or "procedural"
+    print(f"FX    = {fx.get('backend', '?').upper()} · {fx_model}")
+    scene_ok = await geniex_client.ping()
+    print(f"Scene = {'ready' if scene_ok else 'template (GenieX down)'}")
+    print("Profile = QUAD on bench")
     await asyncio.Event().wait()
 
 
