@@ -12,6 +12,7 @@ $env:QAI_HUB_API_TOKEN = "<your token>"
 # LLM
 geniex pull ai-hub-models/Qwen3-4B-Instruct-2507
 geniex serve   # http://127.0.0.1:18181/v1
+# Served id (see geniex list): qualcomm/Qwen3-4B-Instruct-2507:W4A16
 ```
 
 Depth plate for Neural FX is documented in [`NEURAL_FX.md`](NEURAL_FX.md).
@@ -21,7 +22,7 @@ Depth plate for Neural FX is documented in [`NEURAL_FX.md`](NEURAL_FX.md).
 | Var | Default | Meaning |
 |---|---|---|
 | `GF_GENIEX_URL` | `http://127.0.0.1:18181/v1` | GenieX OpenAI-compatible base |
-| `GF_GENIEX_MODEL` | `ai-hub-models/Qwen3-4B-Instruct-2507` | Model id |
+| `GF_GENIEX_MODEL` | `qualcomm/Qwen3-4B-Instruct-2507:W4A16` | Model id (`geniex list`) |
 | `GF_GENIEX` | `1` | Set `0` to skip GenieX desk (local/cloud/templates) |
 | `GF_SCENE_TIMEOUT_S` | `90` | Scene JSON generation timeout |
 | `GF_SCENE_MAX_LEVEL` | `5` | Campaign cap |

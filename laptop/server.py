@@ -101,7 +101,7 @@ class Desk:
         if self.mode == "geniex":
             try:
                 text = await geniex_client.chat(
-                    self.SYSTEM, prompts[kind] + json.dumps(ctx), max_tokens=110
+                    self.SYSTEM, prompts[kind] + json.dumps(ctx), max_tokens=110, timeout=20.0
                 )
                 if text:
                     self.recent = (self.recent + [text])[-6:]

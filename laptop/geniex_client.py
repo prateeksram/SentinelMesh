@@ -13,7 +13,7 @@ from aiohttp import ClientSession, ClientTimeout
 
 GENIEX_URL = os.environ.get("GF_GENIEX_URL", "http://127.0.0.1:18181/v1")
 GENIEX_MODEL = os.environ.get(
-    "GF_GENIEX_MODEL", "ai-hub-models/Qwen3-4B-Instruct-2507"
+    "GF_GENIEX_MODEL", "qualcomm/Qwen3-4B-Instruct-2507:W4A16"
 )
 
 
@@ -105,5 +105,5 @@ async def chat_json(
     return None
 
 
-async def ping(timeout=2.0) -> bool:
+async def ping(timeout=15.0) -> bool:
     return (await chat("ok", "ping", max_tokens=1, timeout=timeout)) is not None
