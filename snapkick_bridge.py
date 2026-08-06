@@ -121,7 +121,7 @@ class SnapkickProtocol(asyncio.DatagramProtocol):
                     "apexM": round(apex, 2),
                     "speed": round(speed, 1),
                 }
-                print(f"[bridge] kick → {kick['zone']} x={gx:+.2f}m z={gz:.2f}m "
+                print(f"[bridge] kick -> {kick['zone']} x={gx:+.2f}m z={gz:.2f}m "
                       f"power={power:.2f} force={force}N")
                 self._put(kick)
 
@@ -144,7 +144,7 @@ async def ws_loop(url: str, queue: asyncio.Queue):
                         msg = await queue.get()
                         await ws.send_json(msg)
         except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as e:
-            print(f"[bridge] server unreachable ({e}) — retrying in 2 s")
+            print(f"[bridge] server unreachable ({e}) - retrying in 2 s")
             await asyncio.sleep(2)
 
 

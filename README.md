@@ -45,6 +45,8 @@ Everything runs on one Wi-Fi / hotspot. No internet needed for the game
 |---|---|
 | `server.py` | Match host: WebSocket hub, game engine, hybrid referee, AI keeper, commentary |
 | `snapkick_bridge.py` | UNO Q adapter: `snapkick.pose.v1` UDP :5005 → striker client over WebSocket |
+| `unoq/sentinel_pose_streamer.py` | Raw UNO Q MediaPipe/ONNX landmarks + optical flow on UDP :9999 for native-phone calibration and kick estimation |
+| `start-game.bat` | One-step supervisor for the unified server, camera relay, UNO Q streamer, and optional :5005 bridge |
 | `snapkick_sim.py` | Fake UNO Q — schema-faithful packets, a kick every ~4 s (test without hardware) |
 | `public/tv.html` | The stadium TV: all three sports, sport-true striker animation, replays, VFX |
 | `public/phone.html` | Browser striker fallback (MediaPipe pose + ForcePose in the phone browser) |
@@ -73,8 +75,9 @@ py -3.13 -m pip install -r requirements.txt
 
 macOS / Linux: `python3 -m pip install -r requirements.txt`.
 
-Firewall: allow Python inbound on **TCP 8080** (TV/phone/WS) and **UDP 5005**
-(UNO Q). For the *browser* phone striker's camera you also need HTTPS :8443 —
+Firewall: allow Python inbound on **TCP 8080** (TV/phone/WS) and **UDP 9999**
+(raw UNO Q pose). Also allow **UDP 5005** when using the optional pre-solved
+SnapKick bridge. For the *browser* phone striker's camera you also need HTTPS :8443 —
 generate certs next to `server.py`:
 
 ```bash
@@ -84,6 +87,27 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 36
 (The native Android app and the TV do **not** need HTTPS.)
 
 ## Run it
+
+### Recommended: raw UNO Q pose with the native phone app
+
+The one-step launcher keeps the newer root host while using the calibrated
+phone-side Uno Q detector and trajectory estimator:
+
+```powershell
+.\start-game.bat -UnoQIp 192.168.150.72 -CameraIndex 1 -SyncUnoQ
+```
+
+On the phone, tap the pose badge until it reads **UNO Q**. The board performs
+MediaPipe/ONNX pose inference, sends landmarks over UDP `9999`, and the phone
+handles calibration, kick state, force, direction, and sampled trajectory.
+NPU/GPU/CPU remain available by tapping the same badge, and loss of the edge
+stream automatically restores local pose inference.
+
+Add `-EnableSnapkickBridge` only for a separate producer that emits
+`snapkick.pose.v1` on UDP `5005`. The bundled raw landmark streamer does not
+use that bridge. See `docs/one_step_setup.md` for camera and SSH variants.
+
+### Manual/pre-solved SnapKick path
 
 **Terminal 1 — match host + TV:**
 ```powershell

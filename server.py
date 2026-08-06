@@ -24,6 +24,7 @@ HTTPS on :8443 appears automatically when cert.pem/key.pem sit next to this file
 
 import asyncio
 import json
+import math
 import os
 import random
 import ssl
@@ -52,9 +53,24 @@ ANNOUNCE_S    = _f("GF_ANNOUNCE_S", 3.5)     # long enough for the spoken keeper
 COUNTDOWN_S   = _f("GF_COUNTDOWN_S", 3.0)
 RESOLVE_S     = _f("GF_RESOLVE_S", 3.8)
 POWER_BEAT    = 0.82      # power above this can beat a keeper in the same corner
+EDGE_POSE_PORT = int(os.environ.get("GF_EDGE_POSE_PORT", 9999))
+EDGE_FRAME_STALE_S = _f("GF_EDGE_FRAME_STALE_S", 2.0)
 
 ZONES = ("L", "C", "R")
 STRIKERS = ("phone", "unoq")     # client types allowed to aim / kick
+
+# Latest-only camera and pose state shared by the USB relay, UNO Q and phone.
+# UDP :9999 carries raw MediaPipe landmarks for phone-side kick/calibration;
+# the optional SnapKick bridge keeps its independent UDP :5005 contract.
+edge_frame: bytes | None = None
+edge_frame_seq = 0
+edge_frame_at = 0.0
+edge_source_frame: bytes | None = None
+edge_source_frame_seq = 0
+edge_source_frame_at = 0.0
+edge_pose_at = 0.0
+edge_pose_seq = -1
+edge_pose_capture_ns = -1
 
 # ------------------------------------------------- sports & geometry --------
 SPORTS = ("football", "darts", "basketball")
@@ -231,6 +247,98 @@ def tline(key, **kw):
     return random.choice(T[key]).format(**kw)
 
 
+def _finite(value, low, high, default=None):
+    """Return a bounded finite JSON number, rejecting booleans."""
+    if isinstance(value, bool):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return min(high, max(low, number))
+
+
+def normalize_kick_state(raw):
+    """Validate the backend-neutral lower-body state sent by Android."""
+    if not isinstance(raw, dict) or raw.get("schema") != "sentinel.kick.state.v1":
+        return None
+    peak = _finite(raw.get("peakFootSpeedMps"), 0.0, 15.0)
+    confidence = _finite(raw.get("confidence"), 0.0, 1.0)
+    if peak is None or confidence is None:
+        return None
+    return {
+        "schema": "sentinel.kick.state.v1",
+        "source": str(raw.get("source", "UNKNOWN"))[:24],
+        "peakFootSpeedMps": peak,
+        "lateralVelocityMps": _finite(raw.get("lateralVelocityMps"), -15.0, 15.0, 0.0),
+        "upwardVelocityMps": _finite(raw.get("upwardVelocityMps"), -15.0, 15.0, 0.0),
+        "pathDisplacementM": _finite(raw.get("pathDisplacementM"), 0.0, 3.0, 0.0),
+        "liftM": _finite(raw.get("liftM"), 0.0, 2.0, 0.0),
+        "swingDurationMs": int(_finite(raw.get("swingDurationMs"), 0.0, 2500.0, 0.0)),
+        "confidence": confidence,
+    }
+
+
+def normalize_trajectory(raw):
+    """Validate a compact, monotonically sampled metric ball trajectory."""
+    if not isinstance(raw, dict) or raw.get("schema") != "sentinel.trajectory.v1":
+        return None
+    confidence = _finite(raw.get("confidence"), 0.0, 1.0)
+    flight_time = _finite(raw.get("flightTimeS"), 0.1, 3.0)
+    launch_speed = _finite(raw.get("launchSpeedMps"), 1.0, 45.0)
+    goal_x = _finite(raw.get("goalX"), -12.0, 12.0)
+    goal_z = _finite(raw.get("goalZ"), 0.0, 10.0)
+    apex = _finite(raw.get("apexM"), 0.0, 12.0)
+    velocity = raw.get("launchVelocity")
+    if (
+        confidence is None or flight_time is None or launch_speed is None
+        or goal_x is None or goal_z is None or apex is None
+        or not isinstance(velocity, list) or len(velocity) != 3
+    ):
+        return None
+    launch_velocity = [
+        _finite(velocity[0], -45.0, 45.0),
+        _finite(velocity[1], 0.0, 45.0),
+        _finite(velocity[2], -45.0, 45.0),
+    ]
+    if any(value is None for value in launch_velocity):
+        return None
+    points = []
+    last_t = -1.0
+    last_y = -1.0
+    for raw_point in raw.get("points", [])[:48]:
+        if not isinstance(raw_point, list) or len(raw_point) != 4:
+            continue
+        point = [
+            _finite(raw_point[0], 0.0, 3.0),
+            _finite(raw_point[1], -15.0, 15.0),
+            _finite(raw_point[2], 0.0, 20.0),
+            _finite(raw_point[3], 0.0, 12.0),
+        ]
+        if any(value is None for value in point):
+            continue
+        if point[0] <= last_t or point[2] + 0.05 < last_y:
+            continue
+        points.append(point)
+        last_t, last_y = point[0], point[2]
+    if len(points) < 2:
+        return None
+    return {
+        "schema": "sentinel.trajectory.v1",
+        "model": str(raw.get("model", "unknown"))[:48],
+        "confidence": confidence,
+        "launchVelocity": launch_velocity,
+        "launchSpeedMps": launch_speed,
+        "flightTimeS": flight_time,
+        "goalX": goal_x,
+        "goalZ": goal_z,
+        "apexM": apex,
+        "points": points,
+    }
+
+
 # ================================================================ GAME ======
 class Game:
     def __init__(self, desk: Desk):
@@ -311,6 +419,17 @@ class Game:
     async def broadcast(self):
         msg = json.dumps(self.snapshot())
         for ws in list(self.sockets):
+            try:
+                await ws.send_str(msg)
+            except Exception:
+                pass
+
+    async def broadcast_edge_pose(self, packet):
+        """Forward full MediaPipe landmarks only to native phone clients."""
+        msg = json.dumps({"type": "edge_pose", **packet}, separators=(",", ":"))
+        for ws, client in list(self.sockets.items()):
+            if client != "phone":
+                continue
             try:
                 await ws.send_str(msg)
             except Exception:
@@ -576,6 +695,10 @@ class Game:
                         v = self.kick_msg.get(k)
                         if isinstance(v, (int, float)):
                             entry[k] = round(float(v), 2)
+                    if self.kick_msg.get("kickState") is not None:
+                        entry["kickState"] = self.kick_msg["kickState"]
+                    if self.kick_msg.get("trajectory") is not None:
+                        entry["trajectory"] = self.kick_msg["trajectory"]
                 if height in ("H", "L"):
                     entry["height"] = height
                 if isinstance(spin, (int, float)):
@@ -714,6 +837,24 @@ class Game:
                     except (TypeError, ValueError):
                         return None
 
+                kick_state = normalize_kick_state(msg.get("kickState"))
+                trajectory = normalize_trajectory(msg.get("trajectory"))
+                goal_x = _num("goalX", -12.0, 12.0)
+                goal_z = _num("goalZ", 0.0, 10.0)
+                apex_m = _num("apexM", 0.0, 12.0)
+                speed = _num("speed", 1.0, 45.0)
+                if trajectory is not None:
+                    # Android sends the richer sampled path. Flat metric fields
+                    # remain supported for snapkick_bridge.py and take priority.
+                    if goal_x is None:
+                        goal_x = trajectory["goalX"]
+                    if goal_z is None:
+                        goal_z = trajectory["goalZ"]
+                    if apex_m is None:
+                        apex_m = trajectory["apexM"]
+                    if speed is None:
+                        speed = trajectory["launchSpeedMps"]
+
                 self.kick_msg = {"zone": msg["zone"],
                                  "power": min(1.0, max(0.0, float(msg.get("power", 0.5)))),
                                  "force": max(0, int(msg.get("force") or 0)),   # Newtons, from ForcePose
@@ -722,11 +863,12 @@ class Game:
                                  "spin": spin,
                                  "strike": strike,
                                  "foot": foot,
-                                 # Metric trajectory (UNO Q): impact at the goal plane.
-                                 "goalX": _num("goalX", -12.0, 12.0),
-                                 "goalZ": _num("goalZ", 0.0, 10.0),
-                                 "apexM": _num("apexM", 0.0, 12.0),
-                                 "speed": _num("speed", 1.0, 45.0),
+                                 "goalX": goal_x,
+                                 "goalZ": goal_z,
+                                 "apexM": apex_m,
+                                 "speed": speed,
+                                 "kickState": kick_state,
+                                 "trajectory": trajectory,
                                  "t": time.monotonic()}
                 self.kick_evt.set()
         elif t == "skel":
@@ -773,6 +915,94 @@ class Game:
 game = Game(Desk())
 
 
+def normalize_edge_packet(packet):
+    """Validate the raw UNO Q landmark packet before phone rebroadcast."""
+    if not isinstance(packet, dict) or packet.get("schema") != "sentinel.edge.pose.v1":
+        return None
+    raw_landmarks = packet.get("landmarks")
+    if not isinstance(raw_landmarks, list) or len(raw_landmarks) not in (0, 33):
+        return None
+    landmarks = []
+    for point in raw_landmarks:
+        if not isinstance(point, list) or len(point) < 4:
+            return None
+        values = [
+            _finite(point[0], -4.0, 4.0),
+            _finite(point[1], -4.0, 4.0),
+            _finite(point[2], -4.0, 4.0),
+            _finite(point[3], 0.0, 1.0),
+        ]
+        if any(value is None for value in values):
+            return None
+        landmarks.append(values)
+
+    frame = packet.get("frame") if isinstance(packet.get("frame"), dict) else {}
+    diagnostics = packet.get("diagnostics") if isinstance(packet.get("diagnostics"), dict) else {}
+    raw_motion = packet.get("motion") if isinstance(packet.get("motion"), dict) else None
+
+    def flow_foot(name):
+        if raw_motion is None or not isinstance(raw_motion.get(name), dict):
+            return None
+        foot = raw_motion[name]
+        return {
+            "vx": _finite(foot.get("vx"), -10.0, 10.0, 0.0),
+            "vy": _finite(foot.get("vy"), -10.0, 10.0, 0.0),
+            "peak_vx": _finite(foot.get("peak_vx"), -10.0, 10.0, 0.0),
+            "peak_vy": _finite(foot.get("peak_vy"), -10.0, 10.0, 0.0),
+            "dx": _finite(foot.get("dx"), -4.0, 4.0, 0.0),
+            "dy": _finite(foot.get("dy"), -4.0, 4.0, 0.0),
+            "confidence": _finite(foot.get("confidence"), 0.0, 1.0, 0.0),
+            "samples": max(0, int(_finite(foot.get("samples"), 0.0, 1000.0, 0.0))),
+        }
+
+    normalized = {
+        "schema": "sentinel.edge.pose.v1",
+        "seq": max(0, int(_finite(packet.get("seq"), 0.0, 2**53, 0.0))),
+        "t_capture_ns": max(0, int(_finite(packet.get("t_capture_ns"), 0.0, 2**63 - 1, 0.0))),
+        "frame": {
+            "width": max(1, int(_finite(frame.get("width"), 1.0, 8192.0, 1.0))),
+            "height": max(1, int(_finite(frame.get("height"), 1.0, 8192.0, 1.0))),
+            "rotation": int(_finite(frame.get("rotation"), -360.0, 360.0, 0.0)) % 360,
+            "mirrored": bool(frame.get("mirrored", True)),
+        },
+        "landmarks": landmarks,
+        "diagnostics": {
+            "fps": _finite(diagnostics.get("fps"), 0.0, 240.0, 0.0),
+            "inference_ms": _finite(diagnostics.get("inference_ms"), 0.0, 10000.0, 0.0),
+            "backend": str(diagnostics.get("backend", "uno-q"))[:40],
+        },
+    }
+    if raw_motion is not None:
+        normalized["motion"] = {
+            "t_ns": max(0, int(_finite(raw_motion.get("t_ns"), 0.0, 2**63 - 1, 0.0))),
+            "fps": _finite(raw_motion.get("fps"), 0.0, 240.0, 0.0),
+            "left": flow_foot("left"),
+            "right": flow_foot("right"),
+        }
+    return normalized
+
+
+class EdgePoseProtocol(asyncio.DatagramProtocol):
+    def datagram_received(self, data, _addr):
+        global edge_pose_at, edge_pose_seq, edge_pose_capture_ns
+        try:
+            packet = normalize_edge_packet(json.loads(data.decode("utf-8")))
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            return
+        if packet is None:
+            return
+        now = time.monotonic()
+        capture_ns = packet["t_capture_ns"]
+        stream_advanced = capture_ns > edge_pose_capture_ns
+        restart_after_gap = edge_pose_at > 0.0 and now - edge_pose_at > 2.0
+        if not stream_advanced and not restart_after_gap:
+            return
+        edge_pose_seq = packet["seq"]
+        edge_pose_capture_ns = capture_ns
+        edge_pose_at = now
+        asyncio.get_running_loop().create_task(game.broadcast_edge_pose(packet))
+
+
 async def ws_handler(request):
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
@@ -787,6 +1017,90 @@ async def ws_handler(request):
         game.on_close(ws)
         await game.broadcast()
     return ws
+
+
+async def edge_frame_handler(request):
+    global edge_frame, edge_frame_seq, edge_frame_at
+    body = await request.read()
+    if not body or len(body) > 2_000_000:
+        raise web.HTTPBadRequest(text="expected JPEG body up to 2 MB")
+    edge_frame = body
+    edge_frame_seq += 1
+    edge_frame_at = time.monotonic()
+    return web.json_response({"ok": True, "seq": edge_frame_seq})
+
+
+async def edge_source_frame_handler(request):
+    """Laptop USB-camera input consumed by the UNO Q over MJPEG."""
+    global edge_source_frame, edge_source_frame_seq, edge_source_frame_at
+    body = await request.read()
+    if not body or len(body) > 2_000_000:
+        raise web.HTTPBadRequest(text="expected JPEG body up to 2 MB")
+    edge_source_frame = body
+    edge_source_frame_seq += 1
+    edge_source_frame_at = time.monotonic()
+    return web.json_response({"ok": True, "seq": edge_source_frame_seq})
+
+
+async def edge_frame_jpeg(request):
+    if edge_frame is None or time.monotonic() - edge_frame_at > EDGE_FRAME_STALE_S:
+        raise web.HTTPServiceUnavailable(text="UNO Q camera waiting")
+    try:
+        after = int(request.query.get("after", -1))
+    except ValueError:
+        after = -1
+    if after == edge_frame_seq:
+        return web.Response(status=204, headers={"Cache-Control": "no-store"})
+    return web.Response(
+        body=edge_frame,
+        content_type="image/jpeg",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate", "X-Edge-Seq": str(edge_frame_seq)},
+    )
+
+
+async def _mjpeg_response(request, source):
+    response = web.StreamResponse(headers={
+        "Content-Type": "multipart/x-mixed-replace; boundary=frame",
+        "Cache-Control": "no-store",
+    })
+    await response.prepare(request)
+    sent = -1
+    try:
+        while True:
+            frame, seq, updated = source()
+            if frame is not None and seq != sent and time.monotonic() - updated <= EDGE_FRAME_STALE_S:
+                sent = seq
+                await response.write(
+                    b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                    + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n"
+                )
+            await asyncio.sleep(0.03)
+    except (ConnectionResetError, asyncio.CancelledError):
+        pass
+    return response
+
+
+async def edge_camera_mjpeg(request):
+    return await _mjpeg_response(request, lambda: (edge_frame, edge_frame_seq, edge_frame_at))
+
+
+async def edge_source_camera_mjpeg(request):
+    return await _mjpeg_response(
+        request, lambda: (edge_source_frame, edge_source_frame_seq, edge_source_frame_at)
+    )
+
+
+async def edge_status(_request):
+    now = time.monotonic()
+    return web.json_response({
+        "server": "live",
+        "sourceCamera": "live" if edge_source_frame_at and now - edge_source_frame_at <= EDGE_FRAME_STALE_S else "waiting",
+        "camera": "live" if edge_frame_at and now - edge_frame_at <= EDGE_FRAME_STALE_S else "waiting",
+        "pose": "live" if edge_pose_at and now - edge_pose_at <= 2.0 else "waiting",
+        "frameSeq": edge_frame_seq,
+        "poseSeq": edge_pose_seq,
+        "ports": {"edgePoseUdp": EDGE_POSE_PORT, "snapkickUdp": 5005},
+    })
 
 
 async def fx_status(_request):
@@ -826,6 +1140,12 @@ async def hw_status(_request):
 def make_app():
     app = web.Application(client_max_size=8 * 1024 * 1024)
     app.router.add_get("/ws", ws_handler)
+    app.router.add_post("/edge/frame", edge_frame_handler)
+    app.router.add_post("/edge/source/frame", edge_source_frame_handler)
+    app.router.add_get("/edge/source/camera.mjpg", edge_source_camera_mjpeg)
+    app.router.add_get("/edge/frame.jpg", edge_frame_jpeg)
+    app.router.add_get("/edge/camera.mjpg", edge_camera_mjpeg)
+    app.router.add_get("/edge/status", edge_status)
     app.router.add_get("/fx/status", fx_status)
     app.router.add_post("/fx/hero", fx_hero)
     app.router.add_get("/scene/status", scene_status)
@@ -840,7 +1160,18 @@ async def main():
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", 8080).start()
+    edge_transport = None
+    try:
+        edge_transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+            EdgePoseProtocol,
+            local_addr=("0.0.0.0", EDGE_POSE_PORT),
+        )
+    except OSError as exc:
+        print(f"UNO Q : UDP :{EDGE_POSE_PORT} unavailable ({exc}); local phone pose still works")
     print("HTTP  :  http://0.0.0.0:8080   (tv.html · phone.html)")
+
+    if edge_transport is not None:
+        print(f"UNO Q : raw pose UDP :{EDGE_POSE_PORT} (SnapKick bridge remains UDP :5005)")
 
     cert, key = ROOT / "cert.pem", ROOT / "key.pem"
     if cert.exists() and key.exists():
@@ -867,7 +1198,12 @@ async def main():
     print(f"FX    = {fx.get('backend', '?').upper()} · {fx_model}")
     scene_ok = await geniex_client.ping()
     print(f"Scene = {'ready' if scene_ok else 'template (GenieX down)'}")
-    await asyncio.Event().wait()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        if edge_transport is not None:
+            edge_transport.close()
+        await runner.cleanup()
 
 
 if __name__ == "__main__":

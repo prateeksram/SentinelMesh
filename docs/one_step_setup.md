@@ -2,13 +2,26 @@
 
 `start-game.bat` owns the complete Windows + UNO Q game session. At startup it:
 
-1. stops stale recognized `laptop/server.py` and SnapKick `camera_relay.py` processes;
-2. verifies that an unrelated application is not using TCP 8080;
+1. stops stale recognized `server.py`, `snapkick_bridge.py`, and SnapKick `camera_relay.py` processes;
+2. verifies that unrelated applications are not using TCP 8080 or the selected UDP ports;
 3. stops any previous `sentinel_pose_streamer.py` on the UNO Q;
-4. starts the SentinelMesh laptop server;
+4. starts the unified root `server.py` host;
 5. starts the laptop USB-camera relay when requested;
 6. detects the laptop address routed to the UNO Q and launches remote pose inference;
 7. waits for camera and pose health before reporting the game ready.
+
+The default path is raw edge pose: `sentinel.edge.pose.v1` arrives on UDP
+`9999`, the host forwards landmarks to the native phone, and the phone runs
+the calibrated `EdgeKickEngine` plus trajectory estimator. The newer
+pre-solved SnapKick path is preserved independently on UDP `5005`; enable its
+local bridge only when a producer sends `snapkick.pose.v1` packets:
+
+```powershell
+.\start-game.bat -UnoQIp 192.168.150.72 -EnableSnapkickBridge
+```
+
+Both transports share the same TCP `8080` host and can coexist. The standard
+`sentinel_pose_streamer.py` uses UDP `9999`, so it does not require the bridge.
 
 Pressing Ctrl+C runs the reverse sequence and waits for local ports to be
 released. If PowerShell or the laptop is forcibly terminated and cannot run its

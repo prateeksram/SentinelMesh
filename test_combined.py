@@ -172,6 +172,10 @@ async def run():
 
 
 def main():
+    # Windows PowerShell can inherit cp1252 even when the source is UTF-8.
+    # Keep progress reporting from aborting an otherwise successful E2E run.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     env = dict(os.environ,
                GF_ANNOUNCE_S="0.3", GF_COUNTDOWN_S="0.3",
                GF_RESOLVE_S="0.4", GF_SHOOT_WINDOW="5.0")

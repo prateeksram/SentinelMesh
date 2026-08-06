@@ -28,6 +28,7 @@ import com.sentinelmesh.gesturefootball.databinding.ActivityMainBinding
 import com.sentinelmesh.gesturefootball.debug.ScreenRecordService
 import com.sentinelmesh.gesturefootball.forcepose.ForcePoseEngine
 import com.sentinelmesh.gesturefootball.net.GameClient
+import com.sentinelmesh.gesturefootball.pose.EdgeKickEngine
 import com.sentinelmesh.gesturefootball.pose.PoseAnalyzer
 import com.sentinelmesh.gesturefootball.profile.PlayerProfile
 import com.sentinelmesh.gesturefootball.profile.PlayerProfileStore
@@ -55,8 +56,11 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var lastZoneSent = 0L
+    private var lastKickDiagnosticsLog = 0L
     private val skelBuf = ArrayDeque<Pair<Long, List<FloatArray>>>()
     private var lastPhase: String? = null
+    /** Aim frozen when shoot starts — feints only in announce/countdown. */
+    private var lockedAimZone: String? = null
     private var lastResultSpoken: String? = null
 
     private var calibrating = false
@@ -83,6 +87,22 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private var lastPoseMsLabel = "—"
     private var lastForceLabel = "0 N"
     private var showForceChip = false
+
+    private val remoteHealthCheck = object : Runnable {
+        override fun run() {
+            val analyzer = pose
+            if (analyzer?.isRemoteStale() == true) {
+                val label = analyzer.fallbackFromRemote()
+                applyPoseSourceUi()
+                lastPoseMsLabel = "$label / FALLBACK"
+                binding.npuBadge.text = lastPoseMsLabel
+                binding.hint.text = "UNO Q stream lost / local pose restored"
+                refreshAiChip()
+                vibrate(50)
+            }
+            mainHandler.postDelayed(this, 500L)
+        }
+    }
 
     private enum class HostPill { OFFLINE, CONNECTING, CONNECTED, FAILED }
 
@@ -152,6 +172,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 val label = pose?.cycleDelegate() ?: return@setOnClickListener
                 lastPoseMsLabel = "$label · …"
                 binding.npuBadge.text = lastPoseMsLabel
+                applyPoseSourceUi()
                 refreshAiChip()
                 vibrate(25)
             }
@@ -191,6 +212,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         applyChromeForMode()
 
         if (profile == null) startCalibration()
+        mainHandler.post(remoteHealthCheck)
 
         val need = mutableListOf<String>()
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
@@ -245,6 +267,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             .edit().putString(GameClient.PREF_URL, url).apply()
         showHostHint("Connecting $url …", R.color.cyan, holdMs = 8000L)
         game.reconnect(url)
+        applyPoseSourceUi()
         vibrate(30)
     }
 
@@ -271,6 +294,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     flashHostBtn("OK")
                     hostPillState = HostPill.CONNECTED
                     paintHostPill()
+                    applyPoseSourceUi()
                     showHostHint("Connected", R.color.green)
                 }
                 is GameClient.ConnectStatus.Failed -> {
@@ -611,7 +635,15 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private fun finishCalibration(save: Boolean) {
         val session = calib
         if (save && session != null && session.step == CalibrationSession.Step.DONE) {
-            val p = session.buildProfile()
+            val calibrated = session.buildProfile()
+            val p = if (pose?.mode == PoseAnalyzer.Mode.UNO_Q) {
+                calibrated.copy(
+                    kickMs = profile?.kickMs ?: calibrated.kickMs,
+                    unoQKickMs = calibrated.kickMs,
+                )
+            } else {
+                calibrated.copy(unoQKickMs = profile?.unoQKickMs)
+            }
             PlayerProfileStore.save(this, p)
             profile = p
             pose?.applyProfile(p)
@@ -790,6 +822,17 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         }
     }
 
+    private fun applyPoseSourceUi() {
+        val remote = pose?.mode == PoseAnalyzer.Mode.UNO_Q
+        if (remote) {
+            binding.edgePreview.visibility = View.VISIBLE
+            binding.edgePreview.start(game.edgeFrameUrl(), mirror = true)
+        } else {
+            binding.edgePreview.stop()
+            binding.edgePreview.visibility = View.GONE
+        }
+    }
+
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
@@ -828,8 +871,9 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     private fun applyHud(hud: PoseAnalyzer.Hud) {
         binding.overlay.setLandmarks(hud.landmarks)
-        setZone(hud.zone)
-        noteZone(hud.zone)
+        val displayZone = lockedAimZone ?: hud.zone
+        setZone(displayZone)
+        if (lockedAimZone == null) noteZone(hud.zone)
         val framed = hud.inGuide || (
             hud.bodyOk && hud.bodyOkStreak >= PoseAnalyzer.BODY_OK_FRAMES
             )
@@ -857,6 +901,33 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         else "0 N"
         lastPoseMsLabel = "${hud.delegateLabel} · ${hud.latencyMs} ms"
         binding.npuBadge.text = lastPoseMsLabel
+        val diag = hud.kickDiagnostics
+        if (diag != null) {
+            val reject = diag.reject ?: "ready"
+            binding.neuralLoad.visibility = View.VISIBLE
+            binding.neuralLoad.text = buildString {
+                append("UNO Q ${"%.1f".format(hud.sourceFps)} fps · Δ${diag.frameDeltaMs} ms · ")
+                append("${diag.foot}/${diag.swingState.name.lowercase()} · $reject\n")
+                append("speed raw ${"%.2f".format(diag.rawSpeed)} / filt ${"%.2f".format(diag.filteredSpeed)} / ")
+                append("signal ${"%.2f".format(diag.signalSpeed)} ≥ ${"%.2f".format(diag.threshold)} m/s · ")
+                append("above ${diag.aboveThresholdMs} ms / ${diag.aboveThresholdSamples} samples · ")
+                append("buf ${diag.bufferFill}\n")
+                append("vis A/H/F ${"%.2f".format(diag.ankleVisibility)}/")
+                append("${"%.2f".format(diag.heelVisibility)}/${"%.2f".format(diag.footVisibility)} · ")
+                append("path ${"%.2f".format(diag.displacementM)} m · lift ${"%.2f".format(diag.liftM)} m · ")
+                append("knee +${"%.0f".format(diag.kneeExtensionDeg)}°\n")
+                append("flow ${"%.1f".format(diag.flowFps)} fps / ${"%.2f".format(diag.flowConfidence)} / ")
+                append("${diag.flowSamples} samples · body ${hud.bodyOkStreak} · phase ${pose?.phase}")
+            }
+            val now = System.currentTimeMillis()
+            if (now - lastKickDiagnosticsLog >= 300L) {
+                Log.i("UnoQKick", binding.neuralLoad.text.toString().replace('\n', ' '))
+                lastKickDiagnosticsLog = now
+            }
+        } else {
+            binding.neuralLoad.visibility = View.GONE
+            binding.neuralLoad.text = ""
+        }
         showForceChip = hud.liveForce > 8f || lastPhase == "shoot" || calibrating
         refreshNeuralLoad()
 
@@ -901,8 +972,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
         val now = System.currentTimeMillis()
         if (now - lastZoneSent > 200) {
-            game.sendAim(hud.zone)
+            val zoneToSend = lockedAimZone ?: hud.zone
+            game.sendAim(zoneToSend)
             lastZoneSent = now
+            setZone(zoneToSend)
         }
     }
 
@@ -926,8 +999,9 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             return
         }
         lastKickMeta = kick
+        val zone = lockedAimZone ?: kick.zone
         game.sendKick(
-            zone = kick.zone,
+            zone = zone,
             power = kick.power,
             force = kick.forceN,
             dirDeg = kick.dirDeg,
@@ -935,6 +1009,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             spin = kick.spin,
             strike = kick.strike,
             foot = kick.foot,
+            kinematics = kick.kinematics,
+            trajectory = kick.trajectory,
         )
         binding.big.text = "SHOT ${kick.height}/${kick.strike} ${kick.forceN} N"
         vibrate(120)
@@ -949,6 +1025,59 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 game.sendSkeleton(kickNo, frames.filterIndexed { i, _ -> i % step == 0 })
             }
         }, 450)
+    }
+
+    override fun onEdgePose(frame: GameClient.EdgePoseFrame) {
+        mainHandler.post {
+            val viewWidth = binding.edgePreview.width.coerceAtLeast(1).toFloat()
+            val viewHeight = binding.edgePreview.height.coerceAtLeast(1).toFloat()
+            val scale = max(
+                viewWidth / frame.width.coerceAtLeast(1),
+                viewHeight / frame.height.coerceAtLeast(1),
+            )
+            val drawnWidth = frame.width * scale
+            val drawnHeight = frame.height * scale
+            val offsetX = (viewWidth - drawnWidth) / 2f
+            val offsetY = (viewHeight - drawnHeight) / 2f
+            val mapped = frame.landmarks.map { point ->
+                floatArrayOf(
+                    (point[0] * drawnWidth + offsetX) / viewWidth,
+                    (point[1] * drawnHeight + offsetY) / viewHeight,
+                    point.getOrElse(2) { 0f },
+                )
+            }
+            pose?.ingestRemotePose(
+                seq = frame.seq,
+                captureNs = frame.captureNs,
+                landmarks = mapped,
+                physicsLandmarks = frame.landmarks,
+                visibility = frame.visibility,
+                latencyMs = frame.inferenceMs,
+                frameWidth = frame.width,
+                frameHeight = frame.height,
+                sourceFps = frame.fps,
+                flowMotion = frame.flowMotion?.let { motion ->
+                    fun foot(value: GameClient.EdgeFlowFoot?) = value?.let {
+                        EdgeKickEngine.FlowFoot(
+                            vxNorm = it.vxNorm,
+                            vyNorm = it.vyNorm,
+                            peakVxNorm = it.peakVxNorm,
+                            peakVyNorm = it.peakVyNorm,
+                            dxNorm = it.dxNorm,
+                            dyNorm = it.dyNorm,
+                            confidence = it.confidence,
+                            samples = it.samples,
+                        )
+                    }
+                    EdgeKickEngine.FlowMotion(
+                        timestampNs = motion.timestampNs,
+                        fps = motion.fps,
+                        left = foot(motion.left),
+                        right = foot(motion.right),
+                    )
+                },
+            )
+        }
     }
 
     override fun onConnected(connected: Boolean) {
@@ -972,12 +1101,14 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             val holdHint = hintHeldByHost()
             when (state.phase) {
                 "lobby" -> {
+                    lockedAimZone = null
                     binding.big.text = "READY?"
                     updateProfileHint()
                     lastResultSpoken = null
                     if (lastPhase != "lobby") promptReadyToStart()
                 }
                 "announce" -> {
+                    lockedAimZone = null
                     binding.big.text = "KICK ${state.kick}/${state.kicksTotal}"
                     if (!holdHint) binding.hint.text = "Aim with your hand"
                     showForceChip = false
@@ -987,6 +1118,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     }
                 }
                 "countdown" -> {
+                    lockedAimZone = null
                     binding.big.text = ceil(state.timerMs / 1000.0).toInt().toString()
                     if (!holdHint) binding.hint.text = "Feint… switch late"
                     if (lastPhase != "countdown") {
@@ -996,12 +1128,17 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 }
                 "shoot" -> {
                     binding.big.text = "KICK!"
-                    if (!holdHint) binding.hint.text = "Swing when ready"
+                    if (!holdHint) binding.hint.text = "Swing when ready — aim locked"
                     showForceChip = true
                     refreshAiChip()
-                    if (lastPhase != "shoot") vibrateBurst()
+                    if (lastPhase != "shoot") {
+                        lockedAimZone = pose?.zone ?: "C"
+                        setZone(lockedAimZone!!)
+                        vibrateBurst()
+                    }
                 }
                 "resolve" -> {
+                    lockedAimZone = null
                     val r = state.lastResult
                     binding.big.text = when (r) {
                         "goal" -> "GOAL!"
@@ -1069,6 +1206,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(remoteHealthCheck)
+        binding.edgePreview.close()
         ScreenRecordService.onStatus = null
         if (ScreenRecordService.running) ScreenRecordService.stop(this)
         super.onDestroy()
