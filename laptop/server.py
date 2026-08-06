@@ -472,11 +472,10 @@ class Game:
         self.key += 1
         # 1) end line as today
         self.line = random.choice(T["end"].get(self.score, T["end"][3]))
-        # 2) generating phase
+        # 2) generating phase — SceneEngine owns the NPU; desk verdict waits until after
         self.phase = "generating"
         self.gen_progress = 0
         await self.broadcast()
-        self.ask_desk("end", self.ctx(), {"generating", "end"})
         gen = self.match_gen
         # 3) pick + generate
         level = scene_engine.pick_next_level(self.score, self.campaign_level)
@@ -507,9 +506,10 @@ class Game:
         self.scene_metrics = scene.get("metrics")
         self.campaign_level = level
         self.line = scene["copy"].get("lobbyLine") or self.line
-        # 5) end
+        # 5) end — desk verdict can upgrade the line now that scene gen is done
         self.phase = "end"
         await self.broadcast()
+        self.ask_desk("end", self.ctx(), {"end"})
 
     # ------------------------------------------------------------ inbound --
     async def on_message(self, ws, msg):
