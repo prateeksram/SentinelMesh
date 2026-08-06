@@ -167,7 +167,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 | `plantStability` / kick prediction | Richer wire fields |
 | Depth / rPPG / ghost warm-up / signature kick | Phone-native flex |
 | UNO Q Player 2 | Teammates |
-| Laptop 3D stadium polish | Teammates |
+| Laptop 3D stadium polish | Teammates — Canvas Neural FX shipped; see `laptop/NEURAL_FX.md` |
 
 ---
 
@@ -221,3 +221,5 @@ python laptop/test_match.py
 ```
 
 Optional public desk on laptop: `ANTHROPIC_API_KEY` or `GF_LLM_URL`. Phone coach is separate and private.
+
+On-device stadium VFX (Adreno + optional Hexagon): see [`laptop/NEURAL_FX.md`](laptop/NEURAL_FX.md).
