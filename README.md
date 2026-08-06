@@ -47,6 +47,8 @@ The native app `com.sentinelmesh.gesturefootball` is the Player 1 edge-AI statio
 - Kick JSON extras: `height` (`H`/`L`), `spin`, `strike` (`chip`/`drive`), `foot`, plus `force` / `power` / `dirDeg`
 - Bullet-time skeleton frames for TV orbit replay
 - Protocol: [`docs/phone_protocol.md`](docs/phone_protocol.md)
+- State-driven ball visualization: [`docs/trajectory_pipeline.md`](docs/trajectory_pipeline.md)
+- One-step laptop + UNO Q supervisor: [`docs/one_step_setup.md`](docs/one_step_setup.md)
 
 ### Hears you
 - **Whisper Tiny on Hexagon** (push models — not in APK)
@@ -103,6 +105,10 @@ Details: [`android/README.md`](android/README.md).
 ---
 
 ## Quick start
+
+Optional UNO Q USB-camera pose source: see
+[`docs/unoq_pipeline.md`](docs/unoq_pipeline.md). It is opt-in; the existing
+phone NPU/GPU/CPU pipeline remains the default and automatic fallback.
 
 ### 1) Laptop host + TV
 ```powershell

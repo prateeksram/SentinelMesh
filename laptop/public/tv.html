@@ -733,12 +733,52 @@ function shakeOff(now){
 
 /* ============================== the ball ============================== */
 let B={x:0,y:0.11,d:M.DSPOT,vx:0,vy:0,vd:0,mode:"rest",rot:0,curve:0,res:null,zone:null,
-       t0:0,tImpact:0,katch:false,trail:[],netFrom:null,netTo:null};
+       t0:0,tImpact:0,katch:false,trail:[],netFrom:null,netTo:null,path:null,stateDriven:false};
 function ballRollIn(){
   B={x:2.6,y:0.11,d:4.1,vx:0,vy:0,vd:0,mode:"rollin",rot:0,curve:0,res:null,zone:null,
      t0:performance.now(),tImpact:0,katch:false,trail:[],netFrom:null,netTo:null};
 }
 function ballReset(){ B.mode="rest"; B.x=0; B.y=0.11; B.d=M.DSPOT; B.trail=[]; }
+
+function trajectoryPointAt(path,t){
+  if(!path?.length) return null;
+  let b=path[path.length-1],a=path[Math.max(0,path.length-2)];
+  for(let i=1;i<path.length;i++){
+    if(path[i][0]>=t){a=path[i-1];b=path[i];break;}
+  }
+  const dt=Math.max(0.001,b[0]-a[0]),u=clamp((t-a[0])/dt,0,1);
+  return {x:lerp(a[1],b[1],u),forward:lerp(a[2],b[2],u),z:lerp(a[3],b[3],u),
+          vx:(b[1]-a[1])/dt,vd:(b[2]-a[2])/dt,vy:(b[3]-a[3])/dt};
+}
+function trajectoryTimeAtDepth(path,forward){
+  for(let i=1;i<path.length;i++){
+    if(path[i][2]>=forward){
+      const a=path[i-1],b=path[i],span=Math.max(0.001,b[2]-a[2]);
+      return lerp(a[0],b[0],clamp((forward-a[2])/span,0,1));
+    }
+  }
+  return path[path.length-1][0];
+}
+function stateTrajectory(last){
+  const tr=last?.trajectory,raw=tr?.points;
+  if(!tr||tr.schema!=="sentinel.trajectory.v1"||!Array.isArray(raw)||raw.length<2||
+     !(tr.confidence>=0.25)) return null;
+  const path=raw.slice(0,48).filter(p=>Array.isArray(p)&&p.length===4&&p.every(Number.isFinite));
+  if(path.length<2) return null;
+  // Scoring remains on the legacy referee during this visualization stage.
+  // If it calls a post, bend only the end onto the frame so collision/result
+  // agree while the measured early flight shape remains unchanged.
+  if(last.result==="post"){
+    const end=path[path.length-1],side=(end[1]||Z2X(last.zone)||1)<0?-1:1;
+    const dx=side*M.GW/2-end[1],dz=clamp(end[3],0.35,M.GH-0.12)-end[3];
+    const T=Math.max(0.001,end[0]);
+    return path.map(p=>{
+      const q=clamp(p[0]/T,0,1),smooth=q*q*(3-2*q);
+      return [p[0],p[1]+dx*smooth,p[2],p[3]+dz*smooth];
+    });
+  }
+  return path;
+}
 
 function shoot(last){                       // called by the HUD on resolve entry
   if(!last) return;
@@ -746,8 +786,14 @@ function shoot(last){                       // called by the HUD on resolve entr
   const power=last.power??0.5;
   let tx,ty,td=M.DG;
   // Longer flight so the eye can track the ball into the goal.
-  const T=0.62+0.28*(1-power);
-  if(res==="over"||!z){ tx=(Math.random()*2-1)*1.4; ty=3.1+Math.random()*0.8; }
+  let T=0.62+0.28*(1-power);
+  const path=stateTrajectory(last);
+  if(path){
+    T=path[path.length-1][0];
+    if(res==="save") T=trajectoryTimeAtDepth(path,M.DK-M.DSPOT);
+    const impact=trajectoryPointAt(path,T);
+    tx=impact.x;ty=impact.z;td=M.DSPOT+impact.forward;
+  }else if(res==="over"||!z){ tx=(Math.random()*2-1)*1.4; ty=3.1+Math.random()*0.8; }
   else if(res==="post"){
     if(z==="C"){ tx=(Math.random()<0.5?-1:1)*0.35; ty=M.GH; }
     else{ tx=(z==="L"?-1:1)*(M.GW/2); ty=0.9+Math.random()*1.1; }
@@ -764,15 +810,21 @@ function shoot(last){                       // called by the HUD on resolve entr
   const kickT=contact/0.35;
   // Curve from ForcePose swing direction (dirDeg).
   const dirDeg=typeof last.dirDeg==="number"?last.dirDeg:0;
-  const spin=clamp(dirDeg/45,-1,1)*(Math.random()*0.35+0.65)+(Math.random()*2-1)*0.25;
+  const spin=typeof last.spin==="number"?clamp(last.spin,-1,1):
+    clamp(dirDeg/45,-1,1)*(Math.random()*0.35+0.65)+(Math.random()*2-1)*0.25;
   const tFly=t0+contact*1000;
   B={x:0,y:0.11,d:M.DSPOT,mode:"windup",rot:0,res,zone:z,t0,tFly,tImpact:tFly+T*1000,trail:[],
-     curve:spin*2.4,
+     curve:path?0:spin*2.4,path,stateDriven:!!path,
      katch:res==="save"&&power<0.62&&z===kz,netFrom:null,netTo:null,
      tx,ty,td,T};
-  B.vx=(tx-0-0.5*B.curve*T*T)/T;
-  B.vy=(ty-0.11+4.9*T*T)/T;
-  B.vd=(td-M.DSPOT)/T;
+  if(path){
+    const launch=trajectoryPointAt(path,0);
+    B.vx=launch.vx;B.vy=launch.vy;B.vd=launch.vd;
+  }else{
+    B.vx=(tx-0-0.5*B.curve*T*T)/T;
+    B.vy=(ty-0.11+4.9*T*T)/T;
+    B.vd=(td-M.DSPOT)/T;
+  }
   // Striker plants and swings from the same kick packet.
   strikerKick(last,t0,kickT);
   // keeper dive brief — reacts as the ball leaves the boot
@@ -819,8 +871,14 @@ function updateBall(now,dt){
     B.x=0; B.y=0.11; B.d=M.DSPOT;
     if(now>=(B.tFly||B.t0)) B.mode="fly";
   }else if(m==="fly"){
-    B.vx+=B.curve*dt; B.vy-=9.8*dt;
-    B.x+=B.vx*dt; B.y+=B.vy*dt; B.d+=B.vd*dt; B.rot+=dt*14;
+    if(B.path){
+      const p=trajectoryPointAt(B.path,clamp((now-B.tFly)/1000,0,B.T));
+      B.x=p.x;B.y=p.z;B.d=M.DSPOT+p.forward;
+      B.vx=p.vx;B.vy=p.vy;B.vd=p.vd;B.rot+=dt*14;
+    }else{
+      B.vx+=B.curve*dt; B.vy-=9.8*dt;
+      B.x+=B.vx*dt; B.y+=B.vy*dt; B.d+=B.vd*dt; B.rot+=dt*14;
+    }
     if(now>=B.tImpact) ballImpact(now);
   }else if(m==="fly2"){
     B.vy-=9.8*dt; B.x+=B.vx*dt; B.y+=B.vy*dt; B.d+=B.vd*dt; B.rot+=dt*10;
@@ -853,17 +911,18 @@ function updateBall(now,dt){
 function drawFlightGuide(){
   // Predicted path from spot → impact while the ball is flying.
   if((B.mode!=="fly"&&B.mode!=="windup")||!B.T) return;
-  const n=18;
   cx.save();
   cx.setLineDash([6,8]);
-  cx.strokeStyle="rgba(255,196,0,.35)";
+  cx.strokeStyle=B.stateDriven?"rgba(0,232,255,.52)":"rgba(255,196,0,.35)";
   cx.lineWidth=Math.max(1.5,H*0.0025);
   cx.beginPath();
+  const n=B.path?.length?Math.max(18,B.path.length-1):18;
   for(let i=0;i<=n;i++){
     const u=i/n, t=B.T*u;
-    const x=0+B.vx*t+0.5*B.curve*t*t;
-    const y=0.11+B.vy*t-4.9*t*t;
-    const d=M.DSPOT+B.vd*t;
+    const p=B.path?trajectoryPointAt(B.path,t):null;
+    const x=p?p.x:0+B.vx*t+0.5*B.curve*t*t;
+    const y=p?p.z:0.11+B.vy*t-4.9*t*t;
+    const d=p?M.DSPOT+p.forward:M.DSPOT+B.vd*t;
     const s=sc(d), px=W/2+x*s, py=gy(d)-Math.max(0.05,y)*s;
     i?cx.lineTo(px,py):cx.moveTo(px,py);
   }

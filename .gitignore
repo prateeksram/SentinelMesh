@@ -19,3 +19,8 @@ android/.idea/
 *.iml
 *.apk
 *.aab
+
+# Local USB-camera relay runtime output
+relay.*.log
+server.*.log
+logs/
