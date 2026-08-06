@@ -13,6 +13,7 @@ This document is the full path from zero → first goal → next venue → scout
 | Role | Device | Responsibility |
 |---|---|---|
 | **Player 1** | Android phone (`android/`) | Pose, ForcePose, Whisper, private coach, aim/kick JSON |
+| **Edge pose (optional)** | Arduino UNO Q + USB camera (`unoq/`) | Full-body pose, foot tracking, kick state, preview relay |
 | **Host / TV** | Laptop (`laptop/server.py` + `tv.html`) | Match engine, keeper, stadium UI, SceneEngine, AI100 report |
 | **On-device LLM (laptop)** | GenieX Qwen3-4B | Desk commentary + agentic next-venue TV skins |
 | **Cloud (optional)** | Qualcomm AI100 SDXL | Report artwork only (not HTML, not scores) |
@@ -22,6 +23,8 @@ This document is the full path from zero → first goal → next venue → scout
 ```mermaid
 flowchart LR
   Phone[Galaxy phone NPU] -->|"aim / kick / skel"| Host[laptop server.py :8080]
+  Camera[USB camera] --> UNOQ[Arduino UNO Q pose]
+  UNOQ -->|"UDP pose + HTTP preview"| Host
   Host --> TV[tv.html stadium]
   Host --> GenieX[GenieX :18181]
   Host --> FX[Neural FX depth]
@@ -148,6 +151,33 @@ Debug scene HUD: **`http://localhost:8080/tv.html?debug=1`**
 6. On TV → **START MATCH**.
 
 **Do not** put `localhost` in the phone HOST field unless the server is on the phone.
+
+---
+
+## Optional UNO Q edge-pose mode
+
+UNO Q can replace phone-side body-pose inference while preserving the same
+calibration, phone UI, ForcePose state, trajectory visualization, and local
+NPU/GPU/CPU fallback. The USB camera observes the player; UNO Q sends normalized
+pose and optical-flow motion to the laptop, which relays it to the Android app.
+
+From the repository root, the one-step supervisor starts the laptop server,
+USB-camera relay, and remote UNO Q streamer, and cleans them up together:
+
+```powershell
+.\start-game.bat -UnoQIp 192.168.150.72 -CameraIndex 1
+```
+
+In the phone app, tap the delegate badge until it reads `UNO Q`, then calibrate
+and play normally. If the edge stream becomes stale, the app restores local
+phone inference automatically.
+
+- Full deployment and troubleshooting: [`docs/unoq_pipeline.md`](docs/unoq_pipeline.md)
+- One-step launcher reference: [`docs/one_step_setup.md`](docs/one_step_setup.md)
+- State-driven trajectory protocol: [`docs/trajectory_pipeline.md`](docs/trajectory_pipeline.md)
+
+UNO Q uses UDP `9999` for pose and the host exposes `/edge/*` camera/status
+routes on HTTP `8080`.
 
 ---
 
