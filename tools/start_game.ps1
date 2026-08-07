@@ -33,6 +33,44 @@ $relayProcess = $null
 $bridgeProcess = $null
 $remoteStarted = $false
 $scriptExitCode = 0
+$unoQTransport = $null
+$unoQPassword = $null
+$plinkPath = $null
+$pscpPath = $null
+$resolvedIdentityFile = $null
+$cancelHandler = $null
+
+if (-not ("SentinelMeshCancelSignal" -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+
+public static class SentinelMeshCancelSignal
+{
+    public static volatile bool IsCancellationRequested;
+    private static bool IsInstalled;
+
+    public static void Install()
+    {
+        if (IsInstalled) return;
+        Console.CancelKeyPress += Handle;
+        IsInstalled = true;
+    }
+
+    public static void Remove()
+    {
+        if (!IsInstalled) return;
+        Console.CancelKeyPress -= Handle;
+        IsInstalled = false;
+    }
+
+    private static void Handle(object sender, ConsoleCancelEventArgs args)
+    {
+        args.Cancel = true;
+        IsCancellationRequested = true;
+    }
+}
+'@
+}
 
 function Write-Step([string]$Message) {
     Write-Host "`n==> $Message" -ForegroundColor Cyan
@@ -70,11 +108,51 @@ function Get-PreferredLaptopIp {
 
 function Get-SshBaseArgs {
     $sshArguments = @("-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=10")
-    if ($IdentityFile) {
-        $resolvedIdentity = (Resolve-Path -LiteralPath $IdentityFile).Path
-        $sshArguments += @("-i", $resolvedIdentity)
+    if ($resolvedIdentityFile) {
+        $sshArguments += @("-i", $resolvedIdentityFile)
     }
     return $sshArguments
+}
+
+function Find-Executable([string]$Name, [string]$ProgramFilesRelativePath) {
+    $command = Get-Command $Name -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) { return $command.Source }
+
+    $roots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) |
+        Where-Object { $_ } | Select-Object -Unique
+    foreach ($root in $roots) {
+        $candidate = Join-Path $root $ProgramFilesRelativePath
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    return $null
+}
+
+function Initialize-UnoQTransport {
+    if ($IdentityFile) {
+        $script:resolvedIdentityFile = (Resolve-Path -LiteralPath $IdentityFile).Path
+        $script:unoQTransport = "OpenSSH"
+        return
+    }
+
+    $script:plinkPath = Find-Executable "plink.exe" "PuTTY\plink.exe"
+    $script:pscpPath = Find-Executable "pscp.exe" "PuTTY\pscp.exe"
+    if (-not $plinkPath -or -not $pscpPath) {
+        throw "Password reuse requires PuTTY plink.exe and pscp.exe. Install PuTTY, or pass -IdentityFile for key-based OpenSSH."
+    }
+
+    $securePassword = Read-Host "UNO Q password for $UnoQUser@$UnoQIp" -AsSecureString
+    $credential = [System.Management.Automation.PSCredential]::new($UnoQUser, $securePassword)
+    $script:unoQPassword = $credential.GetNetworkCredential().Password
+    $script:unoQTransport = "PuTTY"
+
+    Write-Host "Checking UNO Q login (the password will be reused in memory for this run)..."
+    # The first connection is intentionally interactive so PuTTY can ask the
+    # user to verify and cache a previously unseen host key. The password itself
+    # was already collected once above and is supplied to this process.
+    & $plinkPath -ssh -pw $unoQPassword "$UnoQUser@$UnoQIp" "printf sentinelmesh-auth-ok"
+    if ($LASTEXITCODE -ne 0) {
+        throw "UNO Q authentication failed with exit code $LASTEXITCODE"
+    }
 }
 
 function Invoke-UnoQ([string]$Command, [switch]$IgnoreFailure) {
@@ -82,15 +160,32 @@ function Invoke-UnoQ([string]$Command, [switch]$IgnoreFailure) {
     # ssh makes Bash parse tokens such as `set -e\r` and `do\r`, so normalize
     # once at the transport boundary for every remote command.
     $unixCommand = $Command.Replace("`r`n", "`n").Replace("`r", "`n")
-    $sshArguments = @(Get-SshBaseArgs)
-    $sshArguments += "$UnoQUser@$UnoQIp"
-    $sshArguments += $unixCommand
-    & ssh @sshArguments
+    if ($unoQTransport -eq "PuTTY") {
+        & $plinkPath -batch -ssh -pw $unoQPassword "$UnoQUser@$UnoQIp" $unixCommand
+    } else {
+        $sshArguments = @(Get-SshBaseArgs)
+        $sshArguments += "$UnoQUser@$UnoQIp"
+        $sshArguments += $unixCommand
+        & ssh @sshArguments
+    }
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0 -and -not $IgnoreFailure) {
         throw "UNO Q SSH command failed with exit code $exitCode"
     }
     return $exitCode
+}
+
+function Copy-ToUnoQ([string]$LocalPath, [string]$RemotePath, [string]$Description) {
+    if ($unoQTransport -eq "PuTTY") {
+        & $pscpPath -batch -pw $unoQPassword $LocalPath "$UnoQUser@$UnoQIp`:$RemotePath"
+    } else {
+        $scpArguments = @(Get-SshBaseArgs)
+        $scpArguments += @($LocalPath, "$UnoQUser@$UnoQIp`:$RemotePath")
+        & scp @scpArguments
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "UNO Q $Description sync failed with exit code $LASTEXITCODE"
+    }
 }
 
 function Stop-KnownLocalServices {
@@ -253,9 +348,14 @@ try {
         Test-IpAddress $UnoQIp "UNO Q IP"
         if (-not $LaptopIp) { $LaptopIp = Get-RoutedLaptopIp $UnoQIp }
         Test-IpAddress $LaptopIp "Laptop IP"
+        Initialize-UnoQTransport
     } elseif (-not $LaptopIp) {
         $LaptopIp = Get-PreferredLaptopIp
     }
+
+    [SentinelMeshCancelSignal]::IsCancellationRequested = $false
+    [SentinelMeshCancelSignal]::Install()
+    $cancelHandler = $true
 
     Write-Step "Cleaning up recognized services from the previous run"
     Stop-KnownLocalServices
@@ -301,16 +401,8 @@ try {
         if ($SyncUnoQ) {
             Write-Step "Syncing the current UNO Q wrapper"
             Invoke-UnoQ "mkdir -p '$RemoteDir'" | Out-Null
-            $scpArgs = @()
-            if ($IdentityFile) { $scpArgs += @("-i", (Resolve-Path -LiteralPath $IdentityFile).Path) }
-            $scpArgs += @($streamerScript, "$UnoQUser@$UnoQIp`:$RemoteDir/sentinel_pose_streamer.py")
-            & scp @scpArgs
-            if ($LASTEXITCODE -ne 0) { throw "UNO Q sync failed with exit code $LASTEXITCODE" }
-            $backendScpArgs = @()
-            if ($IdentityFile) { $backendScpArgs += @("-i", (Resolve-Path -LiteralPath $IdentityFile).Path) }
-            $backendScpArgs += @($backendScript, "$UnoQUser@$UnoQIp`:$RemoteDir/mediapipe_onnx_backend.py")
-            & scp @backendScpArgs
-            if ($LASTEXITCODE -ne 0) { throw "UNO Q backend sync failed with exit code $LASTEXITCODE" }
+            Copy-ToUnoQ $streamerScript "$RemoteDir/sentinel_pose_streamer.py" "streamer"
+            Copy-ToUnoQ $backendScript "$RemoteDir/mediapipe_onnx_backend.py" "backend"
         }
 
         $camera = if ($CameraMode -eq "Laptop") {
@@ -365,7 +457,7 @@ echo "UNO Q pose streamer started as PID $pid"
     Write-Host "`nPress Ctrl+C once to stop every service started by this supervisor." -ForegroundColor Yellow
 
     $readyAt = [DateTime]::UtcNow
-    while ($true) {
+    while (-not [SentinelMeshCancelSignal]::IsCancellationRequested) {
         Start-Sleep -Seconds 1
         $serverProcess.Refresh()
         if ($serverProcess.HasExited) { throw "Laptop server exited. See $runLogDir\server.err.log" }
@@ -383,6 +475,9 @@ echo "UNO Q pose streamer started as PID $pid"
             break
         }
     }
+    if ([SentinelMeshCancelSignal]::IsCancellationRequested) {
+        Write-Host "Ctrl+C received; stopping the game."
+    }
 } catch {
     Write-Host "`nSETUP ERROR: $($_.Exception.Message)" -ForegroundColor Red
     $scriptExitCode = 1
@@ -392,7 +487,7 @@ echo "UNO Q pose streamer started as PID $pid"
     Stop-Child $bridgeProcess "SnapKick bridge"
     Stop-Child $serverProcess "laptop server"
     if ($remoteStarted) {
-        Write-Host "Stopping UNO Q pose streamer (SSH may request your password)"
+        Write-Host "Stopping UNO Q pose streamer"
         Stop-UnoQStreamer
     }
     try {
@@ -401,6 +496,10 @@ echo "UNO Q pose streamer started as PID $pid"
         Write-Warning "Final local cleanup was incomplete: $($_.Exception.Message)"
         $scriptExitCode = 1
     }
+    if ($cancelHandler) {
+        [SentinelMeshCancelSignal]::Remove()
+    }
+    $script:unoQPassword = $null
     Write-Host "Cleanup complete. TCP 8080 and the UNO Q streamer are ready for the next run." -ForegroundColor Green
 }
 
