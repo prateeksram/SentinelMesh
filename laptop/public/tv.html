@@ -96,14 +96,42 @@
        border:1px solid rgba(158,190,215,.25);border-radius:999px;padding:8px 18px;
        box-shadow:0 8px 24px rgba(0,0,0,.45)}
   #sub:empty{display:none}
-  #startBtn{pointer-events:auto;margin-top:16px;font-family:var(--fBlack);
-            font-size:clamp(16px,2.2vw,24px);letter-spacing:2px;color:var(--ink);
-            background:linear-gradient(180deg,#ffd54d,var(--amber));
-            border:none;border-radius:12px;padding:12px 34px;cursor:pointer;
-            box-shadow:0 6px 0 #b98d00,0 14px 32px rgba(0,0,0,.5);
-            transition:transform .08s,box-shadow .08s}
-  #startBtn:active{transform:translateY(5px);box-shadow:0 2px 0 #b98d00,0 8px 24px rgba(0,0,0,.5)}
-  #startBtn:disabled{background:#31506a;color:#7d95a8;box-shadow:0 6px 0 #22374a;cursor:default}
+  #startBtn{pointer-events:auto;margin-top:16px;position:relative;z-index:2;
+            overflow:hidden;font-family:var(--fBlack);
+            font-size:clamp(16px,2.2vw,24px);letter-spacing:2.5px;color:var(--ink);
+            background:linear-gradient(180deg,#ffe27a,#ffc400 50%,#e5b000);
+            border:2px solid rgba(255,255,255,.55);border-radius:14px;padding:13px 38px;cursor:pointer;
+            box-shadow:0 6px 0 #b98d00,0 0 0 0 rgba(255,196,0,.55),0 14px 32px rgba(0,0,0,.5);
+            transition:background .2s,color .2s,border-color .2s;
+            animation:startPulse 1.4s ease-in-out infinite}
+  #startBtn::after{content:"";position:absolute;top:0;bottom:0;left:-60%;width:45%;
+            background:linear-gradient(100deg,transparent,rgba(255,255,255,.7),transparent);
+            transform:skewX(-20deg);animation:startSheen 1.8s linear infinite;pointer-events:none}
+  @keyframes startPulse{
+    0%,100%{transform:translateY(0) scale(1);
+      box-shadow:0 6px 0 #b98d00,0 0 10px 2px rgba(255,196,0,.35),0 14px 32px rgba(0,0,0,.45)}
+    50%{transform:translateY(-4px) scale(1.06);
+      box-shadow:0 10px 0 #b98d00,0 0 34px 10px rgba(255,196,0,.55),0 18px 40px rgba(0,0,0,.55)}
+  }
+  @keyframes startSheen{
+    0%{left:-60%}
+    100%{left:130%}
+  }
+  #startBtn:hover:not(:disabled){filter:brightness(1.08)}
+  #startBtn:active:not(:disabled){animation:none;transform:translateY(4px) scale(.97);
+            box-shadow:0 2px 0 #b98d00,0 8px 24px rgba(0,0,0,.5)}
+  /* Waiting for phone — still animated, cooler tone */
+  #startBtn:disabled{color:#c5d6e4;cursor:default;border-color:rgba(62,199,244,.45);
+            background:linear-gradient(180deg,#3a6a88,#2a4f6a 55%,#1e3a52);
+            box-shadow:0 6px 0 #152a3c,0 0 0 0 rgba(62,199,244,.4),0 14px 32px rgba(0,0,0,.5);
+            animation:startWait 1.8s ease-in-out infinite}
+  #startBtn:disabled::after{background:linear-gradient(100deg,transparent,rgba(160,220,255,.45),transparent)}
+  @keyframes startWait{
+    0%,100%{transform:translateY(0) scale(1);
+      box-shadow:0 6px 0 #152a3c,0 0 8px 2px rgba(62,199,244,.25),0 14px 28px rgba(0,0,0,.45)}
+    50%{transform:translateY(-3px) scale(1.04);
+      box-shadow:0 9px 0 #152a3c,0 0 26px 8px rgba(62,199,244,.45),0 16px 36px rgba(0,0,0,.5)}
+  }
   #startBtn.hide{display:none}
   #abortBtn{font:inherit;color:var(--chalk);background:#5a2230;border:1px solid #8a3040;
             border-radius:8px;padding:7px 12px;cursor:pointer;letter-spacing:1.5px;
@@ -221,7 +249,7 @@
   </div>
   <div class="mid"><b id="midTop">LOBBY</b><span id="midBot">GESTURE FOOTBALL</span></div>
   <div class="team right wall">
-    <div class="tname">THE&nbsp;WALL<small>AI&nbsp;KEEPER</small></div>
+    <div class="tname">AI&nbsp;KEEPER<small>ON-DEVICE</small></div>
     <div class="score" id="sWall">0</div>
     <div class="dots" id="dWall"></div>
   </div>
@@ -259,7 +287,7 @@
   <div class="rail-card">
     <div class="links">
       <span><span class="led" id="ledP"></span>PHONE</span>
-      <span><span class="led on"></span>THE WALL</span>
+      <span><span class="led on"></span>AI KEEPER</span>
       <span id="deskBadge" title="Commentary desk backend">DESK · …</span>
       <span id="fxBadge" title="On-device stadium neural FX">FX · …</span>
       <span id="sceneBadge" title="SceneEngine">SCENE · …</span>
@@ -629,12 +657,12 @@ function onState(st){
     case "lobby":
       big.textContent="GESTURE FOOTBALL";
       big.className="brand";
-      sub.textContent=st.connected?.phone?"striker ready — THE WALL awaits":"waiting for the striker…";
+      sub.textContent=st.connected?.phone?"striker ready — AI Keeper awaits":"waiting for the striker…";
       btn.classList.remove("hide"); btn.disabled=!st.connected?.phone;
       btn.textContent="START MATCH"; break;
     case "announce":
       big.textContent=`KICK ${st.kick}`;
-      sub.textContent=st.line||"aim with your hand — THE WALL is watching it"; break;
+      sub.textContent=st.line||"aim with your hand — AI Keeper is watching it"; break;
     case "countdown":
       big.textContent=Math.max(1,Math.ceil(st.timerMs/1000));
       sub.textContent="…"; pop(); break;
@@ -680,7 +708,7 @@ function onState(st){
       }
       big.textContent=`${st.score} / ${st.kicksTotal}`;
       big.className=st.score>st.kicksTotal/2?"goal":"save";
-      sub.textContent=st.score>st.kicksTotal/2?"YOU BEAT THE WALL":"THE WALL STANDS";
+      sub.textContent=st.score>st.kicksTotal/2?"YOU BEAT AI KEEPER":"AI KEEPER STANDS";
       if(st.report){ report.textContent=st.report; report.classList.add("show"); }
       btn.classList.remove("hide"); btn.disabled=false;
       btn.textContent=st.level?"NEXT VENUE":"PLAY AGAIN";
@@ -999,7 +1027,7 @@ function drawFan(c,x,y,r,shirt,skin,hair,sh,up){
 }
 
 /* ---------------------------- static: LED ad boards ---------------------------- */
-const BRANDS=[["FORCEPOSE","#FFC400"],["SENTINELMESH","#3EC7F4"],["THE WALL","#e9f2f7"],
+const BRANDS=[["FORCEPOSE","#FFC400"],["SENTINELMESH","#3EC7F4"],["AI KEEPER","#e9f2f7"],
               ["GESTURE FC","#3ddc74"],["BULLET-TIME","#FFC400"],["POSE//NET","#3EC7F4"],
               ["MESHCAM","#e9f2f7"],["NIGHT LEAGUE","#ff8a3c"]];
 function buildBoards(){
@@ -1386,9 +1414,25 @@ function drawFlightGuide(){
   cx.stroke();
   cx.restore();
 }
+/* Classic truncated-icosahedron panels (12 pentagon centres). */
+const BALL_PENTS=(()=>{
+  const t=(1+Math.sqrt(5))/2;
+  return [
+    [0,1,t],[0,-1,t],[0,1,-t],[0,-1,-t],
+    [1,t,0],[-1,t,0],[1,-t,0],[-1,-t,0],
+    [t,0,1],[t,0,-1],[-t,0,1],[-t,0,-1],
+  ].map(v=>{const L=Math.hypot(v[0],v[1],v[2]);return[v[0]/L,v[1]/L,v[2]/L];});
+})();
+function _ballNorm(v){const L=Math.hypot(v[0],v[1],v[2])||1;return[v[0]/L,v[1]/L,v[2]/L];}
+function _ballCross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
+function _ballRot(p,yaw,pitch){
+  const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
+  const x1=p[0]*cy+p[2]*sy, z1=-p[0]*sy+p[2]*cy;
+  return [x1, p[1]*cp-z1*sp, p[1]*sp+z1*cp];
+}
 function drawBall(){
   if(B.mode==="gone") return;
-  const s=sc(B.d), x=W/2+B.x*s, y=gy(B.d)-B.y*s, r=Math.max(4,0.11*s);
+  const s=sc(B.d), x=W/2+B.x*s, y=gy(B.d)-B.y*s, r=Math.max(5,0.115*s);
   const I=vfxTier(B.force||VFX.force);
   const drive=B.strike!=="chip";
   // Connected streak — laser drive vs soft chip loft.
@@ -1408,23 +1452,91 @@ function drawBall(){
     cx.stroke();
     cx.restore();
   }
-  for(let i=0;i<B.trail.length;i++){                     // motion blur
-    const p=B.trail[i], a=(i+1)/B.trail.length*0.38;
+  for(let i=0;i<B.trail.length;i++){
+    const p=B.trail[i], a=(i+1)/B.trail.length*0.28;
     cx.fillStyle=`rgba(244,247,241,${a})`;
     cx.beginPath(); cx.arc(p.x,p.y,p.r*(0.45+0.5*(i+1)/B.trail.length),0,7); cx.fill();
   }
-  cx.fillStyle=`rgba(4,12,6,${clamp(0.34-B.y*0.16,0.05,0.34)})`;   // shadow
-  cx.beginPath(); cx.ellipse(x,gy(B.d),r*1.05,r*0.3,0,0,7); cx.fill();
-  const g=cx.createRadialGradient(x-r*0.35,y-r*0.4,r*0.15,x,y,r);
-  g.addColorStop(0,"#ffffff"); g.addColorStop(0.75,"#e8eef0"); g.addColorStop(1,"#b9c6cc");
-  cx.fillStyle=g; cx.beginPath(); cx.arc(x,y,r,0,7); cx.fill();
-  cx.strokeStyle="rgba(20,40,50,.4)"; cx.lineWidth=Math.max(1,r*0.08); cx.stroke();
-  cx.fillStyle="#25353d";
-  for(let k=0;k<5;k++){                                   // rolling panel dots
-    const a=B.rot+k*Math.PI*2/5;
-    cx.beginPath(); cx.arc(x+Math.cos(a)*r*0.55,y+Math.sin(a)*r*0.52,r*0.17,0,7); cx.fill();
+  // Ground contact shadow
+  cx.fillStyle=`rgba(4,12,6,${clamp(0.38-B.y*0.18,0.06,0.38)})`;
+  cx.beginPath(); cx.ellipse(x,gy(B.d),r*1.15,r*0.32,0,0,7); cx.fill();
+
+  cx.save();
+  cx.beginPath(); cx.arc(x,y,r,0,7); cx.clip();
+
+  // Soft leather body
+  const body=cx.createRadialGradient(x-r*0.32,y-r*0.38,r*0.08,x,y,r*1.05);
+  body.addColorStop(0,"#ffffff");
+  body.addColorStop(0.45,"#f2f4f6");
+  body.addColorStop(0.82,"#d5dde2");
+  body.addColorStop(1,"#9aa8b0");
+  cx.fillStyle=body;
+  cx.fillRect(x-r-1,y-r-1,r*2+2,r*2+2);
+
+  // Rotating blue pentagons on white — crisp white panel borders
+  const yaw=B.rot, pitch=B.rot*0.62+0.35;
+  const ang=0.58; // panel angular radius
+  const sa=Math.sin(ang), ca=Math.cos(ang);
+  const blueFill=(z)=>`rgb(${Math.round(22+38*z)},${Math.round(88+55*z)},${Math.round(168+40*z)})`;
+  for(let i=0;i<BALL_PENTS.length;i++){
+    const c=_ballRot(BALL_PENTS[i],yaw,pitch);
+    if(c[2]<0.18) continue;
+    let a=Math.abs(c[1])<0.9?[0,1,0]:[1,0,0];
+    const u=_ballNorm(_ballCross(a,c));
+    const v=_ballCross(c,u);
+    cx.beginPath();
+    for(let k=0;k<5;k++){
+      const th=k*Math.PI*2/5 - Math.PI/2;
+      const q=_ballNorm([
+        c[0]*ca+(u[0]*Math.cos(th)+v[0]*Math.sin(th))*sa,
+        c[1]*ca+(u[1]*Math.cos(th)+v[1]*Math.sin(th))*sa,
+        c[2]*ca+(u[2]*Math.cos(th)+v[2]*Math.sin(th))*sa,
+      ]);
+      const px=x+q[0]*r, py=y-q[1]*r;
+      k?cx.lineTo(px,py):cx.moveTo(px,py);
+    }
+    cx.closePath();
+    cx.fillStyle=blueFill(c[2]);
+    cx.fill();
+    cx.strokeStyle=`rgba(255,255,255,${0.75+0.2*c[2]})`;
+    cx.lineWidth=Math.max(1.1,r*0.055);
+    cx.stroke();
+    cx.strokeStyle=`rgba(30,90,180,${0.35+0.25*c[2]})`;
+    cx.lineWidth=Math.max(0.5,r*0.022);
+    cx.stroke();
   }
-  cx.beginPath(); cx.arc(x+Math.cos(B.rot*1.6)*r*0.15,y+Math.sin(B.rot*1.6)*r*0.15,r*0.19,0,7); cx.fill();
+
+  // White seam ring between panels
+  cx.strokeStyle="rgba(255,255,255,.55)";
+  cx.lineWidth=Math.max(0.6,r*0.028);
+  cx.beginPath(); cx.arc(x,y,r*0.97,0,7); cx.stroke();
+  cx.strokeStyle="rgba(37,99,235,.35)";
+  cx.lineWidth=Math.max(0.5,r*0.018);
+  cx.beginPath(); cx.arc(x,y,r*0.94,0,7); cx.stroke();
+
+  // Specular highlight
+  const hi=cx.createRadialGradient(x-r*0.28,y-r*0.34,0,x-r*0.18,y-r*0.22,r*0.55);
+  hi.addColorStop(0,"rgba(255,255,255,.7)");
+  hi.addColorStop(0.35,"rgba(255,255,255,.22)");
+  hi.addColorStop(1,"rgba(255,255,255,0)");
+  cx.fillStyle=hi;
+  cx.beginPath(); cx.arc(x,y,r,0,7); cx.fill();
+
+  // Soft limb darkening at the rim
+  const rim=cx.createRadialGradient(x,y,r*0.72,x,y,r);
+  rim.addColorStop(0,"rgba(0,0,0,0)");
+  rim.addColorStop(1,"rgba(10,18,24,.28)");
+  cx.fillStyle=rim;
+  cx.beginPath(); cx.arc(x,y,r,0,7); cx.fill();
+  cx.restore();
+
+  // Outer edge — blue trim on white
+  cx.strokeStyle="rgba(37,99,235,.75)";
+  cx.lineWidth=Math.max(1.2,r*0.07);
+  cx.beginPath(); cx.arc(x,y,r,0,7); cx.stroke();
+  cx.strokeStyle="rgba(255,255,255,.45)";
+  cx.lineWidth=Math.max(0.6,r*0.03);
+  cx.beginPath(); cx.arc(x,y,r*0.92,0,7); cx.stroke();
 }
 
 /* ============================== goal + net ============================== */
@@ -1856,7 +1968,7 @@ const KIT_KEEPER={
   sleeve:"#2eb4e0",sleeveHi:"#5ad4f8",short:"#13273a",shortFill:"#0e1c28",
   sock:"#1a2740",boot:"#0a0f14",bootToe:"#1c2836",
   hand:"#f4f7f1",skin:"#e0ad82",hair:"#11161b",gloveStroke:"rgba(10,25,38,.55)",
-  label:"THE WALL",labelCol:"#062028",num:"1"
+  label:"AI KEEPER",labelCol:"#062028",num:"1"
 };
 /* ---- Option B: ForcePose skeleton → solid striker on the pitch ---- */
 const MP={NOSE:0,L_SHO:11,R_SHO:12,L_ELB:13,R_ELB:14,L_WRI:15,R_WRI:16,
