@@ -1,42 +1,61 @@
-# Phone / UNO Q ↔ host WebSocket protocol
+# Wire protocol - WebSocket and UDP
 
-Strikers speak tiny JSON to the match host. TV / UNO Q can ignore unknown fields.
+Complete message reference for the root host ([`server.py`](../server.py)). Strikers speak tiny JSON; the server tolerates and ignores unknown fields, so clients may extend messages freely.
 
-**Default URL:** `ws://<host>:8080/ws`
+**WebSocket URL:** `ws://<host>:8080/ws` (or `wss://<host>:8443/ws` when certs are installed).
 
-**Striker clients:** `phone` (browser / Android app) and `unoq`
-([snapkick_bridge.py](../snapkick_bridge.py), which translates the UNO Q's
-`snapkick.pose.v1` UDP packets on port 5005 into this protocol).
+---
 
-**Host:** root [`server.py`](../server.py) + [`public/`](../public/) (canonical).
+## 1. Roles and permissions
 
-## Client → server
+Every client introduces itself once:
 
-### `hello`
 ```json
 { "type": "hello", "client": "phone" }
 ```
-`client` ∈ `phone` | `unoq` | `tv` | `bridge` | `dashboard`  
-Optional `roles: ["dashboard"]` also registers a telemetry subscriber.
 
-### `sport`
+| `client` | Who | May send |
+|---|---|---|
+| `phone` | Android app or `phone.html` | `aim`, `kick`, `skel`, `start`, `telem` |
+| `unoq` | `snapkick_bridge.py` | `aim`, `kick`, `skel`, `telem` |
+| `bridge` | alias - treated as `unoq` | same |
+| `tv` | `tv.html` | `sport`, `start`, `again`, `abort`, `telem` |
+| `dashboard` | telemetry viewers | receives `telem_state` only |
+
+Unknown `client` values are silently ignored (the socket stays open but is never registered). Only `phone` and `unoq` are **strikers**; the first striker `kick` in each shoot window counts.
+
+---
+
+## 2. Client → server
+
+### `sport` - lobby only
+
 ```json
 { "type": "sport", "sport": "darts" }
 ```
-`sport` ∈ `football` | `darts` | `basketball`. Lobby only. The host does **not**
-role-check today — any connected client may send it while `phase == lobby`.
 
-Football is the keeper duel; darts / basketball score metric rings around a
-target (no keeper).
+`sport` ∈ `football` | `darts` | `basketball`. Accepted only in the `lobby` phase **and** when no match task is still winding down; otherwise silently dropped. The host does **not** role-check this message today - any connected client may send it during the lobby (the TV's sport buttons are the intended sender). Football is the keeper duel; darts/basketball score metric rings (no keeper).
+
+### `start` / `again` / `abort` - match control
+
+| Type | Valid phase | Effect |
+|---|---|---|
+| `start` | `lobby`, striker connected | Begin the match |
+| `again` | `end` | Rematch - campaign level and difficulty are **kept** |
+| `abort` | any phase except `lobby` | Cancel and reset - campaign level is **wiped** |
+
+`start` may come from the TV or from a striker (the phone sends it on a spoken "ready").
 
 ### `aim`
+
 ```json
 { "type": "aim", "zone": "L" }
 ```
-`zone` ∈ `L` | `C` | `R`. Accepted from striker roles during
-`announce` | `countdown` | `shoot`.
+
+`zone` ∈ `L` | `C` | `R`. Send at most ~5 Hz. The keeper samples the aim trail `keeperReaction` seconds before the strike, so late zone changes (feints) beat it.
 
 ### `kick`
+
 ```json
 {
   "type": "kick",
@@ -48,75 +67,71 @@ target (no keeper).
   "spin": -0.35,
   "strike": "drive",
   "foot": "R",
-  "goalX": -1.1,
-  "goalZ": 1.4,
-  "apexM": 2.1,
+  "goalX": -2.1,
+  "goalZ": 1.6,
+  "apexM": 2.2,
   "speed": 18.5,
-  "kickState": {
-    "schema": "sentinel.kick.state.v1",
-    "source": "FORCEPOSE",
-    "peakFootSpeedMps": 7.2,
-    "lateralVelocityMps": -0.4,
-    "upwardVelocityMps": 1.1,
-    "pathDisplacementM": 0.55,
-    "liftM": 0.12,
-    "swingDurationMs": 280,
-    "confidence": 0.91
-  },
-  "trajectory": {
-    "schema": "sentinel.trajectory.v1",
-    "model": "android",
-    "confidence": 0.88,
-    "launchVelocity": [1.2, 14.0, 2.0],
-    "launchSpeedMps": 14.2,
-    "flightTimeS": 0.85,
-    "goalX": -1.1,
-    "goalZ": 1.4,
-    "apexM": 2.1,
-    "points": [[0.0, 0.0, 0.0, 0.0], [0.4, -0.5, 8.0, 1.8]]
-  }
+  "kickState": { "schema": "sentinel.kick.state.v1", "...": "..." },
+  "trajectory": { "schema": "sentinel.trajectory.v1", "...": "..." }
 }
 ```
 
-| Field | Type | Notes |
+Accepted only from a striker during the `shoot` phase; the first kick wins.
+
+| Field | Type / range | Required | Notes |
+|---|---|---|---|
+| `zone` | `L`\|`C`\|`R` | yes | Aim zone at release |
+| `power` | float 0…1 | no (0.5) | Normalized effort |
+| `force` | int (N) | no | ForcePose Newtons |
+| `dirDeg` | int | no | Launch elevation cue |
+| `height` | `H`\|`L` | no | High / low band |
+| `spin` | float −1…1 | no | Lateral spin cue |
+| `strike` | `chip`\|`drive` | no | Trajectory class |
+| `foot` | `L`\|`R` | no | Swinging foot |
+| `goalX` | float −12…12 (m) | no | Metric impact, lateral at the goal plane (− = left) |
+| `goalZ` | float 0…10 (m) | no | Metric impact height |
+| `apexM` | float 0…12 (m) | no | Predicted apex (animation) |
+| `speed` | float 1…45 (m/s) | no | Launch speed (animation) |
+
+**Referee selection:** when `goalX`/`goalZ` are present the server referees **hybrid** - geometry decides wide/post (football) or ring points (darts/basketball), and the AI keeper contests only on-target football shots at the true impact point. Zone-only kicks fall back to the probabilistic referee (football) or a synthesized impact (target sports). Flat `goalX`/`goalZ`/`apexM`/`speed` take priority over trajectory-derived values.
+
+#### `kickState` sub-object (`sentinel.kick.state.v1`)
+
+Validated kinematics at the swing peak - same shape from ForcePose, HandThrow, and EdgeKick engines:
+
+| Field | Range | Required |
 |---|---|---|
-| `zone` | string | `L` / `C` / `R` (required) |
-| `power` | float | 0…1 normalized; missing/`null`/invalid → `0.5` |
-| `force` | int | Newtons (ForcePose) |
-| `dirDeg` | int | launch elevation cue |
-| `height` | string | `H` high / `L` low (optional) |
-| `spin` | float | −1…1 lateral cue (optional) |
-| `strike` | string | `chip` \| `drive` (optional) |
-| `foot` | string | `L` \| `R` swinging foot (optional) |
-| `goalX` | float | metric impact at the goal plane, metres lateral, − = left (optional) |
-| `goalZ` | float | metric impact height in metres (optional) |
-| `apexM` | float | predicted apex in metres (optional; animation) |
-| `speed` | float | launch speed m/s (optional; animation) |
-| `kickState` | object | `sentinel.kick.state.v1` lower-body metrics (optional; validated server-side) |
-| `trajectory` | object | `sentinel.trajectory.v1` sampled path (optional; validated server-side) |
+| `peakFootSpeedMps` | 0…15 | yes |
+| `confidence` | 0…1 | yes |
+| `lateralVelocityMps`, `upwardVelocityMps` | ±15 | no |
+| `pathDisplacementM` | 0…3 | no |
+| `liftM` | 0…2 | no |
+| `swingDurationMs` | 0…2500 | no |
+| `source` | string ≤ 24 chars | no | 
 
-When `trajectory` is present and flat `goalX`/`goalZ`/`apexM`/`speed` are omitted,
-the host copies those fields from the trajectory. Flat metric fields take priority
-when both are sent (UNO Q / bridge path).
+#### `trajectory` sub-object (`sentinel.trajectory.v1`)
 
-When `goalX`/`goalZ` are present the server referees **hybrid**: geometry
-decides wide / post (football) or ring points (darts / basketball); the AI
-keeper only contests on-target football shots at the true impact point.
-Zone-only kicks fall back to the original probabilistic referee.
+Visualization-only ballistic path (see [`trajectory_pipeline.md`](trajectory_pipeline.md)):
 
-### `skel`
-Bullet-time skeleton for TV orbit replay:
+| Field | Range / shape | Notes |
+|---|---|---|
+| `confidence` | 0…1 | Below 0.25 the TV falls back to the legacy arc |
+| `flightTimeS` | 0.1…3 | |
+| `launchSpeedMps` | 1…45 | |
+| `launchVelocity` | exactly 3 floats, forward component ≥ 0 | |
+| `goalX`, `goalZ`, `apexM` | as above | |
+| `points` | ≤ 48 samples of `[t, lateral, forward, height]` | `t` strictly increasing, forward non-regressing; **≥ 2 valid points or the whole trajectory is rejected** |
+
+### `skel` - bullet-time replay
+
 ```json
-{
-  "type": "skel",
-  "kick": 2,
-  "frames": [ { "t": -120, "p": [[x,y,z], ...] }, ... ]
-}
+{ "type": "skel", "kick": 2, "frames": [ { "t": -120, "p": [[x, y, z]] } ] }
 ```
 
-### `telem`
-Self-reported silicon duty cycle (~1 Hz while connected). Ingested into
-`TelemetryStore` and fanned out as `telem_state` to dashboards / TV.
+`kick` must match the current kick number. Frames are landmark samples (~1 s window before the strike), truncated server-side to 40; total JSON must stay under 200 000 chars. Landmarks only - never video.
+
+### `telem` - silicon duty cycle (~1 Hz)
+
 ```json
 {
   "type": "telem",
@@ -128,32 +143,22 @@ Self-reported silicon duty cycle (~1 Hz while connected). Ingested into
 }
 ```
 
-| Field | Type | Notes |
-|---|---|---|
-| `unit` | string | `cpu` \| `gpu` \| `npu` (UNO Q may also use `mcu`) |
-| `source` | string | Workload id; phone uses `pose` / `asr` / `llm` |
-| `busy_pct` | number | 0…100 self-reported duty cycle |
-| `metric` | object | Opaque scalars (e.g. `pose_ms`, `asr_ms`, `llm_ms`, `backend`) |
-| `state` | string | Short label for HUD / dashboard |
-| `temp_c` | number | Optional; rarely populated |
+| Field | Notes |
+|---|---|
+| `unit` | `cpu` \| `gpu` \| `npu` (UNO Q may use `mcu`) |
+| `source` | workload id - phone uses `pose` / `asr` / `llm` |
+| `busy_pct` | 0…100 self-reported duty cycle |
+| `metric` | opaque scalars (`pose_ms`, `asr_ms`, `llm_ms`, `backend`, …) |
+| `state` | short HUD label |
+| `temp_c` | optional |
 
-Phone mapping: pose lands on the active delegate unit; Whisper ASR → `npu` /
-`asr`; coach LLM → `npu` if `QWEN` else `cpu` / `llm`. No transcripts, frames,
-or profile data.
+Sender roles are remapped to device keys: `tv` → `laptop`, `bridge` → `unoq`. No transcripts, frames, or profile data ride on `telem`.
 
-### Match controls
-```json
-{ "type": "start" }
-{ "type": "again" }
-{ "type": "abort" }
-```
-- `start` / `again` — begin a match from lobby when a striker is connected.
-- `abort` — cancel an in-flight match / campaign generation and return to lobby.
+---
 
-## Server → client
+## 3. Server → client
 
-### `state`
-Full match snapshot (TV source of truth). Important fields:
+### `state` - the full snapshot (broadcast on every change)
 
 ```json
 {
@@ -163,51 +168,69 @@ Full match snapshot (TV source of truth). Important fields:
   "kick": 2,
   "kicksTotal": 5,
   "score": 1,
-  "line": "THE WALL dives…",
+  "saves": 0,
+  "shotmap": [ { "zone": "L", "keeperZone": "C", "force": 210, "result": "goal" } ],
+  "aimLive": "L",
   "timerMs": 0,
   "last": { "force": 210, "result": "goal" },
-  "shotmap": [],
-  "scene": null,
-  "postGameReport": null
+  "replay": { "kick": 1, "frames": [] },
+  "line": "THE WALL dives...",
+  "connected": { "phone": true, "unoq": false },
+  "level": 2,
+  "scene": { "atmosphere": {}, "difficulty": {} },
+  "genProgress": 0,
+  "sceneMetrics": { "source": "template" },
+  "ringScale": 0.9,
+  "postGameReport": { "status": "ready", "qrUrl": "..." }
 }
 ```
 
-`phase` ∈ `lobby` | `announce` | `countdown` | `shoot` | `resolve` | `generating` | `end`
+- `phase` ∈ `lobby` | `announce` | `countdown` | `shoot` | `resolve` | `generating` | `end`
+- `last.result` ∈ `goal` | `save` | `post` | `wide` | `miss` | `hit` | `over` (`over` = shoot window expired)
+- `postGameReport.status` ∈ `generating` | `ready` | `error` (AI100 report card; `qrUrl`, `landingUrl`, `pngUrl`, `pdfUrl` when ready)
 
-`last.result` / shotmap `result`:
-- football: `goal` | `save` | `post` | `miss` | `wide` | `over`
-- darts / basketball: `hit` | `miss` (plus `points` on hits)
+### `edge_pose` - forwarded UNO Q landmarks (phone clients only)
 
-### `edge_pose`
-Server → phone rebroadcast of UNO Q / edge pose packets (compact landmarks).
-Phone may use this for on-device coaching when the board owns the camera.
+The server relays every valid `sentinel.edge.pose.v1` UDP packet to connected `phone` clients as `{"type": "edge_pose", ...}` so the app's UNO Q mode can run its kick detector against the remote camera. TV and dashboards never receive it.
+
+### `telem_state` - merged telemetry (~1 Hz, to `tv` + `dashboard`)
 
 ```json
-{ "type": "edge_pose", "seq": 12, "landmarks": [ ... ] }
+{ "type": "telem_state", "stale_ms": 3000, "devices": { "phone": { "units": {} } } }
 ```
 
-### `telem_state`
-~1 Hz fan-out from [`telemetry_store.py`](../telemetry_store.py):
+**Client caution:** strikers and TVs receive multiple message types - always dispatch on `type` rather than assuming every frame is a `state`.
+
+---
+
+## 4. UDP inputs
+
+### `sentinel.edge.pose.v1` → server UDP 9999
+
+One JSON datagram per inference from [`unoq/sentinel_pose_streamer.py`](../unoq/sentinel_pose_streamer.py):
 
 ```json
 {
-  "type": "telem_state",
-  "stale_ms": 5000,
-  "devices": {
-    "phone": {
-      "device": "phone",
-      "label": "phone",
-      "units": {
-        "npu": { "busy_pct": 42.5, "metric": {}, "temp_c": null, "state": "pose:NPU", "age_ms": 120 }
-      }
-    }
-  }
+  "schema": "sentinel.edge.pose.v1",
+  "seq": 120,
+  "t_capture_ns": 123456789,
+  "frame": { "width": 640, "height": 480, "rotation": 0, "mirrored": true },
+  "landmarks": [[0.51, 0.42, 0.0, 0.97]],
+  "motion": { "t_ns": 123456789, "fps": 27.0, "left": { "vx": -0.3, "confidence": 0.9, "samples": 4 } },
+  "diagnostics": { "fps": 9.8, "inference_ms": 41.0, "backend": "uno-q-mediapipe-onnx-opencv" }
 }
 ```
 
-## On-device only (never on the wire)
+`landmarks` must contain **exactly 0 or 33** entries of `[x, y, z, visibility]`. Packets are dropped unless `t_capture_ns` increases (or the stream was silent > 2 s). `motion` carries per-foot Lucas–Kanade optical-flow velocities that let the phone's `EdgeKickEngine` bridge the board's low pose FPS.
 
-- Player calibration profile (`player_profile.json`)
-- Whisper transcripts / Qwen coach lines
-- Predictability HUD copy (the strip stays local; **scalars** may leave via `telem`)
-- Delegate toggle UI (the chosen unit is implied by which `telem.unit` is reported)
+### `snapkick.pose.v1` → `snapkick_bridge.py` UDP 5005
+
+Pre-solved kick packets (SnapKick project format): `seq`, `people[]` with `score`, `kick_candidate` + `kick_confidence` (gate ≥ 0.60, 0.8 s cooldown per `track_id`), and a `trajectory` block whose `predicted_goal_x` / `predicted_goal_z` (metres at the goal plane) become the kick's metric impact. The bridge converts these into striker `kick` messages; [`snapkick_sim.py`](../snapkick_sim.py) fakes them for hardware-free demos.
+
+---
+
+## 5. On-device only (never on the wire)
+
+- Player calibration profile (`player_profile.json`: biometrics, torso scale, aim envelope, kick thresholds, dominant foot)
+- Camera frames and audio; Whisper transcripts; coach lines
+- Predictability HUD copy (only telemetry *scalars* leave, via `telem`)

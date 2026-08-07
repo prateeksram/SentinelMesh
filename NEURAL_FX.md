@@ -1,38 +1,38 @@
-# On-device Neural FX (stadium TV)
+# Neural FX - Stadium TV hero plates
 
-Broadcast VFX for [`public/tv.html`](public/tv.html) on this Snapdragon X Elite laptop.
+Broadcast VFX for [`public/tv.html`](public/tv.html) on the Copilot+ PC (Snapdragon X Elite). Implemented in [`neural_fx.py`](neural_fx.py), served by [`server.py`](server.py).
 
-## What you get
+## The three layers
 
-| Layer | Where | Needs |
+| Layer | Where it runs | Needs |
 |---|---|---|
-| **VFX director** | Browser (Adreno Canvas post-FX) | Always — force / spin / strike drive shake, bloom, shockwave, confetti |
-| **Hero plate** | `POST /fx/hero` → bullet-time insert | Always — procedural depth-from-skeleton |
-| **NPU depth** | ORT + QNN EP · Depth-Anything-V2 | `models/hero_depth.onnx` from AI Hub |
+| **VFX director** | Browser (Canvas post-FX on the Adreno GPU) | Nothing - force / spin / strike drive shake, bloom, shockwave, confetti |
+| **Hero plate** | `POST /fx/hero` → bullet-time insert | Nothing - procedural depth-from-skeleton, pure stdlib PNG encoding |
+| **NPU depth upgrade** | ONNX Runtime (+ QNN EP) · Depth-Anything-V2 | `models/depth_anything_v2.onnx` (or `hero_depth.onnx`), `pip install onnxruntime numpy` |
 
-Phone stays on pose / Whisper / coach. Laptop owns the public stadium look.
+The phone owns pose / Whisper / coach; the laptop owns the public stadium look. **The match never depends on FX** and every failure degrades to a simpler visual.
 
-**Input path:** if `payload.image` (data-URL still) is present, that RGB is resized to the model input; otherwise a **skeleton silhouette** is rasterized from ForcePose joints and fed to Depth-Anything-V2. No TV camera capture required.
+**Input path:** if the request carries `payload.image` (a data-URL still; Requires Pillow to decode), that RGB is resized to the model input; otherwise a skeleton silhouette is rasterized from the replay joints and fed to the depth model. No TV camera capture is involved.
 
 ## Run
 
 ```powershell
-cd C:\Users\qc_de\SentinelMesh\laptop
 python server.py
 ```
 
-Open `http://localhost:8080/tv.html`. Ticker badge:
+Open http://localhost:8080/tv.html. The ticker badge tells you which path is live:
 
-- `FX · NPU-READY` — procedural hero (default, no model install)
-- `FX · QNN` / `FX · CPU` — onnxruntime loaded with `models/hero_depth.onnx`
+- `FX · NPU-READY` - procedural hero plates (default, no model installed)
+- `FX · QNN` / `FX · CPU` - onnxruntime loaded the depth model (QNN EP used when `QNN_SDK_ROOT` points at an installed QAIRT SDK)
 
 ## API
 
-- `GET /fx/status` → `{ ok, backend, model, detail }`
-- `POST /fx/hero` JSON body:
+- `GET /fx/status` → `{ ok, backend, model, detail }` - `backend` ∈ `procedural` | `cpu` | `qnn`
+- `POST /fx/hero` with:
+
   ```json
   {
-    "frames": [{ "t": 0, "p": [[x,y,z], ...] }],
+    "frames": [{ "t": 0, "p": [[x, y, z]] }],
     "force": 210,
     "result": "goal",
     "height": "H",
@@ -42,44 +42,32 @@ Open `http://localhost:8080/tv.html`. Ticker badge:
     "image": "data:image/jpeg;base64,..."
   }
   ```
-  → `{ ok, plate, depthPreview, backend, ms, w, h }` (`plate` is a PNG data-URL)
 
-TV calls `/fx/hero` automatically on resolve when a kick has a result and (ideally) skeleton replay frames.
+  → `{ ok, plate, depthPreview, backend, ms, w, h }` - `plate` is a PNG data-URL. Plates are tinted by result (goal = amber, save = cyan, other = chalk) with intensity scaled by ForcePose Newtons (`force / 380`, floor 0.35).
 
-## AI Hub: Depth-Anything-V2 → `hero_depth.onnx`
+The TV calls `/fx/hero` automatically on resolve when a kick has a result and (ideally) skeleton replay frames.
+
+## Installing the depth model
 
 ```powershell
-$env:QAI_HUB_API_TOKEN = "<token>"   # never commit
+python -m pip install onnxruntime numpy
+$env:QAI_HUB_API_TOKEN = "<token>"   # never commit tokens
 .\fetch_aihub_models.ps1
 ```
 
-Or download the Universal float ONNX zip from AI Hub release assets and copy the `.onnx` to:
+The script downloads the public Depth-Anything-V2 float ONNX release (falling back to a `qai_hub_models` export targeting Snapdragon X Elite) and writes `models\depth_anything_v2.onnx` (+ `.data`) and the `hero_depth.onnx` alias. Model resolution order in `neural_fx.py`: `models/hero_depth.onnx` → `models/depth_anything_v2.onnx`, preferring the latter when its external `.data` file is present.
 
-```
-models/hero_depth.onnx
-```
+Public asset (v0.59 float ONNX): `https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/depth_anything_v2/releases/v0.59.0/depth_anything_v2-onnx-float.zip`
 
-Public asset (v0.59 float ONNX):
-
-`https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/depth_anything_v2/releases/v0.59.0/depth_anything_v2-onnx-float.zip`
-
-For Hexagon QNN EP, keep `QNN_SDK_ROOT` pointed at QAIRT and prefer a QNN-embedded / device export when available. Absent model or `onnxruntime` → **procedural** plates; match never breaks.
-
-Logs: `logs/fx.jsonl` (`backend`, `ms`).
+Weights are **gitignored** - every clone starts procedural.
 
 ## Degrade path
 
 | Failure | Behaviour |
 |---|---|
-| No `/fx/*` (old server) | Badge `FX · OFF`; Canvas VFX director still runs |
+| No `onnxruntime` / no model / ORT load error | Procedural plates; badge `FX · NPU-READY` |
 | `/fx/hero` error | Silent; classic bullet-time skeleton only |
 | No skeleton frames yet | Hero retries when `skel` arrives on the next state |
-| Soft kick vs hard kick | Confetti / shake / bloom scale with ForcePose Newtons |
+| Soft kick vs hard kick | Confetti / shake / bloom scale with Newtons |
 
-## Files
-
-- [`neural_fx.py`](neural_fx.py) — procedural + ORT Depth-Anything-V2
-- [`server.py`](server.py) — hosts `/fx/*`
-- [`public/tv.html`](public/tv.html) — VFX director, post-FX, hero composite
-- [`models/`](models/) — optional ONNX weights (gitignored binaries OK)
-- [`fetch_aihub_models.ps1`](fetch_aihub_models.ps1) — AI Hub pull/export helper
+Timing log: `logs/fx.jsonl` (one line per plate: `backend`, `ms`).

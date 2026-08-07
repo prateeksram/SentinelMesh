@@ -276,6 +276,8 @@ SentinelMesh/
 ├── geniex_client.py             # Local OpenAI-compatible GenieX client
 ├── snapkick_bridge.py           # UNO Q SnapKick UDP → WebSocket bridge
 ├── snapkick_sim.py              # No-hardware kick simulator
+├── setup_check/                 # Post-install verification script
+├── archive/                     # Superseded documentation revisions
 ├── start-game.bat               # Windows one-step launcher
 ├── requirements.txt             # Core PC dependencies
 └── LICENSE                      # MIT license
@@ -290,7 +292,7 @@ SentinelMesh/
 ### Minimum demo
 
 - Windows 11 PC
-- Python 3.13
+- Python 3.13 or newer (the host and its tests are verified on 3.13 and 3.14)
 - Microsoft Edge or another current browser
 - One motion source:
   - native Android app,
@@ -339,8 +341,10 @@ python -m pip install -r requirements.txt
 ### 3. Start without UNO Q
 
 ```powershell
-.\start-game.bat -SkipUnoQ
+.\start-game.bat -SkipUnoQ -EnableSnapkickBridge
 ```
+
+(`-EnableSnapkickBridge` also starts the UDP 5005 bridge the simulator in step 4 talks to.)
 
 Open:
 
@@ -357,6 +361,14 @@ python snapkick_sim.py
 ```
 
 The TV should show an active striker and enable **START MATCH**.
+
+### 5. Verify the setup (optional)
+
+```powershell
+python setup_check\verify_setup.py
+```
+
+Boots the host on an ephemeral port and probes its health routes - see [`setup_check/README.md`](setup_check/README.md).
 
 ---
 
@@ -446,14 +458,16 @@ Terminal 1:
 python server.py
 ```
 
-Terminal 2, choose one:
+Terminal 2 - the SnapKick bridge (translates UDP 5005 packets into striker messages):
 
 ```powershell
-# Simulated motion
-python snapkick_sim.py
-
-# Or UNO Q SnapKick translation
 python snapkick_bridge.py --host 127.0.0.1:8080 --udp-port 5005
+```
+
+Terminal 3 - a UDP 5005 producer: either point a real UNO Q SnapKick pipeline at the PC, or run the simulator:
+
+```powershell
+python snapkick_sim.py
 ```
 
 ---
@@ -763,6 +777,16 @@ Before any public deployment:
 
 ## Testing
 
+The full verified test matrix - per-test prerequisites, current statuses, and the Android/UNO Q suites - lives in [`docs/TESTING.md`](docs/TESTING.md).
+
+### Setup smoke check
+
+```powershell
+python setup_check\verify_setup.py
+```
+
+Checks Python, dependencies, referee geometry, and the host's health routes on an ephemeral port.
+
 ### Focused Python tests
 
 ```powershell
@@ -973,14 +997,20 @@ Representative event:
 
 ## Related documentation
 
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — components, ports, env vars, routes, message flow
+- [`docs/TESTING.md`](docs/TESTING.md) — verified test matrix
 - [`docs/one_step_setup.md`](docs/one_step_setup.md) — Windows and UNO Q supervisor
-- [`docs/phone_protocol.md`](docs/phone_protocol.md) — WebSocket message schema
-- [`docs/README_GalaxyS25.md`](docs/README_GalaxyS25.md) — Galaxy on-device AI
+- [`docs/phone_protocol.md`](docs/phone_protocol.md) — WebSocket and UDP message schema
+- [`docs/README_GalaxyS25.md`](docs/README_GalaxyS25.md) — Galaxy on-device AI deep dive
 - [`docs/unoq_pipeline.md`](docs/unoq_pipeline.md) — UNO Q pose and camera pipeline
+- [`docs/trajectory_pipeline.md`](docs/trajectory_pipeline.md) — kick-state → trajectory contract
 - [`android/README.md`](android/README.md) — Android build and demo instructions
 - [`NEURAL_FX.md`](NEURAL_FX.md) — optional PC Neural FX acceleration
 - [`SCENE_ENGINE.md`](SCENE_ENGINE.md) — campaign venue generation
 - [`ai100/README.md`](ai100/README.md) — post-game scorecard subsystem
+- [`laptop/README.md`](laptop/README.md) — experimental agentic SceneEngine assets
+- [`tools/README.md`](tools/README.md) — launcher, model movers, diagnostics
+- [`archive/`](archive/) — superseded documentation revisions
 
 ---
 
@@ -998,13 +1028,13 @@ Representative event:
 
 **Team:** The Child in Us
 
-| Contributor | Role |
+| Name | Email |
 |---|---|
-| Prateek Shantharama | Team member |
-| Benaka Surya T Y | Team member |
-| Anvisha Saxena | Team member |
-| Parth Shinde | Team member |
-| Ananya Bhargavi Kodali | Team member |
+| Prateek Shantharama | prateeksram@gmail.com |
+| Benaka Surya T Y | |
+| Anvisha Saxena | |
+| Parth Shinde | |
+| Ananya Bhargavi Kodali | |
 
 ---
 

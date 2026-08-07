@@ -1,13 +1,5 @@
-# AI Hub models for the laptop stack
+# `laptop/models/` - legacy Neural FX weight drop
 
-Depth-Anything-V2 lives here for ORT/QNN hero plates:
+[`../fetch_aihub_models.ps1`](../fetch_aihub_models.ps1) downloads Depth-Anything-V2 ONNX weights into this folder, but the game's Neural FX engine reads the **root** [`models/`](../../models/) directory only ([`../../neural_fx.py`](../../neural_fx.py)).
 
-- `depth_anything_v2.onnx` + `depth_anything_v2.data` (canonical — external weights)
-- `hero_depth.onnx` alias (optional)
-
-```powershell
-$env:QAI_HUB_API_TOKEN = "<token>"   # never commit
-..\fetch_aihub_models.ps1
-```
-
-See [`../NEURAL_FX.md`](../NEURAL_FX.md) and [`../SCENE_ENGINE.md`](../SCENE_ENGINE.md).
+To enable NPU depth plates, either run the root `fetch_aihub_models.ps1` (recommended - see [`../../models/README.md`](../../models/README.md) and [`../../NEURAL_FX.md`](../../NEURAL_FX.md)), or copy any `.onnx`/`.data` files from here into the root `models/`. Weights are gitignored either way.
