@@ -465,7 +465,7 @@
             android:lineSpacingExtra="2dp" />
     </LinearLayout>
 
-    <!-- Cold-start QPlay splash + sport picker -->
+    <!-- Cold-start QPlay splash + sport picker (topmost) -->
     <FrameLayout
         android:id="@+id/onboarding"
         android:layout_width="0dp"
@@ -473,6 +473,7 @@
         android:background="@color/ink"
         android:clickable="true"
         android:focusable="true"
+        android:elevation="24dp"
         android:visibility="gone"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent"
@@ -493,24 +494,24 @@
                 android:layout_height="wrap_content"
                 android:text="Q"
                 android:textColor="@color/qcom"
-                android:textSize="72sp"
+                android:textSize="96sp"
                 android:textStyle="bold"
                 android:letterSpacing="0.04"
-                android:shadowColor="#663253DC"
+                android:shadowColor="#AA3253DC"
                 android:shadowDx="0"
                 android:shadowDy="0"
-                android:shadowRadius="28" />
+                android:shadowRadius="36" />
 
             <TextView
                 android:id="@+id/splashTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="8dp"
                 android:text="@string/splash_title"
                 android:textColor="@color/chalk"
-                android:textSize="42sp"
+                android:textSize="48sp"
                 android:textStyle="bold"
-                android:letterSpacing="0.12"
+                android:letterSpacing="0.14"
                 android:shadowColor="#803253DC"
                 android:shadowDx="0"
                 android:shadowDy="2"
@@ -520,11 +521,11 @@
                 android:id="@+id/splashTag"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
+                android:layout_marginTop="12dp"
                 android:text="@string/splash_tag"
                 android:textColor="@color/cyan"
-                android:textSize="13sp"
-                android:letterSpacing="0.18" />
+                android:textSize="14sp"
+                android:letterSpacing="0.22" />
         </LinearLayout>
 
         <LinearLayout
@@ -541,54 +542,54 @@
                 android:layout_height="wrap_content"
                 android:text="@string/choose_sport"
                 android:textColor="@color/chalk"
-                android:textSize="22sp"
+                android:textSize="24sp"
                 android:textStyle="bold"
                 android:letterSpacing="0.06" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:layout_marginBottom="22dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="28dp"
                 android:text="@string/choose_sport_hint"
                 android:textColor="@color/muted"
-                android:textSize="12sp"
+                android:textSize="13sp"
                 android:gravity="center" />
 
             <TextView
                 android:id="@+id/sportFootball"
                 android:layout_width="match_parent"
-                android:layout_height="56dp"
-                android:layout_marginBottom="10dp"
-                android:background="@drawable/card_surface"
+                android:layout_height="64dp"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/zone_on"
                 android:gravity="center"
                 android:text="@string/sport_football"
                 android:textColor="@color/chalk"
                 android:textStyle="bold"
-                android:textSize="16sp" />
+                android:textSize="17sp" />
 
             <TextView
                 android:id="@+id/sportDarts"
                 android:layout_width="match_parent"
-                android:layout_height="56dp"
-                android:layout_marginBottom="10dp"
-                android:background="@drawable/card_surface"
+                android:layout_height="64dp"
+                android:layout_marginBottom="12dp"
+                android:background="@drawable/zone_on"
                 android:gravity="center"
                 android:text="@string/sport_darts"
                 android:textColor="@color/chalk"
                 android:textStyle="bold"
-                android:textSize="16sp" />
+                android:textSize="17sp" />
 
             <TextView
                 android:id="@+id/sportBasketball"
                 android:layout_width="match_parent"
-                android:layout_height="56dp"
-                android:background="@drawable/card_surface"
+                android:layout_height="64dp"
+                android:background="@drawable/zone_on"
                 android:gravity="center"
                 android:text="@string/sport_basketball"
                 android:textColor="@color/chalk"
                 android:textStyle="bold"
-                android:textSize="16sp" />
+                android:textSize="17sp" />
         </LinearLayout>
     </FrameLayout>
 

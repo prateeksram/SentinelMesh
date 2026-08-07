@@ -244,11 +244,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         updateHostPill(connected = false)
         applyChromeForMode()
 
-        if (profile == null) {
-            showOnboarding(thenPickSport = true)
-        } else {
-            showOnboarding(thenPickSport = false)
-        }
+        // Always splash → sport picker on cold start (even with a saved profile).
+        showOnboarding()
         mainHandler.post(remoteHealthCheck)
 
         val need = mutableListOf<String>()
@@ -710,7 +707,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         showSportPicker()
     }
 
-    private fun showOnboarding(thenPickSport: Boolean) {
+    private var splashPulse: ObjectAnimator? = null
+
+    private fun showOnboarding() {
+        binding.onboarding.bringToFront()
         binding.onboarding.visibility = View.VISIBLE
         binding.splashPane.visibility = View.VISIBLE
         binding.sportPane.visibility = View.GONE
@@ -718,55 +718,72 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         binding.splashMark.alpha = 0f
         binding.splashTitle.alpha = 0f
         binding.splashTag.alpha = 0f
-        binding.splashMark.scaleX = 0.6f
-        binding.splashMark.scaleY = 0.6f
-        binding.splashTitle.translationY = 24f
+        binding.splashMark.scaleX = 0.55f
+        binding.splashMark.scaleY = 0.55f
+        binding.splashTitle.translationY = 28f
+        splashPulse?.cancel()
         val markIn = AnimatorSet().apply {
             playTogether(
                 ObjectAnimator.ofFloat(binding.splashMark, View.ALPHA, 0f, 1f),
-                ObjectAnimator.ofFloat(binding.splashMark, View.SCALE_X, 0.6f, 1f),
-                ObjectAnimator.ofFloat(binding.splashMark, View.SCALE_Y, 0.6f, 1f),
+                ObjectAnimator.ofFloat(binding.splashMark, View.SCALE_X, 0.55f, 1.08f),
+                ObjectAnimator.ofFloat(binding.splashMark, View.SCALE_Y, 0.55f, 1.08f),
             )
-            duration = 700
-            interpolator = OvershootInterpolator(1.2f)
+            duration = 900
+            interpolator = OvershootInterpolator(1.35f)
         }
         val titleIn = AnimatorSet().apply {
             playTogether(
                 ObjectAnimator.ofFloat(binding.splashTitle, View.ALPHA, 0f, 1f),
-                ObjectAnimator.ofFloat(binding.splashTitle, View.TRANSLATION_Y, 24f, 0f),
+                ObjectAnimator.ofFloat(binding.splashTitle, View.TRANSLATION_Y, 28f, 0f),
                 ObjectAnimator.ofFloat(binding.splashTag, View.ALPHA, 0f, 1f),
             )
-            duration = 550
+            duration = 700
             interpolator = AccelerateDecelerateInterpolator()
-            startDelay = 180
+            startDelay = 280
         }
         markIn.start()
         titleIn.start()
+        // Soft pulse so the Q mark stays alive on screen.
+        splashPulse = ObjectAnimator.ofFloat(binding.splashMark, View.ALPHA, 1f, 0.55f, 1f).apply {
+            duration = 1100
+            startDelay = 900
+            repeatCount = ObjectAnimator.INFINITE
+            interpolator = AccelerateDecelerateInterpolator()
+            start()
+        }
+        // Hold splash, then always open the game picker.
         mainHandler.postDelayed({
-            if (thenPickSport) {
-                showSportPicker()
-            } else {
-                hideOnboarding()
-                syncSportToHost()
-            }
-        }, if (thenPickSport) 1600L else 1100L)
+            splashPulse?.cancel()
+            splashPulse = null
+            showSportPicker()
+        }, 2800L)
     }
 
     private fun showSportPicker() {
+        binding.onboarding.bringToFront()
         binding.onboarding.visibility = View.VISIBLE
         binding.splashPane.visibility = View.GONE
         binding.sportPane.visibility = View.VISIBLE
         binding.sportPane.alpha = 0f
-        ObjectAnimator.ofFloat(binding.sportPane, View.ALPHA, 0f, 1f).apply {
-            duration = 320
+        binding.sportPane.translationY = 36f
+        AnimatorSet().apply {
+            playTogether(
+                ObjectAnimator.ofFloat(binding.sportPane, View.ALPHA, 0f, 1f),
+                ObjectAnimator.ofFloat(binding.sportPane, View.TRANSLATION_Y, 36f, 0f),
+            )
+            duration = 420
+            interpolator = AccelerateDecelerateInterpolator()
             start()
         }
         pickingSport = true
         coach?.speak("Choose your game.")
         binding.hint.text = "Pick football, darts, or basketball"
+        binding.big.text = "PICK A GAME"
     }
 
     private fun hideOnboarding() {
+        splashPulse?.cancel()
+        splashPulse = null
         binding.onboarding.visibility = View.GONE
         binding.splashPane.visibility = View.GONE
         binding.sportPane.visibility = View.GONE
@@ -778,13 +795,27 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         pose?.setSport(pendingSport)
         hideOnboarding()
         vibrate(35)
-        syncSportToHost()
-        startCalibration(pendingSport)
+        syncSportToHost(pendingSport)
+
+        val existing = profile
+        val needsCalib = existing == null ||
+            existing.sport != pendingSport ||
+            (PlayerProfile.isHandSport(pendingSport) && existing.throwMs == null)
+        if (needsCalib) {
+            startCalibration(pendingSport)
+        } else {
+            pose?.applyProfile(existing)
+            updateProfileHint()
+            binding.big.text = "READY?"
+            coach?.speak("${pendingSport.replaceFirstChar { it.uppercase() }} loaded. Say ready to start.")
+            promptReadyToStart()
+        }
     }
 
-    private fun syncSportToHost() {
-        val sport = profile?.sport ?: pendingSport
-        if (hostConnected) game.sendSport(sport)
+    private fun syncSportToHost(sport: String = pendingSport.ifBlank {
+        profile?.sport ?: PlayerProfile.SPORT_FOOTBALL
+    }) {
+        if (hostConnected) game.sendSport(PlayerProfile.normalizeSport(sport))
     }
 
     private fun startCalibration(sport: String = pendingSport) {
