@@ -32,6 +32,15 @@ _COMPUTE = os.environ.get("GF_GENIEX_COMPUTE", "npu")
 _READY_TIMEOUT_S = float(os.environ.get("GF_GENIEX_READY_TIMEOUT_S", "120"))
 _LOG_PATH = Path(__file__).parent / "logs" / "geniex_serve.log"
 _spawned_proc: subprocess.Popen | None = None
+# GenieX NPU often 400s / wedges under concurrent chat — serialize desk + scene.
+_lock: asyncio.Lock | None = None
+
+
+def _chat_lock() -> asyncio.Lock:
+    global _lock
+    if _lock is None:
+        _lock = asyncio.Lock()
+    return _lock
 
 
 def _extract(data: dict) -> str:
@@ -77,14 +86,19 @@ async def chat(
     base = (url or GENIEX_URL).rstrip("/")
     ep = base + ("/chat/completions" if base.endswith("/v1") else "")
     try:
-        async with ClientSession(timeout=ClientTimeout(total=timeout)) as s:
-            async with s.post(
-                ep, json=body, headers={"content-type": "application/json"}
-            ) as r:
-                if r.status != 200:
-                    raise RuntimeError(f"HTTP {r.status}")
-                return _extract(await r.json()) or None
-    except Exception:
+        async with _chat_lock():
+            async with ClientSession(timeout=ClientTimeout(total=timeout)) as s:
+                async with s.post(
+                    ep, json=body, headers={"content-type": "application/json"}
+                ) as r:
+                    if r.status != 200:
+                        err = (await r.text())[:240]
+                        _log(f"[geniex] HTTP {r.status} max_tokens={max_tokens}: {err}")
+                        raise RuntimeError(f"HTTP {r.status}")
+                    return _extract(await r.json()) or None
+    except Exception as exc:
+        if not isinstance(exc, RuntimeError):
+            _log(f"[geniex] chat failed ({type(exc).__name__}: {exc})")
         return None
 
 

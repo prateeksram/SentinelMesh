@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import geniex_client
+import openai_client
 
 ROOT = Path(__file__).parent
 SCENES = ROOT / "public" / "scenes"
@@ -19,6 +20,10 @@ TIMEOUT = float(os.environ.get("GF_SCENE_TIMEOUT_S", 90))
 # runs only if the first attempt returns nothing / times out.
 MAX_TOKENS = int(os.environ.get("GF_SCENE_MAX_TOKENS", 320))
 MAX_TOKENS_RETRY = int(os.environ.get("GF_SCENE_MAX_TOKENS_RETRY", 180))
+OPENAI_MAX_TOKENS = int(os.environ.get("GF_SCENE_OPENAI_MAX_TOKENS", 400))
+OPENAI_TIMEOUT = float(os.environ.get("GF_SCENE_OPENAI_TIMEOUT_S", 45))
+# Keep the TV "NEXT VENUE" bar visible even when GenieX fails fast → template.
+MIN_DISPLAY_S = float(os.environ.get("GF_SCENE_MIN_DISPLAY_S", "2.5"))
 
 TIME_OF_DAY = {
     1: "day",
@@ -216,6 +221,16 @@ def _clamp_diff(d, level):
     return out
 
 
+async def _emit(progress_cb, p, step=None):
+    if not progress_cb:
+        return
+    try:
+        await progress_cb(p, step)
+    except TypeError:
+        # Older callers only accept progress percent.
+        await progress_cb(p)
+
+
 async def _chat_json_with_progress(
     system,
     user,
@@ -225,19 +240,26 @@ async def _chat_json_with_progress(
     progress_cb,
     lo,
     hi,
+    provider="geniex",
+    step="",
 ):
     """Run chat_json while easing genProgress from lo→hi so the TV bar moves."""
-    task = asyncio.create_task(
-        geniex_client.chat_json(
+    if provider == "openai":
+        coro = openai_client.chat_json(
             system, user, max_tokens=max_tokens, timeout=timeout
         )
-    )
+    else:
+        coro = geniex_client.chat_json(
+            system, user, max_tokens=max_tokens, timeout=timeout
+        )
+    task = asyncio.create_task(coro)
     t0 = time.monotonic()
     try:
+        if step:
+            await _emit(progress_cb, lo, step)
         while not task.done():
-            if progress_cb:
-                frac = min(0.95, (time.monotonic() - t0) / max(timeout, 1.0))
-                await progress_cb(int(lo + (hi - lo) * frac))
+            frac = min(0.95, (time.monotonic() - t0) / max(timeout, 1.0))
+            await _emit(progress_cb, int(lo + (hi - lo) * frac), step or None)
             done, _ = await asyncio.wait({task}, timeout=0.35)
             if done:
                 break
@@ -253,18 +275,46 @@ async def _chat_json_with_progress(
         return None
 
 
+def _scene_from_llm(data, level, *, source, model, elapsed_ms, used_tokens):
+    data = dict(data)
+    data["level"] = level
+    data.setdefault("timeOfDay", TIME_OF_DAY[level])
+    atmos = {**DEFAULT_ATMOS[level], **(data.get("atmosphere") or {})}
+    return {
+        "level": level,
+        "timeOfDay": data["timeOfDay"],
+        "title": data.get("title", f"Level {level}"),
+        "report": data.get("report", ""),
+        "atmosphere": atmos,
+        "difficulty": _clamp_diff(data.get("difficulty") or {}, level),
+        "copy": {
+            "lobbyLine": (data.get("copy") or {}).get("lobbyLine", ""),
+            "ticker": (data.get("copy") or {}).get(
+                "ticker", "Next venue ready."
+            ),
+        },
+        "metrics": {
+            "model": model,
+            "source": source,
+            "total_ms": elapsed_ms,
+            "tokens_budget": used_tokens,
+        },
+    }
+
+
 async def generate(ctx, level, progress_cb=None):
     SCENES.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
     t0 = time.perf_counter()
-    if progress_cb:
-        await progress_cb(5)
+    await _emit(
+        progress_cb, 5,
+        f"Level {level} — packing match stats for the director",
+    )
     user = json.dumps(ctx)
 
-    # Split the timeout: primary (smaller than old 900-tok call), then one
-    # compact-token retry before the built-in template.
-    primary_timeout = max(20.0, TIMEOUT * 0.60)
-    retry_timeout = max(15.0, TIMEOUT - primary_timeout)
+    # GenieX (on-device) → compact GenieX retry → OpenAI cloud → template.
+    primary_timeout = max(20.0, TIMEOUT * 0.55)
+    retry_timeout = max(12.0, TIMEOUT * 0.25)
 
     data = await _chat_json_with_progress(
         SYSTEM,
@@ -272,56 +322,91 @@ async def generate(ctx, level, progress_cb=None):
         max_tokens=MAX_TOKENS,
         timeout=primary_timeout,
         progress_cb=progress_cb,
-        lo=5,
-        hi=55,
+        lo=8,
+        hi=45,
+        provider="geniex",
+        step=f"On-device GenieX · designing Level {level} venue JSON",
     )
     used_tokens = MAX_TOKENS
+    source = "geniex"
+    model = geniex_client.GENIEX_MODEL
+
     if not data and MAX_TOKENS_RETRY > 0 and MAX_TOKENS_RETRY < MAX_TOKENS:
-        if progress_cb:
-            await progress_cb(58)
+        await _emit(
+            progress_cb, 48,
+            "GenieX timed out — compact on-device retry",
+        )
         data = await _chat_json_with_progress(
             SYSTEM,
             user,
             max_tokens=MAX_TOKENS_RETRY,
             timeout=retry_timeout,
             progress_cb=progress_cb,
-            lo=58,
-            hi=88,
+            lo=48,
+            hi=62,
+            provider="geniex",
+            step="On-device GenieX · compact retry (smaller token budget)",
         )
         used_tokens = MAX_TOKENS_RETRY
 
-    if progress_cb:
-        await progress_cb(90)
+    if not data and openai_client.configured():
+        cloud_model = openai_client.scene_model()
+        await _emit(
+            progress_cb, 65,
+            f"On-device missed — falling back to OpenAI cloud ({cloud_model})",
+        )
+        print("[scene] GenieX missed — trying OpenAI cloud", flush=True)
+        data = await _chat_json_with_progress(
+            SYSTEM,
+            user,
+            max_tokens=OPENAI_MAX_TOKENS,
+            timeout=OPENAI_TIMEOUT,
+            progress_cb=progress_cb,
+            lo=65,
+            hi=88,
+            provider="openai",
+            step=f"Cloud OpenAI · {cloud_model} designing venue JSON",
+        )
+        if data:
+            used_tokens = OPENAI_MAX_TOKENS
+            source = "openai"
+            model = cloud_model
+
+    if not data:
+        await _emit(
+            progress_cb, 90,
+            "Cloud missed — applying offline template venue",
+        )
+    else:
+        await _emit(
+            progress_cb, 90,
+            f"Got venue from {source} — applying difficulty knobs",
+        )
+
+    # Hold the generating overlay long enough to be readable on fast fallbacks.
+    held = time.perf_counter() - t0
+    if held < MIN_DISPLAY_S:
+        await asyncio.sleep(MIN_DISPLAY_S - held)
+
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
     if not data:
         scene = template_scene(level, ctx)
-        # Preserve real wait time (template used to hardcode total_ms=0).
         scene["metrics"]["total_ms"] = elapsed_ms
         scene["metrics"]["tokens_budget"] = used_tokens
+        await _emit(progress_cb, 96, "Template venue locked · offline difficulty curve")
     else:
-        data["level"] = level
-        data.setdefault("timeOfDay", TIME_OF_DAY[level])
-        atmos = {**DEFAULT_ATMOS[level], **(data.get("atmosphere") or {})}
-        scene = {
-            "level": level,
-            "timeOfDay": data["timeOfDay"],
-            "title": data.get("title", f"Level {level}"),
-            "report": data.get("report", ""),
-            "atmosphere": atmos,
-            "difficulty": _clamp_diff(data.get("difficulty") or {}, level),
-            "copy": {
-                "lobbyLine": (data.get("copy") or {}).get("lobbyLine", ""),
-                "ticker": (data.get("copy") or {}).get(
-                    "ticker", "Next venue ready."
-                ),
-            },
-            "metrics": {
-                "model": geniex_client.GENIEX_MODEL,
-                "source": "geniex",
-                "total_ms": elapsed_ms,
-                "tokens_budget": used_tokens,
-            },
-        }
+        scene = _scene_from_llm(
+            data,
+            level,
+            source=source,
+            model=model,
+            elapsed_ms=elapsed_ms,
+            used_tokens=used_tokens,
+        )
+        await _emit(
+            progress_cb, 96,
+            f"Writing Level {level} · source={source}",
+        )
     (SCENES / f"level_{level}.json").write_text(json.dumps(scene))
     (SCENES / "latest.json").write_text(json.dumps(scene))
     with (LOGS / "scene_gen.jsonl").open("a") as f:
@@ -333,10 +418,14 @@ async def generate(ctx, level, progress_cb=None):
                     "source": scene["metrics"]["source"],
                     "total_ms": scene["metrics"].get("total_ms", 0),
                     "tokens_budget": scene["metrics"].get("tokens_budget"),
+                    "model": scene["metrics"].get("model"),
                 }
             )
             + "\n"
         )
-    if progress_cb:
-        await progress_cb(100)
+    src = scene["metrics"]["source"]
+    await _emit(
+        progress_cb, 100,
+        f"Venue ready · {src} · {scene['metrics'].get('total_ms', 0)} ms",
+    )
     return scene

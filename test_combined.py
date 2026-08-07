@@ -126,7 +126,7 @@ async def run():
             assert st["level"] == want_level, \
                 f"campaign level {st['level']}, expected {want_level} for {goals} goals"
             assert st["scene"], "no scene generated at full time"
-            assert st["sceneMetrics"]["source"] in ("template", "geniex")
+            assert st["sceneMetrics"]["source"] in ("template", "geniex", "openai")
             ring_for = {1: 1.0, 2: 0.9, 3: 0.8, 4: 0.7, 5: 0.6}
             assert abs(st["ringScale"] - ring_for[want_level]) < 1e-6, \
                 f"ringScale {st['ringScale']} != level-{want_level} scale"

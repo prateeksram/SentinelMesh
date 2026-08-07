@@ -39,9 +39,14 @@ import scene_engine
 import telemetry_store
 from ai100 import report_engine
 from ai100.web import ReportWeb
+import openai_client
 
 ROOT = Path(__file__).parent
 PUBLIC = ROOT / "public"
+
+# Load repo-root .env (OPENAI_API_KEY, etc.) without overriding shell exports.
+report_engine.load_repo_env()
+openai_client.refresh()
 
 
 # ------------------------------------------------- knobs (env-overridable) --
@@ -423,6 +428,7 @@ class Game:
         self.scene = None
         self.report = ""
         self.gen_progress = 0
+        self.gen_step = ""
         self.scene_metrics = None
         self.report_card = None
         self.report_task: asyncio.Task | None = None
@@ -455,6 +461,7 @@ class Game:
         self.scene = None
         self.report = ""
         self.gen_progress = 0
+        self.gen_step = ""
         self.scene_metrics = None
         self.k_iq = KEEPER_IQ
         self.k_react = KEEPER_REACT
@@ -489,6 +496,7 @@ class Game:
             "scene": self.scene,
             "report": self.report,
             "genProgress": self.gen_progress,
+            "genStep": self.gen_step,
             "sceneMetrics": self.scene_metrics,
             "ringScale": round(self.ring_scale, 3),
             "postGameReport": self.report_card,
@@ -834,6 +842,7 @@ class Game:
         # 2) generating phase — SceneEngine owns the NPU; desk verdict waits until after
         self.phase = "generating"
         self.gen_progress = 0
+        self.gen_step = "Reading match stats…"
         await self.broadcast()
         gen = self.match_gen
         # 3) pick + generate
@@ -842,11 +851,13 @@ class Game:
             campaign_score, self.saves, KICKS, self.shotmap, sport=self.sport)
         last_bcast = 0.0
 
-        async def progress(p):
+        async def progress(p, step=None):
             nonlocal last_bcast
             self.gen_progress = p
+            if step:
+                self.gen_step = step
             now = time.monotonic()
-            if p in (5, 100) or now - last_bcast > 0.25:
+            if p in (5, 100) or step or now - last_bcast > 0.25:
                 last_bcast = now
                 if self._alive(gen):
                     await self.broadcast()
@@ -871,6 +882,9 @@ class Game:
         self.scene_metrics = scene.get("metrics")
         self.campaign_level = level
         self.line = scene["copy"].get("lobbyLine") or self.line
+        src = (scene.get("metrics") or {}).get("source", "?")
+        self.gen_step = f"Venue ready · {src}"
+        self.gen_progress = 100
         # 5) end — queue AI100 scorecard, then desk verdict can upgrade the line
         self.queue_report(self.shotmap, KICKS, generation=gen, sport=self.sport)
         self.phase = "end"
@@ -1444,6 +1458,7 @@ async def scene_status(_request):
     return web.json_response({
         "level": game.campaign_level,
         "progress": game.gen_progress,
+        "step": game.gen_step,
         "metrics": game.scene_metrics,
         "phase": game.phase,
         "sport": game.sport,
@@ -1527,8 +1542,13 @@ async def main():
     print(f"FX    = {fx.get('backend', '?').upper()} · {fx_model}")
     # Bring GenieX up with the host when missing (GF_GENIEX_AUTOSTART=0 to skip).
     scene_ok = await geniex_client.ensure_serve()
+    cloud = (
+        f"openai·{openai_client.scene_model()}"
+        if openai_client.configured()
+        else "no-cloud"
+    )
     print(
-        f"Scene = {'ready' if scene_ok else 'template (GenieX down)'}",
+        f"Scene = {'geniex' if scene_ok else 'geniex-down'} -> {cloud} -> template",
         flush=True,
     )
     try:

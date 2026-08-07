@@ -247,9 +247,10 @@
   #genBar{height:100%;width:0%;background:linear-gradient(90deg,var(--cyan),var(--amber));
           transition:width .2s linear}
   #genMeta{position:fixed;left:50%;transform:translateX(-50%);bottom:34px;z-index:6;
-           font-family:var(--fCond);font-weight:700;letter-spacing:1.5px;font-size:12px;
-           color:var(--mut);display:none;max-width:min(720px,92vw);text-align:center;
-           white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+           font-family:var(--fCond);font-weight:700;letter-spacing:1.5px;font-size:13px;
+           color:var(--cyan);display:none;max-width:min(920px,94vw);text-align:center;
+           white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+           text-shadow:0 1px 8px rgba(0,0,0,.65)}
   #genMeta.show{display:block}
   #sceneDebug{position:fixed;left:14px;bottom:18px;z-index:9;display:none;
               font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:1.35;
@@ -677,7 +678,8 @@ async function probeHwStatus(){
 function setSceneBadge(source){
   const el=$("sceneBadge");
   if(!el) return;
-  if(source==="geniex"){ el.textContent="SCENE · READY"; el.classList.add("on"); }
+  if(source==="geniex"){ el.textContent="SCENE · GENIEX"; el.classList.add("on"); }
+  else if(source==="openai"){ el.textContent="SCENE · OPENAI"; el.classList.add("on"); }
   else if(source==="template"){ el.textContent="SCENE · TEMPLATE"; el.classList.remove("on"); }
   else{ el.textContent="SCENE · …"; el.classList.remove("on"); }
 }
@@ -894,9 +896,15 @@ function onState(st){
 
   $("midTop").textContent = st.phase==="lobby"?"LOBBY":st.phase==="end"?"FULL TIME"
     :st.phase==="generating"?"NEXT VENUE":SPORT_LABEL[SPORT()];
-  $("midBot").textContent = st.phase==="end"||st.phase==="lobby"||st.phase==="generating"
-    ?(st.level>1?`LEVEL ${st.level}`:"QPlay")
-    :`${ACTION[SPORT()].verb} ${st.kick} OF ${st.kicksTotal}`;
+  if(st.phase==="generating"){
+    $("midBot").textContent = st.genStep
+      ? String(st.genStep).slice(0, 42)
+      : (st.level>1?`LEVEL ${st.level}`:"DESIGNING…");
+  }else{
+    $("midBot").textContent = st.phase==="end"||st.phase==="lobby"
+      ?(st.level>1?`LEVEL ${st.level}`:"QPlay")
+      :`${ACTION[SPORT()].verb} ${st.kick} OF ${st.kicksTotal}`;
+  }
   const liveEm=document.querySelector("#livebug em");
   if(liveEm) liveEm.textContent=ACTION[SPORT()].live;
   $("livebug").classList.toggle("hide", !(st.phase==="lobby" || st.phase==="announce" || st.phase==="countdown"));
@@ -994,18 +1002,28 @@ function onState(st){
     case "generating":{
       big.textContent="NEXT VENUE";
       const p=st.genProgress||0;
-      const step=st.genStep?` · ${st.genStep}`:"";
-      sub.textContent=`Designing the ground… ${p}%${step}`;
+      const step=st.genStep||"Designing the ground…";
+      sub.textContent=`${step}  ·  ${p}%`;
       btn.classList.add("hide"); abort.classList.remove("hide");
       genWrap.classList.add("show"); genBar.style.width=`${p}%`;
-      const m=st.sceneMetrics||st.scene?.metrics;
-      if(m&&(m.total_ms||m.tokens||m.source)){
-        genMeta.classList.add("show");
-        const bits=[];
-        if(m.total_ms) bits.push(`${m.total_ms} ms`);
-        if(m.tokens) bits.push(`${m.tokens} tok`);
-        if(m.source) bits.push(String(m.source));
-        genMeta.textContent=bits.join(" · ");
+      genMeta.classList.add("show");
+      const chain=[];
+      const s=String(step).toLowerCase();
+      if(s.includes("geniex")||s.includes("on-device")) chain.push("1 ON-DEVICE GenieX");
+      if(s.includes("openai")||s.includes("cloud")) chain.push("2 CLOUD OpenAI");
+      if(s.includes("template")||s.includes("offline")) chain.push("3 TEMPLATE");
+      if(!chain.length) chain.push("GenieX → OpenAI → template");
+      genMeta.textContent=`PIPELINE  ${chain.join("  →  ")}  ·  ${p}%`;
+      // Live badge while generating so judges can follow the path.
+      const badge=$("sceneBadge");
+      if(badge){
+        if(s.includes("openai")||s.includes("cloud")){
+          badge.textContent="SCENE · OPENAI…"; badge.classList.add("on");
+        }else if(s.includes("template")||s.includes("offline")){
+          badge.textContent="SCENE · TEMPLATE…"; badge.classList.remove("on");
+        }else{
+          badge.textContent="SCENE · GENIEX…"; badge.classList.add("on");
+        }
       }
       updateSceneDebug(st);
       break;}

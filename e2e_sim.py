@@ -166,7 +166,7 @@ async def main():
     assert st.get("level") >= 1
     assert st.get("scene"), "scene missing on end snapshot"
     assert st["scene"].get("atmosphere") and st["scene"].get("difficulty")
-    assert st.get("sceneMetrics", {}).get("source") in ("geniex", "template")
+    assert st.get("sceneMetrics", {}).get("source") in ("geniex", "openai", "template")
     assert st.get("report") is not None
     d = st["scene"]["difficulty"]
     for k in ("keeperIq", "keeperReaction", "shootWindow", "powerBeat"):

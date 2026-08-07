@@ -4,6 +4,12 @@ __pycache__/
 .venv/
 venv/
 
+# Secrets — never commit
+.env
+ai100/.env
+ai100/data/
+ai100/cache/
+
 # TLS certs for the phone camera — never commit these
 *.pem
 
