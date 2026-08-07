@@ -61,32 +61,49 @@
   .stage{position:fixed;inset:0;z-index:4;pointer-events:none}
   .overlay{position:absolute;inset:0;display:flex;flex-direction:column;
            align-items:center;justify-content:center;text-align:center;
-           padding:0 4vw;transform:translateY(10vh)}
-  #big{font-family:var(--fBlack);font-size:clamp(42px,8.6vw,124px);line-height:.95;letter-spacing:1px;
+           padding:0 4vw;transform:translateY(8vh)}
+  /* Lobby: CTA under the scoreboard — keep ball / players clear */
+  .overlay.lobby{justify-content:flex-start;transform:none;
+                 padding-top:118px;padding-bottom:0;gap:10px}
+  .overlay.lobby #sub{margin-top:0}
+  .overlay.lobby #startBtn{margin-top:0}
+  #big{font-family:var(--fBlack);font-size:clamp(28px,5.2vw,68px);line-height:.95;letter-spacing:1px;
        color:#fff;
-       text-shadow:0 3px 0 rgba(0,0,0,.4),0 12px 46px rgba(0,0,0,.8),0 0 90px rgba(62,199,244,.22);
-       transition:transform .12s}
-  #big.goal{color:var(--amber);
+       text-shadow:0 2px 0 rgba(0,0,0,.4),0 10px 36px rgba(0,0,0,.75),0 0 70px rgba(62,199,244,.18);
+       transition:transform .12s,font-size .2s,opacity .2s}
+  /* Lobby brand — tucked under the scoreboard, not over the players */
+  #big.brand{position:fixed;top:86px;left:50%;transform:translateX(-50%);z-index:6;
+             font-size:clamp(16px,1.8vw,22px);letter-spacing:4px;margin:0;
+             padding:6px 16px;border-radius:999px;
+             background:linear-gradient(180deg,rgba(10,20,31,.88),rgba(5,11,18,.9));
+             border:1px solid rgba(158,190,215,.28);
+             animation:brandGlow 3.2s ease-in-out infinite}
+  @keyframes brandGlow{
+    0%,100%{opacity:.92;box-shadow:0 6px 18px rgba(0,0,0,.4),0 0 20px rgba(62,199,244,.08)}
+    50%{opacity:1;box-shadow:0 6px 18px rgba(0,0,0,.4),0 0 28px rgba(255,196,0,.22),0 0 40px rgba(62,199,244,.16)}
+  }
+  #big.goal{color:var(--amber);position:static;transform:none;padding:0;background:none;border:none;animation:none;
        text-shadow:0 3px 0 rgba(90,60,0,.5),0 12px 46px rgba(0,0,0,.8),0 0 110px rgba(255,196,0,.5)}
-  #big.save{color:var(--cyan);
+  #big.save{color:var(--cyan);position:static;transform:none;padding:0;background:none;border:none;animation:none;
        text-shadow:0 3px 0 rgba(0,50,70,.5),0 12px 46px rgba(0,0,0,.8),0 0 110px rgba(62,199,244,.5)}
-  #big.warn{color:var(--red);
+  #big.warn{color:var(--red);position:static;transform:none;padding:0;background:none;border:none;animation:none;
        text-shadow:0 3px 0 rgba(70,10,0,.5),0 12px 46px rgba(0,0,0,.8),0 0 110px rgba(255,68,56,.45)}
-  #big.pop{transform:scale(1.12)}
-  #sub{margin-top:14px;font-family:var(--fCond);font-weight:700;letter-spacing:2px;
-       font-size:clamp(14px,2vw,22px);color:#e8f0f6;max-width:80vw;
+  #big.pop{transform:scale(1.08)}
+  #big.brand.pop{transform:translateX(-50%) scale(1.04)}
+  #sub{margin-top:12px;font-family:var(--fCond);font-weight:700;letter-spacing:2px;
+       font-size:clamp(13px,1.6vw,18px);color:#e8f0f6;max-width:70vw;
        background:linear-gradient(180deg,rgba(8,16,25,.72),rgba(5,11,18,.78));
-       border:1px solid rgba(158,190,215,.25);border-radius:999px;padding:9px 22px;
+       border:1px solid rgba(158,190,215,.25);border-radius:999px;padding:8px 18px;
        box-shadow:0 8px 24px rgba(0,0,0,.45)}
   #sub:empty{display:none}
-  #startBtn{pointer-events:auto;margin-top:28px;font-family:var(--fBlack);
-            font-size:clamp(20px,3vw,30px);letter-spacing:2px;color:var(--ink);
+  #startBtn{pointer-events:auto;margin-top:16px;font-family:var(--fBlack);
+            font-size:clamp(16px,2.2vw,24px);letter-spacing:2px;color:var(--ink);
             background:linear-gradient(180deg,#ffd54d,var(--amber));
-            border:none;border-radius:14px;padding:16px 46px;cursor:pointer;
-            box-shadow:0 8px 0 #b98d00,0 16px 40px rgba(0,0,0,.5);
+            border:none;border-radius:12px;padding:12px 34px;cursor:pointer;
+            box-shadow:0 6px 0 #b98d00,0 14px 32px rgba(0,0,0,.5);
             transition:transform .08s,box-shadow .08s}
-  #startBtn:active{transform:translateY(6px);box-shadow:0 2px 0 #b98d00,0 8px 24px rgba(0,0,0,.5)}
-  #startBtn:disabled{background:#31506a;color:#7d95a8;box-shadow:0 8px 0 #22374a;cursor:default}
+  #startBtn:active{transform:translateY(5px);box-shadow:0 2px 0 #b98d00,0 8px 24px rgba(0,0,0,.5)}
+  #startBtn:disabled{background:#31506a;color:#7d95a8;box-shadow:0 6px 0 #22374a;cursor:default}
   #startBtn.hide{display:none}
   #abortBtn{font:inherit;color:var(--chalk);background:#5a2230;border:1px solid #8a3040;
             border-radius:8px;padding:7px 12px;cursor:pointer;letter-spacing:1.5px;
@@ -211,8 +228,8 @@
 </div>
 
 <div class="stage">
-  <div class="overlay">
-    <div id="big">GESTURE FOOTBALL</div>
+  <div class="overlay lobby">
+    <div id="big" class="brand">GESTURE FOOTBALL</div>
     <div id="sub">waiting for the striker…</div>
     <div id="reportLine"></div>
     <button id="startBtn" disabled>START MATCH</button>
@@ -600,7 +617,9 @@ function onState(st){
 
   const big=$("big"), sub=$("sub"), btn=$("startBtn"), abort=$("abortBtn");
   const report=$("reportLine"), genWrap=$("genBarWrap"), genBar=$("genBar"), genMeta=$("genMeta");
+  const overlay=document.querySelector(".overlay");
   big.className=""; btn.classList.add("hide");
+  if(overlay) overlay.classList.toggle("lobby", st.phase==="lobby");
   report.classList.remove("show"); report.textContent="";
   genWrap.classList.remove("show"); genMeta.classList.remove("show");
   // END MATCH visible for any live / full-time phase (not lobby).
@@ -609,6 +628,7 @@ function onState(st){
   switch(st.phase){
     case "lobby":
       big.textContent="GESTURE FOOTBALL";
+      big.className="brand";
       sub.textContent=st.connected?.phone?"striker ready — THE WALL awaits":"waiting for the striker…";
       btn.classList.remove("hide"); btn.disabled=!st.connected?.phone;
       btn.textContent="START MATCH"; break;
