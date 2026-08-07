@@ -72,8 +72,8 @@ python -m pip install pytest        # not in requirements.txt
 python -m pytest ai100\test_report_engine.py -q
 ```
 
-Seven cases, no network: telemetry analytics + pro ranking on the fixture, sport-aware darts/basketball analytics, PNG/PDF rendering without AI100, endpoint derivation, model-alias normalization, and tokenized storage + QR + expiry.
+Seven cases, no network: match-only telemetry analytics, sport-aware darts/basketball analytics, PNG/PDF rendering without AI100, endpoint derivation, model-alias normalization, and tokenized storage + QR + expiry.
 
-## Benchmark note
+## Match-only stats
 
-Football reports compare your short 5-kick sample against career penalty conversion - Cristiano Ronaldo 183/219 and Lionel Messi 116/148 (Transfermarkt snapshot, see `PRO_SNAPSHOT_DATE` in `report_engine.py`) - and explicitly state that the sample sizes aren't equivalent and the output is not a professional scouting assessment. Darts and basketball reports skip the pro comparison.
+Reports are built only from that match's shotmap and `kicks_total` (default 3 via `GF_KICKS`). Nicknames, attempt bars, conversion copy, and DNA cards are all derived from those attempts — no fixed pro/demo benchmarks. AI100 supplies decorative artwork only.

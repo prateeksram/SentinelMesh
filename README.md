@@ -711,7 +711,7 @@ Each successful report contains:
 - favorite target zone;
 - unpredictability and curve index;
 - dominant foot and strike mix;
-- football-only goalkeeper wrong-foot and playful Messi/Ronaldo comparisons;
+- football-only goalkeeper wrong-foot counts from that match;
 - sport-specific AI100 or procedural venue artwork;
 - a one-page PNG and PDF;
 - a tokenized mobile landing page.
@@ -842,7 +842,7 @@ cd android
 
 1. **Introduce the system:** “Your body is the controller, but four Snapdragon-class devices share the work.”
 2. **Show the phone:** point out live pose, force, and aiming feedback.
-3. **Show the TV:** select football and start a five-kick match.
+3. **Show the TV:** select football and start a three-kick match.
 4. **Take one shot:** highlight that the phone sends telemetry while the PC owns scoring and animation.
 5. **Show UNO Q:** display pose or utilization status on the TV telemetry rail.
 6. **Finish or simulate full time:** show the AI100 report generation status.

@@ -22,7 +22,7 @@ async def main() -> None:
     from ai100 import report_engine
 
     store = report_engine.ReportStore()
-    card = await store.create(report_engine.sample_shotmap(), 5, args.player)
+    card = await store.create(report_engine.sample_shotmap(), 3, args.player)
     safe = {
         "status": card["status"],
         "token": card["token"],
