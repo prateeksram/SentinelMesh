@@ -56,17 +56,28 @@ To try MuJoCo/Mink on a supported Python/platform combination:
 ```powershell
 py -3.13 -m pip install -r requirements-retarget.txt
 $env:GF_RETARGET_BACKEND = "mink"
-.\start-game.bat -UnoQIp 192.168.150.72 -CameraIndex 1 -SyncUnoQ
+.\start-game.bat -UnoQIp 192.168.150.72 -SyncUnoQ
 ```
 
-`GF_RETARGET_BACKEND=geometric` forces the fallback. `auto` (the default)
-tries Mink at startup and falls back without interrupting the game. The active
-backend is included in `state.retarget.backend` and printed below the live TV
-player.
+`geometric` is the default and never imports MuJoCo or Mink. Set
+`GF_RETARGET_BACKEND=auto` to probe the optional Mink backend and fall back
+without interrupting the game, or `GF_RETARGET_BACKEND=mink` when explicitly
+testing that stack. The active backend is included in `state.retarget.backend`
+and printed below the live TV player.
 
-The first Snapdragon X Elite validation should use the geometric backend.
-The optional Python wheels need to be checked on the actual Windows-on-Arm
-image; x64 emulation or WSL may be required if native Arm64 wheels are absent.
+The geometric backend is platform-neutral and does not use an X Elite-specific
+runtime. The optional Python wheels still need separate Windows-on-Arm
+compatibility checks; x64 emulation or WSL may be required if native Arm64
+wheels are absent.
+
+## Browser-side option
+
+The same geometric solve can be ported directly to JavaScript in `tv.html`:
+the host would validate and relay `pose_state`, while the browser applies body
+scaling, two-link limb IK, planted-foot stabilization, and smoothing before
+drawing the athlete. The host must still bridge UDP/WebSocket traffic because a
+normal browser cannot listen on UDP 9999, but no retargeting computation needs
+MuJoCo, Mink, QNN, or X Elite-specific APIs.
 
 ## Reference
 

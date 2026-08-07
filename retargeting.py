@@ -337,7 +337,9 @@ class PoseRetargeter:
         self.geometric = GeometricRetargeter(profile)
         self.solver = self.geometric
         self.backend_error: str | None = None
-        requested = os.environ.get("GF_RETARGET_BACKEND", "auto").strip().lower()
+        # Keep the normal path dependency-free on every laptop. MuJoCo/Mink is
+        # an explicit experiment, not a requirement for the display-only rig.
+        requested = os.environ.get("GF_RETARGET_BACKEND", "geometric").strip().lower()
         if requested not in ("off", "geometric"):
             try:
                 from retargeting_mink import MinkRetargeter
