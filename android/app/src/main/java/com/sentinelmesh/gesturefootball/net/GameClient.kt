@@ -76,6 +76,7 @@ class GameClient(
         val timerMs: Int,
         val lastForce: Int?,
         val lastResult: String?,
+        val lastTimedOut: Boolean = false,
         val sport: String = "football",
         val raw: JSONObject,
     )
@@ -147,6 +148,7 @@ class GameClient(
                             timerMs = o.optInt("timerMs", 0),
                             lastForce = last?.optInt("force"),
                             lastResult = last?.optString("result"),
+                            lastTimedOut = last?.optBoolean("timedOut", false) ?: false,
                             raw = o,
                         )
                     )
@@ -275,7 +277,7 @@ class GameClient(
         foot: String = "R",
         kinematics: KickKinematicState? = null,
         trajectory: ShotTrajectory? = null,
-    ) {
+    ): Boolean {
         val packet = JSONObject()
             .put("type", "kick")
             .put("zone", zone)
@@ -330,7 +332,8 @@ class GameClient(
                     .put("points", points),
             )
         }
-        ws?.send(packet.toString())
+        if (!open.get()) return false
+        return ws?.send(packet.toString()) == true
     }
 
     fun sendSkeleton(kickNo: Int, frames: List<Pair<Int, List<FloatArray>>>) {

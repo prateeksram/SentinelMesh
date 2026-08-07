@@ -968,7 +968,8 @@ function onState(st){
     }
     case "resolve":{
       const r=st.last?.result;
-      big.textContent=r==="goal"?"GOAL!":r==="save"?"SAVED!":r==="post"?"POST!"
+      const timedOut=st.last?.timedOut===true;
+      big.textContent=timedOut?"NO KICK":r==="goal"?"GOAL!":r==="save"?"SAVED!":r==="post"?"POST!"
         :r==="wide"?"WIDE!":r==="hit"?`+${st.last?.points??0}!`
         :r==="miss"?"MISSED!":"SKIED!";
       big.className=(r==="goal"||r==="hit")?"goal":r==="save"?"save":"warn";
@@ -981,8 +982,10 @@ function onState(st){
       sub.textContent=bits.join(" · ");
       if(prev?.phase!=="resolve"){
         pop();
-        vfxArmFromLast(st.last);
-        shoot(st.last);
+        if(!timedOut){
+          vfxArmFromLast(st.last);
+          shoot(st.last);
+        }
         requestHeroPlate(st);
       } else if(st.replay?.frames?.length && HERO.kick!==st.kick){
         requestHeroPlate(st);

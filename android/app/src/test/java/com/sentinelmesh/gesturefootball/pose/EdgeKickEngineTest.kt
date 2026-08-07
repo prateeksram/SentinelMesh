@@ -137,6 +137,77 @@ class EdgeKickEngineTest {
     }
 
     @Test
+    fun sparsePoseSinglePeakFiresWithStrongLandmarkCorroboration() {
+        val engine = EdgeKickEngine(bodyKg = 75f, kickMs = 2.25f, torsoM = 0.46f)
+        val visibility = FloatArray(33) { 0.95f }
+        // Roughly reproduces the captured UNO Q trace: 5 FPS, one 2.5+ m/s
+        // sample, >30 cm of foot travel, lift, and follow-through.
+        val positions = listOf(
+            0.50f to 0.90f,
+            0.50f to 0.90f,
+            0.47f to 0.85f,
+            0.25f to 0.55f,
+            0.24f to 0.54f,
+        )
+
+        val kick = positions.mapIndexedNotNull { index, foot ->
+            engine.update(
+                nowMs = 6_000L + index * 200L,
+                landmarks = landmarks(foot.first, foot.second),
+                visibility = visibility,
+                frameWidth = 640,
+                frameHeight = 480,
+                zone = "C",
+                canKick = true,
+                gateReject = null,
+                aimHandY = null,
+                flow = null,
+            ).kick
+        }.firstOrNull()
+
+        assertNotNull("a corroborated one-frame peak must survive sparse pose sampling", kick)
+    }
+
+    @Test
+    fun sparsePoseSingleSpikeWithoutTravelDoesNotFire() {
+        val engine = EdgeKickEngine(bodyKg = 75f, kickMs = 2.25f, torsoM = 0.46f)
+        val visibility = FloatArray(33) { 0.95f }
+        val spike = EdgeKickEngine.FlowFoot(
+            vxNorm = -0.9f,
+            vyNorm = -0.5f,
+            peakVxNorm = -1.2f,
+            peakVyNorm = -0.7f,
+            confidence = 0.95f,
+            samples = 3,
+        )
+        var fired = false
+
+        repeat(5) { index ->
+            val flow = if (index == 2) spike else null
+            fired = fired || engine.update(
+                nowMs = 8_000L + index * 200L,
+                landmarks = landmarks(0.50f, 0.90f),
+                visibility = visibility,
+                frameWidth = 640,
+                frameHeight = 480,
+                zone = "C",
+                canKick = true,
+                gateReject = null,
+                aimHandY = null,
+                flow = flow?.let {
+                    EdgeKickEngine.FlowMotion(
+                        timestampNs = (8_000L + index * 200L) * 1_000_000L,
+                        fps = 15f,
+                        left = it,
+                    )
+                },
+            ).kick != null
+        }
+
+        assertTrue("one sparse flow spike without landmark travel must not fire", !fired)
+    }
+
+    @Test
     fun gatedSwingIsDiscardedAndDoesNotFireWhenShootUnlocks() {
         val engine = EdgeKickEngine(bodyKg = 75f, kickMs = 1.5f, torsoM = 0.50f)
         engine.setKickThreshold(1.5f)

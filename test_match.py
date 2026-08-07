@@ -59,9 +59,10 @@ async def main():
     assert st["score"] == sum(1 for s in st["shotmap"] if s["result"] == "goal")
     assert st["saves"] == sum(1 for s in st["shotmap"] if s["result"] != "goal")
     assert st["shotmap"][2]["result"] == "over", "frozen kick 3 should be skied"
+    assert st["shotmap"][2]["timedOut"] is True, "frozen kick must be marked as timeout"
     assert all(s["keeperZone"] in "LCR" for s in st["shotmap"])
     assert all(s["force"] > 0 for s in st["shotmap"] if s["result"] != "over"), "ForcePose Newtons missing"
-    assert st["replay"] and st["replay"]["kick"] == st["kicksTotal"], "bullet-time replay missing"
-    print("OK — match completed, scores consistent, timeout handled, ForcePose + replay stored")
+    assert st["replay"] is None, "a timed-out attempt must not retain a phantom replay"
+    print("OK — match completed, scores consistent, timeout handled, ForcePose stored")
 
 asyncio.run(main())
