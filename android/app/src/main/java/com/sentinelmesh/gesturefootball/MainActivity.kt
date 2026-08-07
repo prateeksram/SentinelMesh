@@ -58,6 +58,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private var lastZoneSent = 0L
     private var lastKickDiagnosticsLog = 0L
     private val skelBuf = ArrayDeque<Pair<Long, List<FloatArray>>>()
+    private var lastLivePoseSent = 0L
     private var lastPhase: String? = null
     /** Aim frozen when shoot starts — feints only in announce/countdown. */
     private var lockedAimZone: String? = null
@@ -171,10 +172,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 context = this,
                 onHud = { hud -> mainHandler.post { applyHud(hud) } },
                 onKick = { kick -> mainHandler.post { handleKick(kick) } },
-                onSkeleton = { t, pts ->
-                    skelBuf.addLast(t to pts)
-                    while (skelBuf.isNotEmpty() && t - skelBuf.first().first > 1400) skelBuf.removeFirst()
-                },
+                onSkeleton = { t, pts -> captureSkeleton(t, pts) },
             )
             binding.aiBadge.text = "BODY AI · ON-DEVICE"
             lastPoseMsLabel = "${pose?.delegateLabel} · —"
@@ -196,6 +194,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
         profile = PlayerProfileStore.load(this)
         profile?.let { pose?.applyProfile(it) }
+        game.sendBodyProfile(profile)
         qwen = QwenCoach(this).also { it.setProfile(profile) }
         updateProfileHint()
         refreshNeuralLoad()
@@ -710,6 +709,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             profile = p
             pose?.applyProfile(p)
             qwen?.setProfile(p)
+            game.sendBodyProfile(p)
             vibrate(80)
         }
         calibrating = false
@@ -1082,14 +1082,31 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         val kickAt = System.currentTimeMillis()
         val kickNo = game.kick
         mainHandler.postDelayed({
-            val frames = skelBuf
-                .filter { it.first >= kickAt - 850 }
-                .map { ((it.first - kickAt).toInt()) to it.second }
+            val frames = synchronized(skelBuf) {
+                skelBuf
+                    .filter { it.first >= kickAt - 850 }
+                    .map { ((it.first - kickAt).toInt()) to it.second }
+            }
             if (frames.isNotEmpty()) {
                 val step = max(1, ceil(frames.size / 26.0).toInt())
                 game.sendSkeleton(kickNo, frames.filterIndexed { i, _ -> i % step == 0 })
             }
         }, 450)
+    }
+
+    private fun captureSkeleton(timestampMs: Long, points: List<FloatArray>) {
+        synchronized(skelBuf) {
+            skelBuf.addLast(timestampMs to points)
+            while (skelBuf.isNotEmpty() && timestampMs - skelBuf.first().first > 1400) {
+                skelBuf.removeFirst()
+            }
+        }
+        // 12.5 Hz is enough for display interpolation and keeps this stream
+        // insignificant beside camera/pose inference and the UNO Q preview.
+        if (timestampMs - lastLivePoseSent >= 80L) {
+            lastLivePoseSent = timestampMs
+            game.sendPoseState(timestampMs, points, pose?.delegateLabel ?: "unknown")
+        }
     }
 
     override fun onEdgePose(frame: GameClient.EdgePoseFrame) {
@@ -1148,6 +1165,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     override fun onConnected(connected: Boolean) {
         mainHandler.post {
             hostConnected = connected
+            if (connected) game.sendBodyProfile(profile)
             binding.led.setBackgroundResource(
                 if (connected) R.drawable.led_on else R.drawable.led_off
             )

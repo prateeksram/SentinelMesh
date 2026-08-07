@@ -73,6 +73,11 @@ cd gesture-arena
 py -3.13 -m pip install -r requirements.txt
 ```
 
+Optional laptop-side MuJoCo/Mink pose refinement is isolated in
+`requirements-retarget.txt`; the default install uses the built-in geometric
+retargeter and keeps the old procedural renderer as fallback. See
+[`docs/retargeting.md`](docs/retargeting.md).
+
 macOS / Linux: `python3 -m pip install -r requirements.txt`.
 
 Firewall: allow Python inbound on **TCP 8080** (TV/phone/WS) and **UDP 9999**

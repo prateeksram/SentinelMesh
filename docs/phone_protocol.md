@@ -100,8 +100,37 @@ Self-reported silicon duty cycle (~1 Hz while connected). Ingested into
 | `temp_c` | number | Optional; rarely populated |
 
 Phone mapping: pose lands on the active delegate unit; Whisper ASR → `npu` /
-`asr`; coach LLM → `npu` if `QWEN` else `cpu` / `llm`. No transcripts, frames,
-or profile data.
+`asr`; coach LLM → `npu` if `QWEN` else `cpu` / `llm`. No transcripts or
+calibration samples are sent.
+
+### `body_profile`
+One small calibration message is sent after connecting and recalibration:
+```json
+{
+  "type": "body_profile",
+  "schema": "sentinel.body.profile.v1",
+  "heightCm": 180,
+  "weightKg": 80,
+  "torsoM": 0.52
+}
+```
+Only dimensions needed to scale the display rig leave the phone. Kick
+thresholds, aim thresholds, dominant-foot history, and calibration samples
+remain on-device.
+
+### `pose_state`
+Live display pose, throttled to at most 12.5 Hz by the Android app:
+```json
+{
+  "type": "pose_state",
+  "schema": "sentinel.pose.state.v1",
+  "timestampMs": 1770000000000,
+  "source": "UNO Q",
+  "points": [[0.0, 0.0, 0.0], "... 33 MediaPipe joints total ..."]
+}
+```
+The contract is source-neutral. Phone NPU/GPU/CPU and UNO Q all enter through
+`PoseAnalyzer.onSkeleton` and send this same payload.
 
 ## Server → client
 
@@ -122,9 +151,16 @@ or profile data.
 `phase` ∈ `lobby` | `announce` | `countdown` | `shoot` | `resolve` | `end`  
 `last.result` ∈ `goal` | `save` | `post` | `miss` (and synonyms)
 
+### `retarget_state` (TV only)
+The laptop converts `pose_state` into a `sentinel.retarget.v1` metric skeleton.
+It includes `source`, `backend`, `profile`, `space: "canonical_m"`, and the 33
+constrained points in `p`. The TV interpolates it and falls back to recorded
+`skel`, then the existing procedural athlete, when stale.
+
 ## On-device only (never on the wire)
 
-- Player calibration profile (`player_profile.json`)
+- Full player calibration profile (`player_profile.json`); only height,
+  weight, and torso length are sent to scale the display rig
 - Whisper transcripts / Qwen coach lines
 - Predictability HUD copy (the strip stays local; **scalars** may leave via `telem`)
 - Delegate toggle UI (the chosen unit is implied by which `telem.unit` is reported)

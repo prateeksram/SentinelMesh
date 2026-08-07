@@ -1,0 +1,5 @@
+# Optional laptop-side articulated pose retargeting.
+# The game automatically falls back to the dependency-free geometric solver.
+mujoco>=3.3,<4
+mink>=1.1,<2
+numpy>=2.0

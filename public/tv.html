@@ -387,6 +387,7 @@
 
 const $=id=>document.getElementById(id);
 let S=null, prev=null, ws=null;
+let RT=null, RT_PREV=null, RT_AT=0, RT_INTERVAL=80;
 
 /* ---- sport helpers (football = keeper duel; darts/basketball = ring targets) ---- */
 const SPORT=()=>S?.sport||"football";
@@ -765,8 +766,21 @@ function connect(){
   ws.onmessage=ev=>{
     let m; try{ m=JSON.parse(ev.data); }catch(_){ return; }
     if(m.type==="telem_state"){ onTelemState(m); return; }
+    if(m.type==="retarget_state"){ onRetarget(m); return; }
     if(m.type==="state" || m.phase) onState(m);
   };
+}
+function onRetarget(m){
+  if(m.schema!=="sentinel.retarget.v1"||!Array.isArray(m.p)||m.p.length!==33) return;
+  const now=performance.now();
+  if(RT_AT) RT_INTERVAL=clamp(now-RT_AT,40,200);
+  RT_PREV=RT; RT=m; RT_AT=now;
+}
+function sampleRetarget(now){
+  if(!RT||now-RT_AT>650) return null;
+  if(!RT_PREV) return RT;
+  const a=clamp((now-RT_AT)/RT_INTERVAL,0,1);
+  return {...RT,p:RT.p.map((point,i)=>point.map((v,j)=>lerp(RT_PREV.p[i]?.[j]??v,v,a)))};
 }
 $("startBtn").onclick=()=>{ if(!S)return;
   ws.send(JSON.stringify({type:S.phase==="end"?"again":"start"})); };
@@ -2055,7 +2069,7 @@ const KS={x:0,hy:0.95,sp:0,hlx:-0.48,hly:0.78,hrx:0.48,hry:0.78,
 let dive=null;
 function ik(ax,ay,tx,ty,l1,l2,sign){
   let dx=tx-ax,dy=ty-ay,d=Math.hypot(dx,dy)||1e-4;
-  const cl=Math.min(d,(l1+l2)*0.999);
+  const cl=clamp(d,Math.abs(l1-l2)+1e-4,(l1+l2)*0.999);
   dx*=cl/d; dy*=cl/d;
   const hx=ax+dx, hy=ay+dy;
   const cosA=clamp((l1*l1+cl*cl-l2*l2)/(2*l1*cl),-1,1);
@@ -2491,21 +2505,22 @@ function drawPoseStriker(now,frame){
   const depth=M.DSPOT-0.2;
   let s=sc(depth);
   const maxH=H*0.38;
-  if(1.85*s>maxH) s=maxH/1.85;
+  const playerH=clamp((frame.profile?.heightCm||185)/100,1.2,2.3);
+  if(playerH*s>maxH) s=maxH/playerH;
   const gnd=gy(depth);
+  const canonical=frame.space==="canonical_m";
   // MediaPipe world: y down, x = person's right. TV sees their back → flip x.
-  const footY=Math.max(
+  const footY=canonical?0:Math.max(
     p[MP.L_ANK][1], p[MP.R_ANK][1],
     p[MP.L_FT]?p[MP.L_FT][1]:-1e9, p[MP.R_FT]?p[MP.R_FT][1]:-1e9
   );
-  const hipY=(p[MP.L_HIP][1]+p[MP.R_HIP][1])*0.5;
-  const hipX=-(p[MP.L_HIP][0]+p[MP.R_HIP][0])*0.5;
+  const hipX=(p[MP.L_HIP][0]+p[MP.R_HIP][0])*0.5;
   // Lateral bias toward aimed zone so they sit on the spot line.
   const aimBias=SS.zone==="L"?-0.12:SS.zone==="R"?0.12:0;
   const P=i=>{
     const q=p[i]; if(!q) return null;
-    const lx=-q[0]-hipX+aimBias;          // centred on hips, rear view
-    const ly=footY-q[1];                  // metres above planted feet
+    const lx=-(q[0]-hipX)+aimBias;         // centred on hips, rear view
+    const ly=canonical?q[1]:footY-q[1];   // metres above planted feet
     return [W/2+lx*s, gnd-ly*s];
   };
   const need=[MP.L_SHO,MP.R_SHO,MP.L_HIP,MP.R_HIP,MP.L_KNE,MP.R_KNE,MP.L_ANK,MP.R_ANK];
@@ -2585,13 +2600,17 @@ function drawPoseStriker(now,frame){
   cx.fillStyle="rgba(255,196,0,.85)";
   cx.font=`800 ${Math.max(10,H*0.016)}px ${FCND}`;
   cx.textAlign="center";
-  cx.fillText(`YOUR ${ACTION[SPORT()].verb} · FORCEPOSE`,W/2,gnd+Math.max(14,H*0.022));
+  const rig=frame.backend?frame.backend.toUpperCase():"FORCEPOSE";
+  cx.fillText(`YOUR ${ACTION[SPORT()].verb} · ${rig}`,W/2,gnd+Math.max(14,H*0.022));
   return true;
 }
 function drawStriker(now,dt){
   const ph=S?.phase||"lobby";
   if(ph==="lobby"||ph==="end") return;
-  // Option B: when bullet-time frames land, drive the pitch striker from your skeleton.
+  // Live source-neutral constrained rig (phone NPU/GPU/CPU or UNO Q).
+  const live=sampleRetarget(now);
+  if(live&&drawPoseStriker(now,live)) return;
+  // Recorded raw skeleton remains the replay fallback for older app builds.
   if(ph==="resolve"){
     const f=samplePoseFrame(now);
     if(f&&drawPoseStriker(now,f)) return;

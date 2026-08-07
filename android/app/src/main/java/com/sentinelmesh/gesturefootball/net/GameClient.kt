@@ -2,6 +2,7 @@ package com.sentinelmesh.gesturefootball.net
 
 import com.sentinelmesh.gesturefootball.pose.KickKinematicState
 import com.sentinelmesh.gesturefootball.pose.ShotTrajectory
+import com.sentinelmesh.gesturefootball.profile.PlayerProfile
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -331,6 +332,49 @@ class GameClient(
             arr.put(JSONObject().put("t", t).put("p", p))
         }
         ws?.send(JSONObject().put("type", "skel").put("kick", kickNo).put("frames", arr).toString())
+    }
+
+    /** Calibration dimensions used by the laptop's display-only human rig. */
+    fun sendBodyProfile(profile: PlayerProfile?) {
+        val value = profile ?: return
+        if (!open.get()) return
+        ws?.send(
+            JSONObject()
+                .put("type", "body_profile")
+                .put("schema", "sentinel.body.profile.v1")
+                .put("heightCm", value.heightCm.toDouble())
+                .put("weightKg", value.weightKg.toDouble())
+                .put("torsoM", value.torsoM.toDouble())
+                .toString()
+        )
+    }
+
+    /**
+     * Source-neutral live pose. The same seam is used for phone NPU/GPU/CPU
+     * landmarks and UNO Q landmarks, so retargeting never selects a device.
+     */
+    fun sendPoseState(timestampMs: Long, points: List<FloatArray>, source: String) {
+        if (!open.get() || points.size != 33) return
+        val encoded = JSONArray()
+        points.forEach { point ->
+            if (point.size < 3) return
+            encoded.put(
+                JSONArray()
+                    .put(point[0].toDouble())
+                    .put(point[1].toDouble())
+                    .put(point[2].toDouble())
+            )
+        }
+        if (encoded.length() != 33) return
+        ws?.send(
+            JSONObject()
+                .put("type", "pose_state")
+                .put("schema", "sentinel.pose.state.v1")
+                .put("timestampMs", timestampMs)
+                .put("source", source.take(48))
+                .put("points", encoded)
+                .toString()
+        )
     }
 
     /**

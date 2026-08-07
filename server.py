@@ -35,6 +35,12 @@ from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
 import geniex_client
 import neural_fx
+from retargeting import (
+    BodyProfile,
+    PoseRetargeter,
+    normalize_pose_message,
+    normalize_profile_message,
+)
 import scene_engine
 
 ROOT = Path(__file__).parent
@@ -353,6 +359,11 @@ class Game:
         self.report = ""
         self.gen_progress = 0
         self.scene_metrics = None
+        self.body_profile = BodyProfile()
+        self.retargeter = PoseRetargeter(self.body_profile)
+        self.last_retarget = None
+        self.retarget_at = 0.0
+        self.retarget_lock = asyncio.Lock()
         self._reset()
 
     # ------------------------------------------------------------ state ----
@@ -414,6 +425,11 @@ class Game:
             "genProgress": self.gen_progress,
             "sceneMetrics": self.scene_metrics,
             "ringScale": round(self.ring_scale, 3),
+            "retarget": {
+                "backend": self.retargeter.backend,
+                "profile": self.body_profile.wire(),
+                "live": self.last_retarget is not None,
+            },
         }
 
     async def broadcast(self):
@@ -429,6 +445,17 @@ class Game:
         msg = json.dumps({"type": "edge_pose", **packet}, separators=(",", ":"))
         for ws, client in list(self.sockets.items()):
             if client != "phone":
+                continue
+            try:
+                await ws.send_str(msg)
+            except Exception:
+                pass
+
+    async def broadcast_retarget(self, packet):
+        """Send the lightweight constrained rig only to TV renderers."""
+        msg = json.dumps(packet, separators=(",", ":"))
+        for ws, client in list(self.sockets.items()):
+            if client != "tv":
                 continue
             try:
                 await ws.send_str(msg)
@@ -795,6 +822,25 @@ class Game:
             if client in ("phone", "tv", "unoq"):
                 self.sockets[ws] = client
             await self.broadcast()
+            if client == "tv" and self.last_retarget is not None:
+                await ws.send_str(json.dumps(self.last_retarget, separators=(",", ":")))
+        elif t == "body_profile":
+            profile = normalize_profile_message(msg)
+            if self.sockets.get(ws) in STRIKERS and profile is not None:
+                self.body_profile = profile
+                self.retargeter.set_profile(profile)
+                self.last_retarget = None
+                await self.broadcast()
+        elif t == "pose_state":
+            pose = normalize_pose_message(msg)
+            now = time.monotonic()
+            if (self.sockets.get(ws) in STRIKERS and pose is not None
+                    and now - self.retarget_at >= 0.04):
+                self.retarget_at = now  # cap direct clients at 25 Hz
+                async with self.retarget_lock:
+                    packet = await asyncio.to_thread(self.retargeter.solve, pose)
+                    self.last_retarget = packet
+                await self.broadcast_retarget(packet)
         elif t == "sport":
             s = msg.get("sport")
             # Lobby only, and never while a match task is spinning up —
@@ -1196,6 +1242,7 @@ async def main():
     fx = neural_fx.status()
     fx_model = fx.get("model") or "procedural"
     print(f"FX    = {fx.get('backend', '?').upper()} · {fx_model}")
+    print(f"Rig   = {game.retargeter.backend}")
     scene_ok = await geniex_client.ping()
     print(f"Scene = {'ready' if scene_ok else 'template (GenieX down)'}")
     try:
