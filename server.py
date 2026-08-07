@@ -375,6 +375,41 @@ def normalize_trajectory(raw):
     }
 
 
+def contact_pose_frame(frames):
+    """Pick the landmark frame nearest kick contact (t≈0) for AI100 DNA cards."""
+    if not isinstance(frames, list) or not frames:
+        return None
+    best = None
+    best_abs = None
+    for frame in frames:
+        if not isinstance(frame, dict):
+            continue
+        pts = frame.get("p")
+        if not isinstance(pts, list) or len(pts) < 33:
+            continue
+        try:
+            t = float(frame.get("t", 0))
+        except (TypeError, ValueError):
+            t = 0.0
+        score = abs(t)
+        if best is None or score < best_abs:
+            # Round joints lightly so report JSON stays compact.
+            slim = []
+            for joint in pts[:33]:
+                if (isinstance(joint, (list, tuple)) and len(joint) >= 3
+                        and all(isinstance(v, (int, float)) for v in joint[:3])):
+                    slim.append([round(float(joint[0]), 2),
+                                 round(float(joint[1]), 2),
+                                 round(float(joint[2]), 2)])
+                else:
+                    slim.append(None)
+            if sum(1 for j in slim if j) < 10:
+                continue
+            best = {"t": int(round(t)), "p": slim}
+            best_abs = score
+    return best
+
+
 # ================================================================ GAME ======
 class Game:
     def __init__(self, desk: Desk):
@@ -404,6 +439,7 @@ class Game:
         self.aim = "C"                          # live aim from the hand
         self.aim_trail = []                     # (monotonic t, zone) during a kick
         self.replay = None                      # bullet-time skeleton for the current kick
+        self.skel_by_kick = {}                  # kick → frames for AI100 poseFrame
         self.report_card = None
         self.last = None
         self.line = "Waiting for the striker…"
@@ -848,6 +884,15 @@ class Game:
             self.report_task.cancel()
         generation = self.match_gen if generation is None else generation
         sport = sport or self.sport or "football"
+        # Backfill contact pose frames from any late-arriving skel clips.
+        shot_list = []
+        for shot in shots:
+            entry = dict(shot) if isinstance(shot, dict) else shot
+            if isinstance(entry, dict) and "poseFrame" not in entry:
+                pose = contact_pose_frame(self.skel_by_kick.get(entry.get("kick")))
+                if pose is not None:
+                    entry = {**entry, "poseFrame": pose}
+            shot_list.append(entry)
         self.report_card = {
             "status": "generating",
             "startedAt": int(time.time()),
@@ -857,7 +902,7 @@ class Game:
         async def run():
             try:
                 card = await report_store.create(
-                    list(shots), int(kicks_total), player_name, sport=sport)
+                    shot_list, int(kicks_total), player_name, sport=sport)
             except asyncio.CancelledError:
                 return
             except Exception as exc:
@@ -994,7 +1039,19 @@ class Game:
             if (self.sockets.get(ws) in STRIKERS and isinstance(frames, list)
                     and msg.get("kick") == self.kick
                     and len(json.dumps(frames)) < 200_000):
-                self.replay = {"kick": self.kick, "frames": frames[:40]}
+                clipped = frames[:40]
+                self.replay = {"kick": self.kick, "frames": clipped}
+                self.skel_by_kick[self.kick] = clipped
+                pose = contact_pose_frame(clipped)
+                if pose is not None:
+                    for entry in self.shotmap:
+                        if entry.get("kick") == self.kick:
+                            entry["poseFrame"] = pose
+                            if self.last is entry or (
+                                    isinstance(self.last, dict)
+                                    and self.last.get("kick") == self.kick):
+                                self.last = entry
+                            break
                 await self.broadcast()
         elif t == "start":
             striker_on = any(c in STRIKERS for c in self.sockets.values())

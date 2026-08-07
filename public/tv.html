@@ -2879,6 +2879,53 @@ function draw(now){
 const BONES=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],
              [23,24],[23,25],[25,27],[27,31],[24,26],[26,28],[28,32]];
 let replayKick=-1, replayT0=0;
+/** Infer striking side from foot field or max foot travel near contact. */
+function strikeSideFromReplay(fr, last){
+  const foot=String(last?.foot||"").toUpperCase();
+  if(foot==="L"||foot==="R") return foot;
+  if(!fr||fr.length<2) return "R";
+  let best=null, bestD=0;
+  for(let i=1;i<fr.length;i++){
+    const a=fr[i-1], b=fr[i];
+    if(!a?.p||!b?.p) continue;
+    if(Math.abs((b.t??0))>180 && Math.abs((a.t??0))>180) continue;
+    for(const [side, idx] of [["L",31],["R",32]]){
+      const p0=a.p[idx], p1=b.p[idx];
+      if(!p0||!p1) continue;
+      const d=Math.hypot(p1[0]-p0[0], p1[1]-p0[1], p1[2]-p0[2]);
+      if(d>bestD){ bestD=d; best=side; }
+    }
+  }
+  return best||"R";
+}
+/** Short deterministic tip from last shot + optional pose frame. */
+function coachTipFromLast(last, frame, side){
+  if(!last) return "Snap through contact.";
+  const res=String(last.result||"").toLowerCase();
+  const force=Number(last.force)||0;
+  const zone=String(last.zone||"C").toUpperCase();
+  const other=zone==="L"?"R":zone==="R"?"L":"L";
+  const verb=(ACTION[SPORT()]||ACTION.football).verb;
+  if(force>0 && force<120)
+    return verb==="KICK"?"Too soft — plant harder through the ball."
+                        :"Too soft — drive through the release.";
+  if(res==="wide"||res==="miss"||res==="over")
+    return "Tighten the aim lock before release.";
+  if(res==="save"||res==="post")
+    return `Vary the zone — fake ${other} then switch.`;
+  if(frame?.p && (side==="L"||side==="R")){
+    const ft=side==="L"?31:32, hip=side==="L"?23:24;
+    const f=frame.p[ft], h=frame.p[hip];
+    if(f&&h){
+      const reach=Math.hypot(f[0]-h[0], f[2]-h[2]);
+      if(reach<0.18) return "Snap through contact — finish the swing.";
+    }
+  }
+  if(res==="goal"||res==="hit")
+    return last.height==="L"?"Nice. Mix a high finish next."
+                            :"Solid. Hold the fake one beat longer.";
+  return "Follow through — finish tall.";
+}
 function drawReplay(now){
   const fr=S.replay.frames;
   if(S.replay.kick!==replayKick){ replayKick=S.replay.kick; replayT0=now; }
@@ -2888,40 +2935,53 @@ function drawReplay(now){
   let f=fr[0];
   for(const g of fr){ if(g.t<=playT) f=g; else break; }
 
-  const R=Math.min(W,H)*0.17, px=Math.max(R+W*0.015,W*0.145), py=H*0.52;
+  // Smaller panel, bottom-right under the sport / games rail.
+  const R=Math.min(W,H)*0.11;
+  const marginX=Math.max(14,W*0.012), marginY=Math.max(18,H*0.03);
+  const stripH=Math.max(28,H*0.045);
+  const px=W-R-marginX;
+  const py=H-R*1.35-marginY-stripH*0.35;
+  const panelTop=py-R*1.18, panelBot=py+R*1.22;
   cx.save();
   cx.fillStyle="rgba(5,13,21,.82)";
-  cx.beginPath(); cx.roundRect(px-R,py-R*1.18,R*2,R*2.4,H*0.016); cx.fill();
-  cx.strokeStyle="rgba(62,199,244,.5)"; cx.lineWidth=Math.max(1.5,H*0.0018); cx.stroke();
+  cx.beginPath(); cx.roundRect(px-R,panelTop,R*2,panelBot-panelTop,H*0.012); cx.fill();
+  cx.strokeStyle="rgba(62,199,244,.5)"; cx.lineWidth=Math.max(1.2,H*0.0015); cx.stroke();
 
   // Neural / procedural depth plate — 2.5D parallax under the skeleton.
   if(HERO.img && HERO.kick===S.kick){
     const parallax=Math.sin((now-replayT0)/900)*R*0.06;
     cx.save();
-    cx.beginPath(); cx.roundRect(px-R+4,py-R*1.05,R*2-8,R*2.05,H*0.012); cx.clip();
+    cx.beginPath(); cx.roundRect(px-R+3,py-R*1.05,R*2-6,R*2.05,H*0.01); cx.clip();
     cx.globalAlpha=0.72;
-    cx.drawImage(HERO.img, px-R+4+parallax, py-R*1.05, R*2-8, R*2.05);
+    cx.drawImage(HERO.img, px-R+3+parallax, py-R*1.05, R*2-6, R*2.05);
     cx.globalAlpha=1;
     cx.restore();
   }
 
   // REPLAY tab
-  const tw=R*0.9, th=Math.max(18,H*0.03);
+  const tw=R*0.85, th=Math.max(14,H*0.022);
   cx.fillStyle="#FF4438";
-  cx.beginPath(); cx.roundRect(px-R,py-R*1.18-th*0.55,tw,th,[H*0.008,H*0.008,0,0]); cx.fill();
+  cx.beginPath(); cx.roundRect(px-R,panelTop-th*0.55,tw,th,[H*0.006,H*0.006,0,0]); cx.fill();
   cx.fillStyle="#fff"; cx.font=`900 ${th*0.55}px ${FBLK}`; cx.textAlign="center";
-  cx.fillText("REPLAY",px-R+tw/2,py-R*1.18+th*0.14);
+  cx.fillText("REPLAY",px-R+tw/2,panelTop+th*0.14);
   if(Math.sin(now/300)>0){ cx.fillStyle="#fff";
-    cx.beginPath(); cx.arc(px-R+tw*0.09,py-R*1.18-th*0.05,th*0.14,0,7); cx.fill(); }
-  cx.font=`800 ${Math.max(10,H*0.017)}px ${FCND}`;
+    cx.beginPath(); cx.arc(px-R+tw*0.1,panelTop-th*0.05,th*0.12,0,7); cx.fill(); }
+  cx.font=`800 ${Math.max(9,H*0.013)}px ${FCND}`;
   cx.fillStyle="#3EC7F4";
   const heroTag=HERO.img&&HERO.kick===S.kick
     ?(HERO.backend==="qnn"?"NEURAL FX · QNN":HERO.backend==="cpu"?"NEURAL FX · CPU":"NEURAL FX · ON-DEVICE")
     :"BULLET TIME · ON-DEVICE 3D";
-  cx.fillText(heroTag,px,py-R*1.18+Math.max(16,H*0.028));
-  if(S.last?.force){ cx.fillStyle="#FFC400";
-    cx.font=`900 ${Math.max(12,H*0.022)}px ${FCND}`;
-    cx.fillText(`${S.last.force} N`,px,py+R*1.16); }
+  cx.fillText(heroTag,px,panelTop+Math.max(12,H*0.02));
+
+  const side=strikeSideFromReplay(fr, S.last);
+  const sportHand=SPORT()!=="football";
+  const strikeJoints=sportHand
+    ?(side==="L"?[13,15]:[14,16])
+    :(side==="L"?[25,27,31]:[26,28,32]);
+  const plantJoints=sportHand
+    ?(side==="L"?[26,28,32]:[25,27,31])
+    :(side==="L"?[26,28,32]:[25,27,31]);
+  const strikeSet=new Set(strikeJoints), plantSet=new Set(plantJoints);
 
   const th3=(now-replayT0)/1400, f3=R*1.4, dd=2.6;
   const proj=q=>{
@@ -2930,21 +2990,50 @@ function drawReplay(now){
     const s=f3/(z+dd);
     return [px+x*s, py+q[1]*s];
   };
-  cx.strokeStyle="#3EC7F4"; cx.lineWidth=Math.max(2,H*0.0033); cx.lineCap="round";
-  cx.shadowColor="#3EC7F4"; cx.shadowBlur=8;
+  cx.lineCap="round";
   for(const [a,b] of BONES){
     if(!f.p[a]||!f.p[b]) continue;
+    const hot=strikeSet.has(a)||strikeSet.has(b);
+    const plant=plantSet.has(a)||plantSet.has(b);
     const [ax,ay]=proj(f.p[a]), [bx,by]=proj(f.p[b]);
+    cx.strokeStyle=hot?"#FFC400":plant?"#3ddc74":"#3EC7F4";
+    cx.lineWidth=Math.max(hot||plant?2.2:1.6, H*(hot||plant?0.0028:0.0022));
+    cx.shadowColor=cx.strokeStyle; cx.shadowBlur=hot?12:plant?8:5;
     cx.beginPath(); cx.moveTo(ax,ay); cx.lineTo(bx,by); cx.stroke();
   }
   cx.shadowBlur=0;
   cx.fillStyle="#F4F7F1";
   if(f.p[0]){ const [hx,hy]=proj(f.p[0]);
-    cx.beginPath(); cx.arc(hx,hy,Math.max(4,H*0.008),0,7); cx.fill(); }
-  cx.fillStyle="#FFC400";
-  for(const i of [31,32]){ if(!f.p[i]) continue;
+    cx.beginPath(); cx.arc(hx,hy,Math.max(3,H*0.0055),0,7); cx.fill(); }
+  for(const i of plantJoints){ if(!f.p[i]) continue;
     const [fx,fy]=proj(f.p[i]);
-    cx.beginPath(); cx.arc(fx,fy,Math.max(3,H*0.006),0,7); cx.fill(); }
+    cx.fillStyle="#3ddc74";
+    cx.beginPath(); cx.arc(fx,fy,Math.max(2.5,H*0.0045),0,7); cx.fill(); }
+  for(const i of strikeJoints){ if(!f.p[i]) continue;
+    const [fx,fy]=proj(f.p[i]);
+    cx.fillStyle="#FFC400";
+    cx.beginPath(); cx.arc(fx,fy,Math.max(3,H*0.0055),0,7); cx.fill(); }
+
+  // Stats strip + coach tip under the panel.
+  const last=S.last||{};
+  const verb=(ACTION[SPORT()]||ACTION.football).verb;
+  const res=String(last.result||"").toUpperCase()||"—";
+  const forceBit=last.force?`${Math.round(last.force)} N`:"— N";
+  const statsY=panelBot+Math.max(12,H*0.018);
+  cx.fillStyle="#FFC400";
+  cx.font=`900 ${Math.max(10,H*0.016)}px ${FCND}`;
+  cx.textAlign="center";
+  cx.fillText(`${res} · ${forceBit} · ${verb}`, px, statsY);
+  const tip=coachTipFromLast(last, f, side);
+  cx.fillStyle="#9db4c6";
+  cx.font=`700 ${Math.max(9,H*0.013)}px ${FCND}`;
+  const tipMax=R*1.9;
+  let tipDraw=tip;
+  if(cx.measureText(tipDraw).width>tipMax){
+    while(tipDraw.length>8 && cx.measureText(tipDraw+"…").width>tipMax) tipDraw=tipDraw.slice(0,-1);
+    tipDraw+="…";
+  }
+  cx.fillText(tipDraw, px, statsY+Math.max(12,H*0.018));
   cx.restore();
 }
 

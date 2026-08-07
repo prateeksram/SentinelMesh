@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 import os
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -97,6 +97,59 @@ class ReportAnalyticsTests(unittest.TestCase):
         self.assertIn("basketball", prompt.lower())
         self.assertIn("hoop", prompt.lower())
         self.assertIn("2 of 3", prompt)
+
+    def test_pose_tips_and_coach_without_pose_frame(self):
+        analytics = report_engine.analyze_match(report_engine.sample_shotmap(), 3)
+        self.assertTrue(analytics["coachTip"])
+        self.assertEqual(len(analytics["shots"]), 3)
+        for shot in analytics["shots"]:
+            self.assertTrue(shot.get("poseTip"))
+        soft = report_engine.pose_tip_for_shot(
+            {"result": "miss", "force": 90, "zone": "C"}, "football"
+        )
+        self.assertIn("soft", soft.lower())
+        save_tip = report_engine.pose_tip_for_shot(
+            {"result": "save", "force": 250, "zone": "L"}, "football"
+        )
+        self.assertIn("zone", save_tip.lower())
+
+    def test_report_renders_with_pose_frame_skeleton(self):
+        # Minimal upright T-ish MediaPipe world landmarks (metres).
+        pts = [[0.0, -0.7, 0.0]] + [[0.0, 0.0, 0.0]] * 32
+        pts[11] = [-0.2, -0.45, 0.0]
+        pts[12] = [0.2, -0.45, 0.0]
+        pts[13] = [-0.35, -0.2, 0.0]
+        pts[14] = [0.35, -0.2, 0.0]
+        pts[15] = [-0.4, 0.0, 0.0]
+        pts[16] = [0.4, 0.0, 0.0]
+        pts[23] = [-0.12, 0.0, 0.0]
+        pts[24] = [0.12, 0.0, 0.0]
+        pts[25] = [-0.14, 0.35, 0.0]
+        pts[26] = [0.14, 0.35, 0.0]
+        pts[27] = [-0.14, 0.7, 0.0]
+        pts[28] = [0.14, 0.7, 0.0]
+        pts[31] = [-0.16, 0.85, 0.05]
+        pts[32] = [0.22, 0.8, -0.1]
+        shots = report_engine.sample_shotmap()
+        shots[0] = {
+            **shots[0],
+            "poseFrame": {"t": 0, "p": pts},
+            "force": 90,
+            "result": "miss",
+        }
+        analytics = report_engine.analyze_match(shots, 3)
+        self.assertIn("soft", analytics["shots"][0]["poseTip"].lower())
+        self.assertTrue(analytics["coachTip"])
+        png = report_engine.render_report(analytics, None, {"source": "procedural"})
+        image = Image.open(io.BytesIO(png))
+        self.assertEqual(image.size, report_engine.REPORT_SIZE)
+        self.assertTrue(
+            report_engine.draw_pose_skeleton(
+                ImageDraw.Draw(image),
+                {"t": 0, "p": pts},
+                (40, 40, 160, 200),
+            )
+        )
 
 
 class ReportStoreTests(unittest.IsolatedAsyncioTestCase):

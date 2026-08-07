@@ -37,6 +37,10 @@ REPORT_TTL_SECONDS = 30 * 60
 
 _ZONE_LABEL = {"L": "LEFT CORNER", "C": "CENTER", "R": "RIGHT CORNER"}
 _ZONE_SHORT = {"L": "LEFT", "C": "CENTRE", "R": "RIGHT"}
+_POSE_BONES = (
+    (11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24),
+    (23, 24), (23, 25), (25, 27), (27, 31), (24, 26), (26, 28), (28, 32),
+)
 
 
 def load_repo_env() -> None:
@@ -239,6 +243,132 @@ def _infer_sport(shotmap: list[dict[str, Any]], sport: str | None) -> str:
     return "football"
 
 
+def pose_tip_for_shot(shot: dict[str, Any], sport: str = "football") -> str:
+    """Deterministic one-line tip from force / result / optional poseFrame."""
+    result = str(shot.get("result") or "").lower()
+    force = float(shot.get("force") or 0)
+    zone = str(shot.get("zone") or "C").upper()
+    other = "R" if zone == "L" else "L" if zone == "R" else "L"
+    verb = "KICK" if sport == "football" else "THROW"
+    if force > 0 and force < 120:
+        return (
+            "Too soft — plant harder through the ball."
+            if verb == "KICK"
+            else "Too soft — drive through the release."
+        )
+    if result in ("wide", "miss", "over"):
+        return "Tighten the aim lock before release."
+    if result in ("save", "post"):
+        return f"Vary the zone — fake {other} then switch."
+    frame = shot.get("poseFrame") if isinstance(shot.get("poseFrame"), dict) else None
+    pts = frame.get("p") if frame else None
+    foot = str(shot.get("foot") or "R").upper()
+    if isinstance(pts, list) and foot in ("L", "R"):
+        ft_i, hip_i = (31, 23) if foot == "L" else (32, 24)
+        if ft_i < len(pts) and hip_i < len(pts):
+            ft, hip = pts[ft_i], pts[hip_i]
+            if (
+                isinstance(ft, (list, tuple)) and len(ft) >= 3
+                and isinstance(hip, (list, tuple)) and len(hip) >= 3
+            ):
+                reach = math.hypot(float(ft[0]) - float(hip[0]), float(ft[2]) - float(hip[2]))
+                if reach < 0.18:
+                    return "Snap through contact — finish the swing."
+    if result in ("goal", "hit"):
+        if shot.get("height") == "L":
+            return "Nice. Mix a high finish next."
+        return "Solid. Hold the fake one beat longer."
+    return "Follow through — finish tall."
+
+
+def match_coach_tip(shots: list[dict[str, Any]], sport: str = "football") -> str:
+    """Pick one match tip: prefer weakest / actionable attempt tip."""
+    if not shots:
+        return "Stay tall, full body in frame, switch late."
+    priority = ("wide", "miss", "over", "save", "post", "hit", "goal")
+
+    def rank(shot: dict[str, Any]) -> tuple[int, float]:
+        res = str(shot.get("result") or "miss").lower()
+        try:
+            pri = priority.index(res)
+        except ValueError:
+            pri = len(priority)
+        force = float(shot.get("force") or 0)
+        return (pri, force if force > 0 else 9999.0)
+
+    weakest = min(shots, key=rank)
+    tip = str(weakest.get("poseTip") or "").strip()
+    if not tip:
+        tip = pose_tip_for_shot(weakest, sport)
+    return tip[:72]
+
+
+def draw_pose_skeleton(
+    draw: ImageDraw.ImageDraw,
+    pose_frame: dict[str, Any] | None,
+    box: tuple[int, int, int, int],
+    *,
+    color: str = "#3EC7F4",
+    accent: str = "#FFC400",
+) -> bool:
+    """Draw a compact MediaPipe wireframe into box. Returns True if drawn."""
+    if not isinstance(pose_frame, dict):
+        return False
+    pts = pose_frame.get("p")
+    if not isinstance(pts, list) or len(pts) < 33:
+        return False
+    joints: list[tuple[float, float, float] | None] = []
+    for joint in pts[:33]:
+        if isinstance(joint, (list, tuple)) and len(joint) >= 3:
+            try:
+                joints.append((float(joint[0]), float(joint[1]), float(joint[2])))
+            except (TypeError, ValueError):
+                joints.append(None)
+        else:
+            joints.append(None)
+    valid = [j for j in joints if j is not None]
+    if len(valid) < 10:
+        return False
+    xs = [j[0] for j in valid]
+    ys = [j[1] for j in valid]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    span_x = max(max_x - min_x, 0.15)
+    span_y = max(max_y - min_y, 0.25)
+    x0, y0, x1, y1 = box
+    pad = 8
+    bw, bh = max(1, x1 - x0 - pad * 2), max(1, y1 - y0 - pad * 2)
+    scale = min(bw / span_x, bh / span_y) * 0.9
+    cx = (x0 + x1) / 2
+    cy = (y0 + y1) / 2
+    mid_x = (min_x + max_x) / 2
+    mid_y = (min_y + max_y) / 2
+
+    def proj(joint: tuple[float, float, float] | None) -> tuple[float, float] | None:
+        if joint is None:
+            return None
+        return (cx + (joint[0] - mid_x) * scale, cy + (joint[1] - mid_y) * scale)
+
+    for a, b in _POSE_BONES:
+        if a >= len(joints) or b >= len(joints):
+            continue
+        pa, pb = proj(joints[a]), proj(joints[b])
+        if pa and pb:
+            draw.line((pa[0], pa[1], pb[0], pb[1]), fill=color, width=2)
+    nose = proj(joints[0]) if joints else None
+    if nose:
+        r = 3
+        draw.ellipse((nose[0] - r, nose[1] - r, nose[0] + r, nose[1] + r), fill="#F4F7F1")
+    for idx in (31, 32):
+        if idx >= len(joints):
+            continue
+        foot = proj(joints[idx])
+        if foot:
+            r = 3
+            draw.ellipse((foot[0] - r, foot[1] - r, foot[0] + r, foot[1] + r), fill=accent)
+    return True
+
+
 def analyze_match(
     shotmap: list[dict[str, Any]],
     kicks_total: int,
@@ -361,6 +491,13 @@ def analyze_match(
     )
     grade = "S" if performance_score >= 88 else "A" if performance_score >= 76 else "B" if performance_score >= 62 else "C"
 
+    for shot in shots:
+        tip = str(shot.get("poseTip") or "").strip()
+        if not tip:
+            tip = pose_tip_for_shot(shot, sport)
+        shot["poseTip"] = tip[:72]
+    coach_tip = match_coach_tip(shots, sport)
+
     return {
         "playerName": player_name.strip().upper()[:28] or "THE STRIKER",
         "sport": sport,
@@ -398,6 +535,7 @@ def analyze_match(
         "conversionTable": conversion_table,
         "proBenchmarks": [],
         "proSnapshotDate": "",
+        "coachTip": coach_tip,
         "shots": shots,
     }
 
@@ -555,21 +693,21 @@ def render_report(
         third,
         (f"{analytics['curveIndex']}%", "CURVE INDEX", f"avg launch angle {analytics['averageLaunchAngle']:+d}°"),
     ]
-    card_w, card_h = 718, 190
+    card_w, card_h = 718, 168
     for index, (value, label, detail) in enumerate(cards):
         col, row = index % 2, index // 2
         x0 = 56 + col * (card_w + 52)
-        y0 = insight_y + row * (card_h + 28)
+        y0 = insight_y + row * (card_h + 22)
         draw.rounded_rectangle((x0, y0, x0 + card_w, y0 + card_h), 22, fill="#0D2130", outline=line, width=2)
-        draw.text((x0 + 30, y0 + 28), label, font=_font(22, bold=True), fill=cyan)
-        draw.text((x0 + 30, y0 + 70), str(value)[:24], font=_font(43, black=True), fill=chalk)
-        draw.text((x0 + 30, y0 + 135), detail, font=_font(20, bold=True), fill=muted)
+        draw.text((x0 + 30, y0 + 22), label, font=_font(20, bold=True), fill=cyan)
+        draw.text((x0 + 30, y0 + 58), str(value)[:24], font=_font(40, black=True), fill=chalk)
+        draw.text((x0 + 30, y0 + 118), detail, font=_font(18, bold=True), fill=muted)
 
-    shots_y = 1834
+    shots_y = 1760
     draw.text(
         (56, shots_y),
         f"YOUR {taken}-{attempt_word} DNA",
-        font=_font(30, black=True),
+        font=_font(28, black=True),
         fill=chalk,
     )
     if sport == "FOOTBALL":
@@ -582,9 +720,11 @@ def render_report(
             f"{analytics['points']} PTS · FAV {analytics['favoriteZone']} · "
             f"{analytics['conversionRate']:.0f}% CONVERSION"
         )
-    draw.text((1544, shots_y + 5), dna_meta, font=_font(19, bold=True), fill=muted, anchor="ra")
+    draw.text((1544, shots_y + 4), dna_meta, font=_font(18, bold=True), fill=muted, anchor="ra")
     slot = max(180, (1544 - 56) // taken)
     card_w = min(420, slot - 28)
+    dna_top = shots_y + 48
+    dna_bot = dna_top + 210
     for index in range(taken):
         shot = analytics["shots"][index] if index < len(analytics["shots"]) else {}
         x0 = 56 + index * slot
@@ -595,11 +735,39 @@ def render_report(
             color = cyan
         else:
             color = "#FF6B45"
-        draw.rounded_rectangle((x0, shots_y + 62, x0 + card_w, shots_y + 170), 18, fill="#0B1D2A", outline=color, width=3)
-        draw.text((x0 + 20, shots_y + 83), f"{attempt_word} {index + 1}", font=_font(18, bold=True), fill=muted)
-        draw.text((x0 + 20, shots_y + 112), result, font=_font(28, black=True), fill=color)
+        draw.rounded_rectangle((x0, dna_top, x0 + card_w, dna_bot), 18, fill="#0B1D2A", outline=color, width=3)
+        skel_box = (x0 + 12, dna_top + 12, x0 + min(118, card_w // 3 + 20), dna_top + 118)
+        drew = draw_pose_skeleton(
+            draw,
+            shot.get("poseFrame") if isinstance(shot.get("poseFrame"), dict) else None,
+            skel_box,
+            color=cyan,
+            accent=amber,
+        )
+        text_x = skel_box[2] + 10 if drew else x0 + 18
+        draw.text((text_x, dna_top + 18), f"{attempt_word} {index + 1}", font=_font(17, bold=True), fill=muted)
+        draw.text((text_x, dna_top + 48), result, font=_font(26, black=True), fill=color)
         detail = f"{shot.get('zone') or '-'} · {int(shot.get('force') or 0)} N"
-        draw.text((x0 + card_w - 24, shots_y + 126), detail, font=_font(19, bold=True), fill=chalk, anchor="ra")
+        draw.text((x0 + card_w - 18, dna_top + 54), detail, font=_font(17, bold=True), fill=chalk, anchor="ra")
+        tip = str(shot.get("poseTip") or "").strip()
+        if tip:
+            tip_font = _font(15, bold=True)
+            max_tip_w = card_w - 28
+            original = tip
+            while len(tip) > 8 and draw.textbbox((0, 0), tip, font=tip_font)[2] > max_tip_w:
+                tip = tip[:-1]
+            if tip != original:
+                tip = tip.rstrip() + "…"
+            draw.text((x0 + 14, dna_bot - 36), tip, font=tip_font, fill=muted)
+
+    coach = str(analytics.get("coachTip") or "").strip()
+    if coach:
+        draw.text(
+            (56, dna_bot + 14),
+            f"COACH · {coach[:80]}",
+            font=_font(20, black=True),
+            fill=cyan,
+        )
 
     footer_y = 2072
     draw.line((56, footer_y, 1544, footer_y), fill=line, width=2)
@@ -674,6 +842,7 @@ class ReportStore:
                 "conversionRate": analytics["conversionRate"],
                 "maxForce": analytics["maxForce"],
                 "conversionRank": analytics["conversionRank"],
+                "coachTip": analytics.get("coachTip") or "",
             },
             "ai": ai_meta,
         }
