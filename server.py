@@ -1506,8 +1506,12 @@ async def main():
     fx = neural_fx.status()
     fx_model = fx.get("model") or "procedural"
     print(f"FX    = {fx.get('backend', '?').upper()} · {fx_model}")
-    scene_ok = await geniex_client.ping()
-    print(f"Scene = {'ready' if scene_ok else 'template (GenieX down)'}")
+    # Bring GenieX up with the host when missing (GF_GENIEX_AUTOSTART=0 to skip).
+    scene_ok = await geniex_client.ensure_serve()
+    print(
+        f"Scene = {'ready' if scene_ok else 'template (GenieX down)'}",
+        flush=True,
+    )
     try:
         await asyncio.Event().wait()
     finally:

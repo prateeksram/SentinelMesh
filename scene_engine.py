@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -14,6 +15,10 @@ SCENES = ROOT / "public" / "scenes"
 LOGS = ROOT / "logs"
 MAX_LEVEL = int(os.environ.get("GF_SCENE_MAX_LEVEL", 5))
 TIMEOUT = float(os.environ.get("GF_SCENE_TIMEOUT_S", 90))
+# Primary scene call budget (was hardcoded 900 via chat_json). Compact retry
+# runs only if the first attempt returns nothing / times out.
+MAX_TOKENS = int(os.environ.get("GF_SCENE_MAX_TOKENS", 320))
+MAX_TOKENS_RETRY = int(os.environ.get("GF_SCENE_MAX_TOKENS_RETRY", 180))
 
 TIME_OF_DAY = {
     1: "day",
@@ -211,6 +216,43 @@ def _clamp_diff(d, level):
     return out
 
 
+async def _chat_json_with_progress(
+    system,
+    user,
+    *,
+    max_tokens,
+    timeout,
+    progress_cb,
+    lo,
+    hi,
+):
+    """Run chat_json while easing genProgress from lo→hi so the TV bar moves."""
+    task = asyncio.create_task(
+        geniex_client.chat_json(
+            system, user, max_tokens=max_tokens, timeout=timeout
+        )
+    )
+    t0 = time.monotonic()
+    try:
+        while not task.done():
+            if progress_cb:
+                frac = min(0.95, (time.monotonic() - t0) / max(timeout, 1.0))
+                await progress_cb(int(lo + (hi - lo) * frac))
+            done, _ = await asyncio.wait({task}, timeout=0.35)
+            if done:
+                break
+        return task.result()
+    except asyncio.CancelledError:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+        raise
+    except Exception:
+        return None
+
+
 async def generate(ctx, level, progress_cb=None):
     SCENES.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
@@ -218,11 +260,44 @@ async def generate(ctx, level, progress_cb=None):
     if progress_cb:
         await progress_cb(5)
     user = json.dumps(ctx)
-    data = await geniex_client.chat_json(SYSTEM, user, timeout=TIMEOUT)
+
+    # Split the timeout: primary (smaller than old 900-tok call), then one
+    # compact-token retry before the built-in template.
+    primary_timeout = max(20.0, TIMEOUT * 0.60)
+    retry_timeout = max(15.0, TIMEOUT - primary_timeout)
+
+    data = await _chat_json_with_progress(
+        SYSTEM,
+        user,
+        max_tokens=MAX_TOKENS,
+        timeout=primary_timeout,
+        progress_cb=progress_cb,
+        lo=5,
+        hi=55,
+    )
+    used_tokens = MAX_TOKENS
+    if not data and MAX_TOKENS_RETRY > 0 and MAX_TOKENS_RETRY < MAX_TOKENS:
+        if progress_cb:
+            await progress_cb(58)
+        data = await _chat_json_with_progress(
+            SYSTEM,
+            user,
+            max_tokens=MAX_TOKENS_RETRY,
+            timeout=retry_timeout,
+            progress_cb=progress_cb,
+            lo=58,
+            hi=88,
+        )
+        used_tokens = MAX_TOKENS_RETRY
+
     if progress_cb:
         await progress_cb(90)
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
     if not data:
         scene = template_scene(level, ctx)
+        # Preserve real wait time (template used to hardcode total_ms=0).
+        scene["metrics"]["total_ms"] = elapsed_ms
+        scene["metrics"]["tokens_budget"] = used_tokens
     else:
         data["level"] = level
         data.setdefault("timeOfDay", TIME_OF_DAY[level])
@@ -243,7 +318,8 @@ async def generate(ctx, level, progress_cb=None):
             "metrics": {
                 "model": geniex_client.GENIEX_MODEL,
                 "source": "geniex",
-                "total_ms": int((time.perf_counter() - t0) * 1000),
+                "total_ms": elapsed_ms,
+                "tokens_budget": used_tokens,
             },
         }
     (SCENES / f"level_{level}.json").write_text(json.dumps(scene))
@@ -256,6 +332,7 @@ async def generate(ctx, level, progress_cb=None):
                     "level": level,
                     "source": scene["metrics"]["source"],
                     "total_ms": scene["metrics"].get("total_ms", 0),
+                    "tokens_budget": scene["metrics"].get("tokens_budget"),
                 }
             )
             + "\n"
