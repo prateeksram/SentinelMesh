@@ -13,6 +13,8 @@ async def phone():
             kicked = None
             async for msg in ws:
                 st = json.loads(msg.data)
+                if st.get("type") != "state":
+                    continue  # the server also sends edge_pose / telem_state frames
                 if st["phase"] in ("announce", "countdown", "shoot"):
                     await ws.send_json({"type": "aim", "zone": random.choice("LCR")})
                 if st["phase"] == "shoot" and kicked != st["kick"]:
@@ -36,6 +38,8 @@ async def tv():
             started = False
             async for msg in ws:
                 st = json.loads(msg.data)
+                if st.get("type") != "state":
+                    continue  # the server also sends telem_state frames to TVs
                 if st["phase"] == "lobby" and st["connected"]["phone"] and not started:
                     started = True
                     await ws.send_json({"type": "start"})

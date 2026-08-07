@@ -83,13 +83,16 @@ async def play_match(ws, udp, sport, impacts, seq0):
             elif st["connected"]["unoq"] and not started:
                 started = True
                 await ws.send_json({"type": "start"})
-        elif st["phase"] == "shoot" and kicked != st["kick"]:
+        elif st["phase"] == "shoot" and started and kicked != st["kick"]:
             kicked = st["kick"]
             (gx, gz) = impacts[st["kick"] - 1][0]
             seq += 1
             # distinct track ids sidestep the bridge's per-track cooldown
             udp.sendto(snap_packet(seq, st["kick"], gx, gz), UDP)
-        elif st["phase"] == "end":
+        elif st["phase"] == "end" and started:
+            # `started` guards against stale end snapshots from the previous
+            # match (the server re-broadcasts `end` whenever the post-game
+            # report card updates) that are still queued on this socket.
             return st, seq
     raise AssertionError("websocket closed before match end")
 
