@@ -1,9 +1,12 @@
+import tempfile
+import time
 import unittest
+from pathlib import Path
 
 import cv2
 import numpy as np
 
-from unoq.sentinel_pose_streamer import OpticalFlowTracker
+from unoq.sentinel_pose_streamer import OpticalFlowTracker, SystemTelemetrySampler
 
 
 class FakeCamera:
@@ -51,6 +54,36 @@ class OpticalFlowTrackerTests(unittest.TestCase):
         motion = tracker.snapshot()
         self.assertIsNotNone(motion)
         self.assertEqual(motion["left"]["samples"], 0)
+
+    def test_system_sampler_reads_real_linux_counter_shapes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            proc = root / "proc"
+            sys_root = root / "sys"
+            proc.mkdir()
+            (proc / "stat").write_text("cpu 100 0 50 850 0 0 0 0\n")
+            (proc / "meminfo").write_text(
+                "MemTotal: 1000000 kB\nMemAvailable: 250000 kB\n"
+            )
+            thermal = sys_root / "class" / "thermal" / "thermal_zone0"
+            thermal.mkdir(parents=True)
+            (thermal / "temp").write_text("55000\n")
+            kgsl = sys_root / "class" / "kgsl" / "kgsl-3d0"
+            kgsl.mkdir(parents=True)
+            (kgsl / "gpu_busy_percentage").write_text("23\n")
+
+            sampler = SystemTelemetrySampler(
+                interval_s=0.1, proc_root=proc, sys_root=sys_root
+            )
+            # 100 ticks elapsed: 70 busy and 30 idle.
+            (proc / "stat").write_text("cpu 150 0 70 880 0 0 0 0\n")
+            metrics = sampler.sample(time.monotonic() + 1.0)
+
+            self.assertAlmostEqual(70.0, metrics["cpu_pct"], places=1)
+            self.assertAlmostEqual(75.0, metrics["memory_pct"], places=1)
+            self.assertAlmostEqual(55.0, metrics["temperature_c"], places=1)
+            self.assertAlmostEqual(23.0, metrics["gpu_pct"], places=1)
+            self.assertEqual("kgsl", metrics["gpu_source"])
 
     @staticmethod
     def _frame(coordinates):

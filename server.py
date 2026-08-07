@@ -76,6 +76,38 @@ edge_pose_at = 0.0
 edge_pose_seq = -1
 edge_pose_capture_ns = -1
 
+
+def edge_health_snapshot(now=None):
+    """Latest raw UNO Q transport health, independent of WebSocket roles."""
+    now = time.monotonic() if now is None else now
+
+    def age_ms(timestamp):
+        return None if not timestamp else max(0, int((now - timestamp) * 1000))
+
+    pose_age = age_ms(edge_pose_at)
+    camera_age = age_ms(edge_frame_at)
+    source_age = age_ms(edge_source_frame_at)
+    return {
+        "pose": "live" if pose_age is not None and pose_age <= 2000 else "waiting",
+        "camera": (
+            "live" if camera_age is not None and camera_age <= int(EDGE_FRAME_STALE_S * 1000)
+            else "waiting"
+        ),
+        "sourceCamera": (
+            "live" if source_age is not None and source_age <= int(EDGE_FRAME_STALE_S * 1000)
+            else "waiting"
+        ),
+        "poseAgeMs": pose_age,
+        "cameraAgeMs": camera_age,
+        "sourceCameraAgeMs": source_age,
+        "poseSeq": edge_pose_seq,
+        "frameSeq": edge_frame_seq,
+    }
+
+
+def edge_pose_live(now=None):
+    return edge_health_snapshot(now)["pose"] == "live"
+
 # ------------------------------------------------- sports & geometry --------
 SPORTS = ("football", "darts", "basketball")
 
@@ -414,7 +446,9 @@ class Game:
             "line": self.line,
             "llm": self.desk.mode,
             "connected": {"phone": "phone" in self.sockets.values(),
-                          "unoq": "unoq" in self.sockets.values()},
+                          "unoq": (edge_pose_live() or any(
+                              role in ("unoq", "bridge") for role in self.sockets.values()
+                          ))},
             "level": self.campaign_level,
             "scene": self.scene,
             "report": self.report,
@@ -1001,7 +1035,7 @@ class Game:
         kinds = set(self.sockets.values())
         if "phone" not in kinds:
             TELEM.drop("phone")
-        if "unoq" not in kinds and "bridge" not in kinds:
+        if "unoq" not in kinds and "bridge" not in kinds and not edge_pose_live():
             TELEM.drop("unoq")
 
 
@@ -1038,6 +1072,7 @@ def normalize_edge_packet(packet):
     frame = packet.get("frame") if isinstance(packet.get("frame"), dict) else {}
     diagnostics = packet.get("diagnostics") if isinstance(packet.get("diagnostics"), dict) else {}
     raw_motion = packet.get("motion") if isinstance(packet.get("motion"), dict) else None
+    raw_telemetry = packet.get("telemetry") if isinstance(packet.get("telemetry"), dict) else None
 
     def flow_foot(name):
         if raw_motion is None or not isinstance(raw_motion.get(name), dict):
@@ -1078,7 +1113,63 @@ def normalize_edge_packet(packet):
             "left": flow_foot("left"),
             "right": flow_foot("right"),
         }
+    if raw_telemetry is not None:
+        gpu_pct = _finite(raw_telemetry.get("gpu_pct"), 0.0, 100.0)
+        gpu_source = raw_telemetry.get("gpu_source")
+        normalized["telemetry"] = {
+            "cpu_pct": _finite(raw_telemetry.get("cpu_pct"), 0.0, 100.0),
+            "process_cpu_pct": _finite(
+                raw_telemetry.get("process_cpu_pct"), 0.0, 6400.0
+            ),
+            "memory_pct": _finite(raw_telemetry.get("memory_pct"), 0.0, 100.0),
+            "memory_used_mb": _finite(
+                raw_telemetry.get("memory_used_mb"), 0.0, 1024.0 * 1024.0
+            ),
+            "temperature_c": _finite(
+                raw_telemetry.get("temperature_c"), -40.0, 150.0
+            ),
+            "gpu_pct": gpu_pct,
+            "gpu_source": (
+                gpu_source[:32]
+                if gpu_pct is not None and isinstance(gpu_source, str)
+                else None
+            ),
+        }
     return normalized
+
+
+def ingest_unoq_telemetry(packet):
+    """Map raw-pose diagnostics and optional board counters into the HUD store."""
+    diagnostics = packet.get("diagnostics") or {}
+    system = packet.get("telemetry") or {}
+    cpu_pct = system.get("cpu_pct")
+    metric = {
+        "fps": diagnostics.get("fps"),
+        "inference_ms": diagnostics.get("inference_ms"),
+        "backend": diagnostics.get("backend"),
+        "cpu_available": cpu_pct is not None,
+        "process_cpu_pct": system.get("process_cpu_pct"),
+        "memory_pct": system.get("memory_pct"),
+        "memory_used_mb": system.get("memory_used_mb"),
+        "temperature_c": system.get("temperature_c"),
+        "gpu_available": system.get("gpu_pct") is not None,
+    }
+    TELEM.ingest("unoq", "unoq", "UNO Q", {
+        "unit": "cpu",
+        "source": "pose-streamer",
+        "busy_pct": cpu_pct if cpu_pct is not None else 0.0,
+        "metric": metric,
+        "temp_c": system.get("temperature_c"),
+        "state": "MediaPipe ONNX / OpenCV DNN (CPU)",
+    })
+    if system.get("gpu_pct") is not None:
+        TELEM.ingest("unoq", "unoq", "UNO Q", {
+            "unit": "gpu",
+            "source": "board",
+            "busy_pct": system["gpu_pct"],
+            "metric": {"gpu_source": system.get("gpu_source")},
+            "state": "Adreno board utilization",
+        })
 
 
 class EdgePoseProtocol(asyncio.DatagramProtocol):
@@ -1091,6 +1182,7 @@ class EdgePoseProtocol(asyncio.DatagramProtocol):
         if packet is None:
             return
         now = time.monotonic()
+        was_live = edge_pose_live(now)
         capture_ns = packet["t_capture_ns"]
         stream_advanced = capture_ns > edge_pose_capture_ns
         restart_after_gap = edge_pose_at > 0.0 and now - edge_pose_at > 2.0
@@ -1099,7 +1191,10 @@ class EdgePoseProtocol(asyncio.DatagramProtocol):
         edge_pose_seq = packet["seq"]
         edge_pose_capture_ns = capture_ns
         edge_pose_at = now
+        ingest_unoq_telemetry(packet)
         asyncio.get_running_loop().create_task(game.broadcast_edge_pose(packet))
+        if not was_live:
+            asyncio.get_running_loop().create_task(game.broadcast())
 
 
 async def ws_handler(request):
@@ -1193,14 +1288,12 @@ async def edge_source_camera_mjpeg(request):
 
 
 async def edge_status(_request):
-    now = time.monotonic()
+    health = edge_health_snapshot()
+    unoq = TELEM.snapshot().get("devices", {}).get("unoq")
     return web.json_response({
         "server": "live",
-        "sourceCamera": "live" if edge_source_frame_at and now - edge_source_frame_at <= EDGE_FRAME_STALE_S else "waiting",
-        "camera": "live" if edge_frame_at and now - edge_frame_at <= EDGE_FRAME_STALE_S else "waiting",
-        "pose": "live" if edge_pose_at and now - edge_pose_at <= 2.0 else "waiting",
-        "frameSeq": edge_frame_seq,
-        "poseSeq": edge_pose_seq,
+        **health,
+        "telemetry": unoq,
         "ports": {"edgePoseUdp": EDGE_POSE_PORT, "snapkickUdp": 5005},
     })
 
@@ -1259,6 +1352,7 @@ async def telem_loop():
                 "state": "scene:geniex",
             })
         snap = TELEM.snapshot()
+        snap["edge"] = edge_health_snapshot()
         targets = set(DASHBOARDS)
         for ws, client in list(game.sockets.items()):
             if client == "tv":

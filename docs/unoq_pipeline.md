@@ -103,6 +103,18 @@ On the board, replace the camera argument with `--camera http://LAPTOP_IP:8080/e
 3. The full-screen UI now shows the board's camera feed (relayed JPEG preview); calibration, T-pose, aim, and practice swings all consume the board's 33-point pose. UNO Q mode calibrates its **own** kick threshold (`unoQKickMs`), separate from the phone-camera one.
 4. In UNO Q mode the telemetry card's last rows show source/flow FPS, swing state, speeds, gates, and the final rejection reason; the same line hits Logcat under tag `UnoQKick`.
 
+The TV's top-left telemetry card has an always-visible **UNO Q LINK** row. It is
+driven by freshness of the raw UDP 9999 pose stream rather than by the optional
+UNO Q/SnapKick WebSocket role, so a direct `sentinel_pose_streamer.py` session
+correctly shows `LIVE`. Select **UNO Q** in that card to see board-wide CPU,
+Adreno GPU utilization when the kernel exposes a KGSL/devfreq counter, the
+actual pose backend, pose FPS, temperature, and memory use. `N/A` is intentional
+for GPU utilization on kernels that do not export a readable counter; it is not
+reported as a fabricated 0%. The sampler reads procfs/sysfs only once per second.
+
+The same information is available as JSON at `/edge/status`, including
+`poseAgeMs`, `cameraAgeMs`, and the normalized `telemetry` device record.
+
 Tap POSE again to return to NPU. Unplugging the camera, stopping the board process, or losing UDP restores the local pipeline automatically after ~2.5 s.
 
 ## Performance notes

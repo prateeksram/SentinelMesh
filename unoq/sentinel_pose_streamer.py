@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
+import re
 import socket
 import sys
 import threading
@@ -19,6 +21,155 @@ import time
 from pathlib import Path
 from urllib import error as urllib_error
 from urllib import request as urllib_request
+
+
+class SystemTelemetrySampler:
+    """Low-rate Linux board metrics with no third-party dependency.
+
+    Reading procfs/sysfs once per second is negligible next to pose inference.
+    GPU utilization is reported only when a real KGSL/devfreq counter exists;
+    callers can distinguish an unavailable counter from a genuine 0% sample.
+    """
+
+    def __init__(
+        self,
+        interval_s: float = 1.0,
+        proc_root: str | Path = "/proc",
+        sys_root: str | Path = "/sys",
+    ):
+        self.interval_s = max(0.1, float(interval_s))
+        self.proc_root = Path(proc_root)
+        self.sys_root = Path(sys_root)
+        self._last_sample_at = 0.0
+        self._cached: dict = {}
+        self._last_cpu = self._read_cpu_times()
+        self._last_process_s = self._process_seconds()
+        self._last_process_at = time.monotonic()
+        self._last_gpu_counters = None
+
+    @staticmethod
+    def _process_seconds() -> float:
+        times = os.times()
+        return float(times.user + times.system)
+
+    @staticmethod
+    def _number(path: Path):
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore").strip()
+            match = re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)", text)
+            if match is None:
+                return None
+            value = float(match.group(0))
+            return value if math.isfinite(value) else None
+        except (OSError, ValueError, IndexError):
+            return None
+
+    def _read_cpu_times(self):
+        try:
+            fields = (self.proc_root / "stat").read_text(
+                encoding="utf-8", errors="ignore"
+            ).splitlines()[0].split()
+            if not fields or fields[0] != "cpu":
+                return None
+            values = [float(value) for value in fields[1:]]
+            if len(values) < 4:
+                return None
+            idle = values[3] + (values[4] if len(values) > 4 else 0.0)
+            return sum(values), idle
+        except (OSError, ValueError, IndexError):
+            return None
+
+    def _read_memory(self):
+        try:
+            values = {}
+            for line in (self.proc_root / "meminfo").read_text(
+                encoding="utf-8", errors="ignore"
+            ).splitlines():
+                name, _, rest = line.partition(":")
+                if not rest:
+                    continue
+                values[name] = float(rest.strip().split()[0])
+            total = values.get("MemTotal", 0.0)
+            available = values.get("MemAvailable", values.get("MemFree", 0.0))
+            if total <= 0:
+                return None, None
+            used_kib = max(0.0, total - available)
+            return 100.0 * used_kib / total, used_kib / 1024.0
+        except (OSError, ValueError, IndexError):
+            return None, None
+
+    def _read_temperature(self):
+        samples = []
+        thermal_root = self.sys_root / "class" / "thermal"
+        for path in thermal_root.glob("thermal_zone*/temp"):
+            value = self._number(path)
+            if value is None:
+                continue
+            if abs(value) > 1000.0:
+                value /= 1000.0
+            if -20.0 <= value <= 150.0:
+                samples.append(value)
+        return max(samples) if samples else None
+
+    def _read_gpu(self):
+        kgsl = self.sys_root / "class" / "kgsl" / "kgsl-3d0"
+        direct = self._number(kgsl / "gpu_busy_percentage")
+        if direct is not None:
+            return max(0.0, min(100.0, direct)), "kgsl"
+
+        # Some Qualcomm kernels expose cumulative busy/total counters instead.
+        try:
+            values = [int(value) for value in (kgsl / "gpubusy").read_text().split()[:2]]
+            if len(values) == 2:
+                current = tuple(values)
+                previous, self._last_gpu_counters = self._last_gpu_counters, current
+                if previous is not None:
+                    busy = current[0] - previous[0]
+                    total = current[1] - previous[1]
+                    if total > 0:
+                        return max(0.0, min(100.0, 100.0 * busy / total)), "kgsl"
+        except (OSError, ValueError):
+            pass
+
+        for root in (self.sys_root / "class" / "devfreq").glob("*"):
+            load = self._number(root / "load")
+            if load is not None:
+                return max(0.0, min(100.0, load)), "devfreq"
+        return None, None
+
+    def sample(self, now: float | None = None) -> dict:
+        now = time.monotonic() if now is None else float(now)
+        if self._cached and now - self._last_sample_at < self.interval_s:
+            return dict(self._cached)
+
+        current_cpu = self._read_cpu_times()
+        cpu_pct = None
+        if current_cpu is not None and self._last_cpu is not None:
+            total = current_cpu[0] - self._last_cpu[0]
+            idle = current_cpu[1] - self._last_cpu[1]
+            if total > 0:
+                cpu_pct = 100.0 * max(0.0, total - idle) / total
+        self._last_cpu = current_cpu
+
+        process_s = self._process_seconds()
+        process_wall = max(1e-6, now - self._last_process_at)
+        process_cpu_pct = 100.0 * max(0.0, process_s - self._last_process_s) / process_wall
+        self._last_process_s, self._last_process_at = process_s, now
+
+        memory_pct, memory_used_mb = self._read_memory()
+        temperature_c = self._read_temperature()
+        gpu_pct, gpu_source = self._read_gpu()
+        self._cached = {
+            "cpu_pct": None if cpu_pct is None else round(cpu_pct, 1),
+            "process_cpu_pct": round(process_cpu_pct, 1),
+            "memory_pct": None if memory_pct is None else round(memory_pct, 1),
+            "memory_used_mb": None if memory_used_mb is None else round(memory_used_mb, 1),
+            "temperature_c": None if temperature_c is None else round(temperature_c, 1),
+            "gpu_pct": None if gpu_pct is None else round(gpu_pct, 1),
+            "gpu_source": gpu_source,
+        }
+        self._last_sample_at = now
+        return dict(self._cached)
 
 
 class LatestCamera:
@@ -501,6 +652,7 @@ def main() -> int:
         recovery=args.detector_recovery_interval,
     )
     recorder = JsonlRecorder(args.record_jsonl)
+    system_telemetry = SystemTelemetrySampler()
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     camera.start()
     relay.start()
@@ -570,6 +722,7 @@ def main() -> int:
                     "detector_interval": detector_interval,
                     "flow_enabled": args.optical_flow,
                 },
+                "telemetry": system_telemetry.sample(),
             }
             payload = json.dumps(packet, separators=(",", ":")).encode("utf-8")
             udp.sendto(payload, (args.laptop_ip, args.udp_port))

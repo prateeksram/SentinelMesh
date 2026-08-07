@@ -7,7 +7,11 @@ import unittest
 import aiohttp
 from aiohttp import web
 
-from server import Desk, EdgePoseProtocol, Game, make_app, normalize_edge_packet
+import server as server_module
+from server import (
+    Desk, EdgePoseProtocol, Game, TELEM, ingest_unoq_telemetry, make_app,
+    normalize_edge_packet,
+)
 
 
 def edge_packet(seq=7):
@@ -26,6 +30,11 @@ def edge_packet(seq=7):
             },
         },
         "diagnostics": {"fps": 9.8, "inference_ms": 41.0, "backend": "uno-q-test"},
+        "telemetry": {
+            "cpu_pct": 72.5, "process_cpu_pct": 188.0,
+            "memory_pct": 43.0, "memory_used_mb": 1350.0,
+            "temperature_c": 58.0, "gpu_pct": 7.5, "gpu_source": "kgsl",
+        },
     }
 
 
@@ -51,6 +60,30 @@ class UnifiedEdgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(33, len(packet["landmarks"]))
         self.assertEqual(4, packet["motion"]["left"]["samples"])
         self.assertEqual("uno-q-test", packet["diagnostics"]["backend"])
+        self.assertEqual(72.5, packet["telemetry"]["cpu_pct"])
+        self.assertEqual(7.5, packet["telemetry"]["gpu_pct"])
+
+    def test_raw_pose_populates_unoq_hud_telemetry(self):
+        TELEM.drop("unoq")
+        try:
+            packet = normalize_edge_packet(edge_packet())
+            ingest_unoq_telemetry(packet)
+            unoq = TELEM.snapshot()["devices"]["unoq"]
+            self.assertEqual("unoq", unoq["device"])
+            self.assertEqual(72.5, unoq["units"]["cpu"]["busy_pct"])
+            self.assertEqual(7.5, unoq["units"]["gpu"]["busy_pct"])
+            self.assertEqual(9.8, unoq["units"]["cpu"]["metric"]["fps"])
+        finally:
+            TELEM.drop("unoq")
+
+    def test_raw_pose_freshness_counts_as_unoq_connection(self):
+        previous = server_module.edge_pose_at
+        try:
+            server_module.edge_pose_at = time.monotonic()
+            game = Game(Desk())
+            self.assertTrue(game.snapshot()["connected"]["unoq"])
+        finally:
+            server_module.edge_pose_at = previous
 
     async def test_edge_pose_is_sent_only_to_phone_clients(self):
         game = Game(Desk())
@@ -133,6 +166,15 @@ class UnifiedEdgeTests(unittest.IsolatedAsyncioTestCase):
                             break
                     else:
                         self.fail("phone did not receive the UNO Q edge_pose frame")
+
+                    async with session.get(f"http://127.0.0.1:{http_port}/edge/status") as status:
+                        self.assertEqual(200, status.status)
+                        health = await status.json()
+                        self.assertEqual("live", health["pose"])
+                        self.assertEqual("unoq", health["telemetry"]["device"])
+                        self.assertEqual(
+                            72.5, health["telemetry"]["units"]["cpu"]["busy_pct"]
+                        )
         finally:
             edge_transport.close()
             await runner.cleanup()

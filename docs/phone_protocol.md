@@ -209,6 +209,13 @@ The server relays every valid `sentinel.edge.pose.v1` UDP packet to connected `p
 
 One JSON datagram per inference from [`unoq/sentinel_pose_streamer.py`](../unoq/sentinel_pose_streamer.py):
 
+Packets may also include a `telemetry` object sampled at 1 Hz from Linux
+procfs/sysfs: board CPU, pose-process CPU, memory, temperature, and an optional
+real Adreno utilization counter. The host validates these scalars, maps them to
+the `unoq` telemetry device, and publishes liveness/metrics to the TV at 1 Hz.
+GPU utilization is nullable because not every UNO Q kernel exposes KGSL/devfreq
+counters to the unprivileged `arduino` user.
+
 ```json
 {
   "schema": "sentinel.edge.pose.v1",
@@ -217,7 +224,8 @@ One JSON datagram per inference from [`unoq/sentinel_pose_streamer.py`](../unoq/
   "frame": { "width": 640, "height": 480, "rotation": 0, "mirrored": true },
   "landmarks": [[0.51, 0.42, 0.0, 0.97]],
   "motion": { "t_ns": 123456789, "fps": 27.0, "left": { "vx": -0.3, "confidence": 0.9, "samples": 4 } },
-  "diagnostics": { "fps": 9.8, "inference_ms": 41.0, "backend": "uno-q-mediapipe-onnx-opencv" }
+  "diagnostics": { "fps": 9.8, "inference_ms": 41.0, "backend": "uno-q-mediapipe-onnx-opencv" },
+  "telemetry": { "cpu_pct": 72.5, "process_cpu_pct": 188.0, "memory_pct": 43.0, "temperature_c": 58.0, "gpu_pct": 7.5, "gpu_source": "kgsl" }
 }
 ```
 

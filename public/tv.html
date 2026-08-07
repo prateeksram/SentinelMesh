@@ -233,6 +233,9 @@
                           font-variant-numeric:tabular-nums}
   .telem-block .telem-row b{color:var(--chalk);font-weight:700}
   .telem-block .telem-row.hot b{color:var(--amber)}
+  #telemUnoqLink.live{color:var(--green)}
+  #telemUnoqLink.partial{color:var(--amber)}
+  #telemUnoqLink.offline{color:var(--red)}
   #soundBtn{font:inherit;color:var(--chalk);background:#22374a;border:1px solid #31506a;
             border-radius:999px;padding:7px 12px;cursor:pointer;letter-spacing:1.5px;
             justify-content:center;margin-top:4px}
@@ -371,6 +374,9 @@
           </select>
           TELEM
         </div>
+        <div class="telem-row" id="telemUnoqRow" title="Raw UNO Q UDP pose and preview health">
+          <span>UNO Q LINK</span> <b id="telemUnoqLink" class="offline">OFFLINE</b>
+        </div>
         <div class="telem-row"><span id="telemCpuLbl">CPU</span> <b id="telemCpu">—</b></div>
         <div class="telem-row"><span id="telemGpuLbl">GPU</span> <b id="telemGpu">—</b></div>
         <div class="telem-row"><span id="telemNpuLbl">NPU</span> <b id="telemNpu">—</b></div>
@@ -502,7 +508,7 @@ const HERO={img:null, kick:-1, backend:null, pending:false, ms:0};
 /* Real silicon telemetry (proto TelemetryStore → telem_state) + local TV FPS */
 const TELEM={
   work:0,frames:0,t0:performance.now(),staleMs:3000,
-  devices:{}, localFps:null,
+  devices:{}, edge:{pose:"waiting",camera:"waiting"}, localFps:null,
   selected: localStorage.gfTelemDevice||"laptop",
 };
 function setTelem(id,v,hot){
@@ -528,6 +534,26 @@ function mergeMetrics(units){
   }
   return m;
 }
+function paintUnoQLink(){
+  const edge=TELEM.edge||{};
+  const pose=edge.pose==="live";
+  const camera=edge.camera==="live";
+  const el=$("telemUnoqLink");
+  const row=$("telemUnoqRow");
+  if(!el) return;
+  el.classList.remove("live","partial","offline");
+  if(pose&&camera){ el.textContent="LIVE"; el.classList.add("live"); }
+  else if(pose){ el.textContent="POSE LIVE"; el.classList.add("live"); }
+  else if(camera){ el.textContent="CAM ONLY"; el.classList.add("partial"); }
+  else{ el.textContent="OFFLINE"; el.classList.add("offline"); }
+  if(row){
+    const poseAge=edge.poseAgeMs==null?"n/a":`${edge.poseAgeMs} ms`;
+    const cameraAge=edge.cameraAgeMs==null?"n/a":`${edge.cameraAgeMs} ms`;
+    row.title=`UNO Q raw pose: ${edge.pose||"waiting"} (${poseAge}); preview: ${edge.camera||"waiting"} (${cameraAge})`;
+  }
+  const led=$("ledU");
+  if(led) led.classList.toggle("on", pose || !!S?.connected?.unoq);
+}
 function paintTelem(){
   const sel=TELEM.selected||"laptop";
   const entry=TELEM.devices[sel]||null;
@@ -552,11 +578,19 @@ function paintTelem(){
     const be=m.backend?` · ${m.backend}`:"";
     setTelem("telemMsg", (m.asr_ms!=null||m.llm_ms!=null)?`${asr}/${llm}${be}`:"—");
   }else if(sel==="unoq"){
-    setTelemLbl("telemExtra1Lbl","POSE FPS");
-    setTelemLbl("telemExtra2Lbl","STATE");
-    setTelem("telemFps", m.fps!=null?String(m.fps):"—");
-    const st=[cpu.state,gpu.state,npu.state].filter(Boolean).join(" · ")||"—";
-    setTelem("telemMsg", st.length>28?st.slice(0,27)+"…":st);
+    const hasBoard=!!entry;
+    setTelemLbl("telemNpuLbl","ENGINE");
+    setTelemLbl("telemExtra1Lbl","POSE");
+    setTelemLbl("telemExtra2Lbl","TEMP/MEM");
+    if(m.cpu_available===false) setTelem("telemCpu", hasBoard?"N/A":"—", false);
+    if(!units.gpu) setTelem("telemGpu", hasBoard?"N/A":"—", false);
+    const backend=String(m.backend||"").toLowerCase();
+    const engine=backend.includes("qnn")?"QNN":backend?"CPU DNN":"—";
+    setTelem("telemNpu",engine,false);
+    setTelem("telemFps",m.fps!=null?`${Number(m.fps).toFixed(1)} FPS`:"—");
+    const temp=m.temperature_c!=null?`${Number(m.temperature_c).toFixed(0)}°C`:"—";
+    const mem=m.memory_pct!=null?`${Number(m.memory_pct).toFixed(0)}%`:"—";
+    setTelem("telemMsg",temp==="—"&&mem==="—"?"—":`${temp} · ${mem}`);
   }else{
     setTelemLbl("telemExtra1Lbl","TV FPS");
     setTelemLbl("telemExtra2Lbl","MSG/S");
@@ -565,6 +599,7 @@ function paintTelem(){
     setTelem("telemFps", fps!=null?String(fps):"—");
     setTelem("telemMsg", msg!=null?String(msg):"—");
   }
+  paintUnoQLink();
 }
 (function initTelemDevice(){
   const sel=$("telemDevice");
@@ -597,6 +632,7 @@ setInterval(()=>{
 },1000);
 function onTelemState(msg){
   TELEM.staleMs=msg.stale_ms||3000;
+  TELEM.edge=msg.edge||TELEM.edge;
   const devices=msg.devices||{};
   // Index by device kind (laptop / phone / unoq) for the HUD dropdown.
   const byKind={};
@@ -867,7 +903,9 @@ function onState(st){
 
   $("ledP").classList.toggle("on",!!st.connected?.phone);
   const ledU=$("ledU");
-  if(ledU) ledU.classList.toggle("on",!!(st.connected?.unoq||st.connected?.bridge));
+  if(ledU) ledU.classList.toggle("on",!!(
+    st.connected?.unoq||st.connected?.bridge||TELEM.edge?.pose==="live"
+  ));
   const sportsRail=$("sportsRail");
   if(sportsRail) sportsRail.classList.toggle("hide",st.phase!=="lobby");
   document.querySelectorAll("#sports button").forEach(b=>
