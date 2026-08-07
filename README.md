@@ -1,6 +1,6 @@
 # QPlay (SentinelMesh)
 
-> Body-controlled football, darts, and basketball across a Snapdragon Copilot+ PC, Galaxy phone, Arduino UNO Q, and Qualcomm Cloud AI100.
+> Gesture-controlled football, darts, and basketball across a Snapdragon Copilot+ PC, Galaxy phone, Arduino UNO Q, and Qualcomm Cloud AI100.
 
 [![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Host-Windows%2011-0078D4?logo=windows11&logoColor=white)](#requirements)
