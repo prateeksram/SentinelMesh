@@ -2,6 +2,10 @@
 # Python 3.13 recommended (matches the rest of the toolchain): py -3.13 -m pip install -r requirements.txt
 aiohttp>=3.9
 
+# Post-match AI100 scorecard / QR panel (served by root server.py)
+pillow>=10.0
+qrcode[pil]>=7.4
+
 # Optional — Neural FX NPU upgrade for the TV hero plates (see NEURAL_FX.md):
 # onnxruntime
 

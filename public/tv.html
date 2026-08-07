@@ -886,6 +886,7 @@ function onState(st){
     st.llm==="geniex"?"GENIEX DESK":
     st.llm==="cloud"?"CLAUDE DESK":st.llm==="local"?"LOCAL AI DESK":"TEMPLATE DESK";
   if(st.line) $("line").textContent=st.line;
+  updateReportPanel(st);
 
   const big=$("big"), sub=$("sub"), btn=$("startBtn"), abort=$("abortBtn");
   const report=$("reportLine"), genWrap=$("genBarWrap"), genBar=$("genBar"), genMeta=$("genMeta");
@@ -1847,13 +1848,29 @@ function drawFlightGuide(){
   cx.stroke();
   cx.restore();
 }
+/* Classic truncated-icosahedron panels (12 pentagon centres). */
+const BALL_PENTS=(()=>{
+  const t=(1+Math.sqrt(5))/2;
+  return [
+    [0,1,t],[0,-1,t],[0,1,-t],[0,-1,-t],
+    [1,t,0],[-1,t,0],[1,-t,0],[-1,-t,0],
+    [t,0,1],[t,0,-1],[-t,0,1],[-t,0,-1],
+  ].map(v=>{const L=Math.hypot(v[0],v[1],v[2]);return[v[0]/L,v[1]/L,v[2]/L];});
+})();
+function _ballNorm(v){const L=Math.hypot(v[0],v[1],v[2])||1;return[v[0]/L,v[1]/L,v[2]/L];}
+function _ballCross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
+function _ballRot(p,yaw,pitch){
+  const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
+  const x1=p[0]*cy+p[2]*sy, z1=-p[0]*sy+p[2]*cy;
+  return [x1, p[1]*cp-z1*sp, p[1]*sp+z1*cp];
+}
 function drawBall(){
   if(B.mode==="gone") return;
   const spd=SPORT()==="darts", spb=SPORT()==="basketball";
   // Hide only while idle — once resolve starts we fly immediately (no hidden windup).
   if((spd||spb)&&(B.mode==="rest"||B.mode==="rollin")) return;
   const s=sc(B.d), x=W/2+B.x*s, y=gy(B.d)-B.y*s,
-        r=Math.max(spd?3:4,(spd?0.05:spb?0.125:0.11)*s);
+        r=Math.max(spd?3:4,(spd?0.05:spb?0.125:0.115)*s);
   const I=vfxTier(B.force||VFX.force);
   const drive=B.strike!=="chip";
   // Connected streak — laser drive vs soft chip loft.
@@ -1874,32 +1891,101 @@ function drawBall(){
     cx.restore();
   }
   for(let i=0;i<B.trail.length;i++){                     // motion blur
-    const p=B.trail[i], a=(i+1)/B.trail.length*0.38;
+    const p=B.trail[i], a=(i+1)/B.trail.length*(spd||spb?0.38:0.28);
     cx.fillStyle=`rgba(244,247,241,${a})`;
     cx.beginPath(); cx.arc(p.x,p.y,p.r*(0.45+0.5*(i+1)/B.trail.length),0,7); cx.fill();
   }
-  cx.fillStyle=`rgba(4,12,6,${clamp(0.34-B.y*0.16,0.05,0.34)})`;   // shadow
-  cx.beginPath(); cx.ellipse(x,gy(B.d),r*1.05,r*0.3,0,0,7); cx.fill();
-  const g=cx.createRadialGradient(x-r*0.35,y-r*0.4,r*0.15,x,y,r);
-  if(spd){       g.addColorStop(0,"#ff8a7a"); g.addColorStop(0.7,"#e04030"); g.addColorStop(1,"#8f1c12"); }
-  else if(spb){  g.addColorStop(0,"#ffb066"); g.addColorStop(0.7,"#e07828"); g.addColorStop(1,"#9c4a12"); }
-  else{          g.addColorStop(0,"#ffffff"); g.addColorStop(0.75,"#e8eef0"); g.addColorStop(1,"#b9c6cc"); }
-  cx.fillStyle=g; cx.beginPath(); cx.arc(x,y,r,0,7); cx.fill();
-  cx.strokeStyle="rgba(20,40,50,.4)"; cx.lineWidth=Math.max(1,r*0.08); cx.stroke();
-  if(spd){                                                // dart flights
+  cx.fillStyle=`rgba(4,12,6,${clamp(0.38-B.y*0.18,0.06,0.38)})`;   // shadow
+  cx.beginPath(); cx.ellipse(x,gy(B.d),r*1.15,r*0.32,0,0,7); cx.fill();
+
+  if(spd){                                                // dart body + flights
+    const g=cx.createRadialGradient(x-r*0.35,y-r*0.4,r*0.15,x,y,r);
+    g.addColorStop(0,"#ff8a7a"); g.addColorStop(0.7,"#e04030"); g.addColorStop(1,"#8f1c12");
+    cx.fillStyle=g; cx.beginPath(); cx.arc(x,y,r,0,7); cx.fill();
+    cx.strokeStyle="rgba(20,40,50,.4)"; cx.lineWidth=Math.max(1,r*0.08); cx.stroke();
     cx.strokeStyle="rgba(244,247,241,.85)"; cx.lineWidth=Math.max(1.5,r*0.3);
     cx.beginPath(); cx.moveTo(x,y); cx.lineTo(x-r*1.9,y+r*1.4); cx.stroke();
-  }else if(spb){                                          // basketball seams
+    return;
+  }
+  if(spb){                                                // basketball + seams
+    const g=cx.createRadialGradient(x-r*0.35,y-r*0.4,r*0.15,x,y,r);
+    g.addColorStop(0,"#ffb066"); g.addColorStop(0.7,"#e07828"); g.addColorStop(1,"#9c4a12");
+    cx.fillStyle=g; cx.beginPath(); cx.arc(x,y,r,0,7); cx.fill();
     cx.strokeStyle="rgba(60,25,5,.55)"; cx.lineWidth=Math.max(1,r*0.07);
     cx.beginPath(); cx.moveTo(x-r,y); cx.lineTo(x+r,y); cx.moveTo(x,y-r); cx.lineTo(x,y+r); cx.stroke();
-  }else{
-    cx.fillStyle="#25353d";
-    for(let k=0;k<5;k++){                                 // rolling panel dots
-      const a=B.rot+k*Math.PI*2/5;
-      cx.beginPath(); cx.arc(x+Math.cos(a)*r*0.55,y+Math.sin(a)*r*0.52,r*0.17,0,7); cx.fill();
-    }
-    cx.beginPath(); cx.arc(x+Math.cos(B.rot*1.6)*r*0.15,y+Math.sin(B.rot*1.6)*r*0.15,r*0.19,0,7); cx.fill();
+    return;
   }
+
+  // Football — white leather + rotating blue pentagons (from laptop/tv.html)
+  cx.save();
+  cx.beginPath(); cx.arc(x,y,r,0,7); cx.clip();
+  const body=cx.createRadialGradient(x-r*0.32,y-r*0.38,r*0.08,x,y,r*1.05);
+  body.addColorStop(0,"#ffffff");
+  body.addColorStop(0.45,"#f2f4f6");
+  body.addColorStop(0.82,"#d5dde2");
+  body.addColorStop(1,"#9aa8b0");
+  cx.fillStyle=body;
+  cx.fillRect(x-r-1,y-r-1,r*2+2,r*2+2);
+
+  const yaw=B.rot, pitch=B.rot*0.62+0.35;
+  const ang=0.58;
+  const sa=Math.sin(ang), ca=Math.cos(ang);
+  const blueFill=(z)=>`rgb(${Math.round(22+38*z)},${Math.round(88+55*z)},${Math.round(168+40*z)})`;
+  for(let i=0;i<BALL_PENTS.length;i++){
+    const c=_ballRot(BALL_PENTS[i],yaw,pitch);
+    if(c[2]<0.18) continue;
+    let a=Math.abs(c[1])<0.9?[0,1,0]:[1,0,0];
+    const u=_ballNorm(_ballCross(a,c));
+    const v=_ballCross(c,u);
+    cx.beginPath();
+    for(let k=0;k<5;k++){
+      const th=k*Math.PI*2/5 - Math.PI/2;
+      const q=_ballNorm([
+        c[0]*ca+(u[0]*Math.cos(th)+v[0]*Math.sin(th))*sa,
+        c[1]*ca+(u[1]*Math.cos(th)+v[1]*Math.sin(th))*sa,
+        c[2]*ca+(u[2]*Math.cos(th)+v[2]*Math.sin(th))*sa,
+      ]);
+      const px=x+q[0]*r, py=y-q[1]*r;
+      k?cx.lineTo(px,py):cx.moveTo(px,py);
+    }
+    cx.closePath();
+    cx.fillStyle=blueFill(c[2]);
+    cx.fill();
+    cx.strokeStyle=`rgba(255,255,255,${0.75+0.2*c[2]})`;
+    cx.lineWidth=Math.max(1.1,r*0.055);
+    cx.stroke();
+    cx.strokeStyle=`rgba(30,90,180,${0.35+0.25*c[2]})`;
+    cx.lineWidth=Math.max(0.5,r*0.022);
+    cx.stroke();
+  }
+
+  cx.strokeStyle="rgba(255,255,255,.55)";
+  cx.lineWidth=Math.max(0.6,r*0.028);
+  cx.beginPath(); cx.arc(x,y,r*0.97,0,7); cx.stroke();
+  cx.strokeStyle="rgba(37,99,235,.35)";
+  cx.lineWidth=Math.max(0.5,r*0.018);
+  cx.beginPath(); cx.arc(x,y,r*0.94,0,7); cx.stroke();
+
+  const hi=cx.createRadialGradient(x-r*0.28,y-r*0.34,0,x-r*0.18,y-r*0.22,r*0.55);
+  hi.addColorStop(0,"rgba(255,255,255,.7)");
+  hi.addColorStop(0.35,"rgba(255,255,255,.22)");
+  hi.addColorStop(1,"rgba(255,255,255,0)");
+  cx.fillStyle=hi;
+  cx.beginPath(); cx.arc(x,y,r,0,7); cx.fill();
+
+  const rim=cx.createRadialGradient(x,y,r*0.72,x,y,r);
+  rim.addColorStop(0,"rgba(0,0,0,0)");
+  rim.addColorStop(1,"rgba(10,18,24,.28)");
+  cx.fillStyle=rim;
+  cx.beginPath(); cx.arc(x,y,r,0,7); cx.fill();
+  cx.restore();
+
+  cx.strokeStyle="rgba(37,99,235,.75)";
+  cx.lineWidth=Math.max(1.2,r*0.07);
+  cx.beginPath(); cx.arc(x,y,r,0,7); cx.stroke();
+  cx.strokeStyle="rgba(255,255,255,.45)";
+  cx.lineWidth=Math.max(0.6,r*0.03);
+  cx.beginPath(); cx.arc(x,y,r*0.92,0,7); cx.stroke();
 }
 
 /* ============================== goal + net ============================== */

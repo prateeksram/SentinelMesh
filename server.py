@@ -37,6 +37,8 @@ import geniex_client
 import neural_fx
 import scene_engine
 import telemetry_store
+from ai100 import report_engine
+from ai100.web import ReportWeb
 
 ROOT = Path(__file__).parent
 PUBLIC = ROOT / "public"
@@ -355,6 +357,8 @@ class Game:
         self.report = ""
         self.gen_progress = 0
         self.scene_metrics = None
+        self.report_card = None
+        self.report_task: asyncio.Task | None = None
         self._reset()
 
     # ------------------------------------------------------------ state ----
@@ -368,6 +372,7 @@ class Game:
         self.aim = "C"                          # live aim from the hand
         self.aim_trail = []                     # (monotonic t, zone) during a kick
         self.replay = None                      # bullet-time skeleton for the current kick
+        self.report_card = None
         self.last = None
         self.line = "Waiting for the striker…"
         self.timer_end = 0.0
@@ -416,6 +421,7 @@ class Game:
             "genProgress": self.gen_progress,
             "sceneMetrics": self.scene_metrics,
             "ringScale": round(self.ring_scale, 3),
+            "postGameReport": self.report_card,
         }
 
     async def broadcast(self):
@@ -787,10 +793,49 @@ class Game:
         self.scene_metrics = scene.get("metrics")
         self.campaign_level = level
         self.line = scene["copy"].get("lobbyLine") or self.line
-        # 5) end — desk verdict can upgrade the line now that scene gen is done
+        # 5) end — queue AI100 scorecard, then desk verdict can upgrade the line
+        self.queue_report(self.shotmap, KICKS, generation=gen)
         self.phase = "end"
         await self.broadcast()
         self.ask_desk("end", self.ctx(), {"end"})
+
+    def queue_report(
+        self,
+        shots,
+        kicks_total,
+        *,
+        generation=None,
+        player_name="THE STRIKER",
+        require_end=True,
+    ):
+        """Start report creation without holding up the full-time screen."""
+        if self.report_task and not self.report_task.done():
+            self.report_task.cancel()
+        generation = self.match_gen if generation is None else generation
+        self.report_card = {
+            "status": "generating",
+            "startedAt": int(time.time()),
+            "message": "AI100 is designing your scouting report",
+        }
+
+        async def run():
+            try:
+                card = await report_store.create(list(shots), int(kicks_total), player_name)
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                card = {
+                    "status": "error",
+                    "message": f"Report generation failed: {str(exc)[:140]}",
+                }
+            if not self._alive(generation):
+                return
+            if require_end and self.phase != "end":
+                return
+            self.report_card = card
+            await self.broadcast()
+
+        self.report_task = asyncio.get_event_loop().create_task(run())
 
     # ------------------------------------------------------------ inbound --
     async def on_message(self, ws, msg):
@@ -908,8 +953,11 @@ class Game:
                 self.task = asyncio.get_event_loop().create_task(self.run_match())
         elif t == "again":
             if self.phase == "end":
+                self.match_gen += 1
                 if self.task:
                     self.task.cancel()
+                if self.report_task and not self.report_task.done():
+                    self.report_task.cancel()
                 self.desk.recent.clear()
                 self._reset_match()          # keep campaign_level, scene, k_* knobs
                 await self.broadcast()
@@ -921,6 +969,8 @@ class Game:
                 self.match_gen += 1
                 if self.task and not self.task.done():
                     self.task.cancel()
+                if self.report_task and not self.report_task.done():
+                    self.report_task.cancel()
                 # Unblock shoot-phase wait so the cancelled task can exit.
                 self.kick_evt.set()
                 self.desk.recent.clear()
@@ -939,7 +989,9 @@ class Game:
 
 
 # ================================================================ HTTP ======
+report_store = report_engine.ReportStore()
 game = Game(Desk())
+report_web = ReportWeb(game, report_store, KICKS)
 TELEM = telemetry_store.TelemetryStore()
 DASHBOARDS: set = set()
 FX_STATS = {"count": 0, "last_ms": 0, "backend": None, "pending": 0}
@@ -1215,6 +1267,10 @@ async def hw_status(_request):
         "fx": neural_fx.status(),
         "geniex_url": geniex_client.GENIEX_URL,
         "model": geniex_client.GENIEX_MODEL,
+        "ai100_report": {
+            "configured": report_store.artwork.settings.configured,
+            "model": report_store.artwork.settings.model,
+        },
     })
 
 
@@ -1231,6 +1287,7 @@ def make_app():
     app.router.add_post("/fx/hero", fx_hero)
     app.router.add_get("/scene/status", scene_status)
     app.router.add_get("/hw/status", hw_status)
+    report_web.register(app)
     app.router.add_get("/", lambda r: web.HTTPFound("/tv.html"))
     app.router.add_static("/", PUBLIC, show_index=True)
     return app
