@@ -198,9 +198,14 @@ class ForcePoseEngine(
                     val disp = hypot(sm.x - track.startX, sm.y - track.startY)
                     val restingY = median(track.restY) ?: sm.y
                     val lifted = restingY - sm.y > 0.04f // metres; y shrinks upward
-                    val forward = abs(v1.first) > 1.2f * abs(v1.second)
+                    // Real kicks lift or travel; pure lateral weight-shift used to
+                    // count as "forward" and auto-fire while the player stood still.
+                    val hasVertical = abs(v1.second) > 0.9f || lifted
+                    val pathOk = lifted ||
+                        disp >= 0.18f ||
+                        (hasVertical && disp >= 0.10f)
                     // Foot-only path gate — wrists never participate.
-                    if (!(lifted || forward || disp >= 0.18f)) {
+                    if (!pathOk) {
                         lastReject = "short"
                     } else {
                         lastReject = null

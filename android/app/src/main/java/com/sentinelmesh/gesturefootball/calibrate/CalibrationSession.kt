@@ -87,6 +87,7 @@ class CalibrationSession(
     private val swingFeet = ArrayList<String>(PRACTICE_SWINGS)
     private var lastKickReject: String? = null
     private var thumbsHoldMs = 0L
+    private var thumbsMissMs = 0L
 
     fun ui(): Ui = when (step) {
         Step.BIOMETRICS -> Ui(
@@ -102,7 +103,7 @@ class CalibrationSession(
             needMs = TPOSE_HOLD_MS,
             readyHint = "Stand still, arms out like a T. Hold ${secs(TPOSE_HOLD_MS)}s",
             holdingTitle = "HOLD T-POSE",
-            confirmAsk = "Show a thumbs up when ready for the T pose. Or tap I'm Ready.",
+            confirmAsk = "Thumbs up or raise a hand when ready for the T pose. Or tap I'm Ready.",
             readyVoice = "Got you. Arms straight out like a T, and hold still.",
         )
         Step.AIM_L -> gatedHoldUi(
@@ -110,7 +111,7 @@ class CalibrationSession(
             needMs = AIM_HOLD_MS,
             readyHint = "Raise your hand ABOVE your shoulder to YOUR left",
             holdingTitle = "AIM LEFT",
-            confirmAsk = "Show a thumbs up when ready to aim left. Or tap I'm Ready.",
+            confirmAsk = "Thumbs up or raise a hand when ready to aim left. Or tap I'm Ready.",
             readyVoice = "Point your hand to your left corner, above your shoulder, and hold.",
         )
         Step.AIM_C -> gatedHoldUi(
@@ -118,7 +119,7 @@ class CalibrationSession(
             needMs = AIM_HOLD_MS,
             readyHint = "Raise your hand ABOVE your shoulder to the centre",
             holdingTitle = "AIM CENTRE",
-            confirmAsk = "Show a thumbs up when ready for centre. Or tap I'm Ready.",
+            confirmAsk = "Thumbs up or raise a hand when ready for centre. Or tap I'm Ready.",
             readyVoice = "Left locked. Move your hand to the centre, above your shoulder, and hold.",
         )
         Step.AIM_R -> gatedHoldUi(
@@ -126,7 +127,7 @@ class CalibrationSession(
             needMs = AIM_HOLD_MS,
             readyHint = "Raise your hand ABOVE your shoulder to YOUR right",
             holdingTitle = "AIM RIGHT",
-            confirmAsk = "Show a thumbs up when ready to aim right. Or tap I'm Ready.",
+            confirmAsk = "Thumbs up or raise a hand when ready to aim right. Or tap I'm Ready.",
             readyVoice = "Centre locked. Now your right corner, above your shoulder, and hold.",
         )
         Step.PRACTICE -> practiceUi()
@@ -160,12 +161,12 @@ class CalibrationSession(
                 return Ui(
                     Step.PRACTICE,
                     "PRACTICE THROW",
-                    "Show a thumbs up when ready for throw ${n + 1} of $PRACTICE_SWINGS. Or tap I'm Ready.",
+                    "Thumbs up or raise a hand when ready for throw ${n + 1} of $PRACTICE_SWINGS. Or tap I'm Ready.",
                     progress = n / PRACTICE_SWINGS.toFloat(),
                     showBiometrics = false,
                     waitingConfirm = true,
                     swingIndex = n,
-                    voice = "Show a thumbs up when ready, then throw $PRACTICE_SWINGS times toward $target.",
+                    voice = "Show you're ready, then throw $PRACTICE_SWINGS times toward $target.",
                     usesHandThrow = true,
                 )
             }
@@ -191,12 +192,12 @@ class CalibrationSession(
             return Ui(
                 Step.PRACTICE,
                 "PRACTICE SWING",
-                "Show a thumbs up when ready for swing ${n + 1} of $PRACTICE_SWINGS. Or tap I'm Ready.",
+                "Thumbs up or raise a hand when ready for swing ${n + 1} of $PRACTICE_SWINGS. Or tap I'm Ready.",
                 progress = n / PRACTICE_SWINGS.toFloat(),
                 showBiometrics = false,
                 waitingConfirm = true,
                 swingIndex = n,
-                voice = "Show a thumbs up when ready, then swing $PRACTICE_SWINGS times with your leg.",
+                voice = "Show you're ready, then swing $PRACTICE_SWINGS times with your leg.",
                 usesHandThrow = false,
             )
         }
@@ -230,7 +231,7 @@ class CalibrationSession(
         if (waitingConfirm) {
             return Ui(
                 step,
-                "THUMBS UP",
+                "READY?",
                 confirmAsk,
                 progress = (thumbsHoldMs / THUMBS_HOLD_MS.toFloat()).coerceIn(0f, 1f),
                 showBiometrics = false,
@@ -296,6 +297,7 @@ class CalibrationSession(
         lastConfirmAskAt = 0L
         holdMs = 0
         thumbsHoldMs = 0
+        thumbsMissMs = 0
         lastTs = 0
         lastGestureOk = false
         lastProblem = null
@@ -356,16 +358,22 @@ class CalibrationSession(
         if (kickReject != null) lastKickReject = kickReject
 
         if (waitingConfirm) {
-            val dt = if (lastTs == 0L) 0L else (nowMs - lastTs).coerceIn(0L, 80L)
+            val dt = if (lastTs == 0L) 33L else (nowMs - lastTs).coerceIn(0L, 80L)
             lastTs = nowMs
-            if (PoseAnalyzer.isThumbsUp(landmarks)) {
+            if (PoseAnalyzer.isReadyHand(landmarks)) {
+                thumbsMissMs = 0
                 thumbsHoldMs += dt
                 if (thumbsHoldMs >= THUMBS_HOLD_MS) {
                     confirmReady()
                     return true
                 }
-            } else {
-                thumbsHoldMs = 0
+            } else if (thumbsHoldMs > 0L) {
+                // Hand tips flicker at phone distance — don't hard-reset on one miss.
+                thumbsMissMs += dt
+                if (thumbsMissMs > 280L) {
+                    thumbsHoldMs = 0
+                    thumbsMissMs = 0
+                }
             }
             // Soft re-prompt every ~12s of silence (MainActivity speaks on voice change).
             if (nowMs - lastConfirmAskAt > 12_000L) lastConfirmAskAt = nowMs
@@ -549,12 +557,14 @@ class CalibrationSession(
         waitingConfirm = next != Step.DONE && next != Step.BIOMETRICS
         lastConfirmAskAt = System.currentTimeMillis()
         thumbsHoldMs = 0
+        thumbsMissMs = 0
     }
 
     private fun advance(next: Step) {
         step = next
         holdMs = 0
         thumbsHoldMs = 0
+        thumbsMissMs = 0
         lastTs = 0
         lastGestureOk = false
         lastProblem = null

@@ -61,12 +61,20 @@ class EdgeKickEngineTest {
             peakVxNorm = -0.10f,
             peakVyNorm = -0.05f,
         )
+        // Sparse poses still need real foot travel; flow only fills speed gaps.
+        val feet = listOf(
+            0.50f to 0.90f,
+            0.47f to 0.86f,
+            0.42f to 0.78f,
+            0.36f to 0.70f,
+            0.33f to 0.66f,
+        )
         val flowFrames = listOf(null, strong, strong, quiet, quiet)
 
         var kick = flowFrames.mapIndexedNotNull { index, flow ->
             engine.update(
                 nowMs = 2_000L + index * 100L,
-                landmarks = landmarks(0.50f, 0.90f),
+                landmarks = landmarks(feet[index].first, feet[index].second),
                 visibility = visibility,
                 frameWidth = 640,
                 frameHeight = 480,
@@ -87,6 +95,93 @@ class EdgeKickEngineTest {
         assertNotNull("high-rate flow should recover a kick peak between poses", kick)
         assertEquals("L", kick?.foot)
         assertNotNull("edge kicks expose the shared kinematic state", kick?.kinematics)
+    }
+
+    @Test
+    fun flowAloneWithoutFootTravelDoesNotFire() {
+        val engine = EdgeKickEngine(bodyKg = 75f, kickMs = 1.5f, torsoM = 0.50f)
+        engine.setKickThreshold(1.5f)
+        val visibility = FloatArray(33) { 0.95f }
+        val strong = EdgeKickEngine.FlowFoot(
+            vxNorm = -0.75f,
+            vyNorm = -0.45f,
+            peakVxNorm = -1.0f,
+            peakVyNorm = -0.55f,
+            dxNorm = -0.20f,
+            dyNorm = -0.12f,
+            confidence = 0.95f,
+            samples = 4,
+        )
+
+        var kickFound = false
+        repeat(6) { index ->
+            val result = engine.update(
+                nowMs = 4_000L + index * 100L,
+                landmarks = landmarks(0.50f, 0.90f),
+                visibility = visibility,
+                frameWidth = 640,
+                frameHeight = 480,
+                zone = "C",
+                canKick = true,
+                gateReject = null,
+                aimHandY = null,
+                flow = EdgeKickEngine.FlowMotion(
+                    timestampNs = (4_000L + index * 100L) * 1_000_000L,
+                    fps = 30f,
+                    left = strong,
+                ),
+            )
+            kickFound = kickFound || result.kick != null
+        }
+        assertTrue("standing foot + flow-only must not invent a kick", !kickFound)
+    }
+
+    @Test
+    fun gatedSwingIsDiscardedAndDoesNotFireWhenShootUnlocks() {
+        val engine = EdgeKickEngine(bodyKg = 75f, kickMs = 1.5f, torsoM = 0.50f)
+        engine.setKickThreshold(1.5f)
+        val visibility = FloatArray(33) { 0.95f }
+        val positions = listOf(
+            0.50f to 0.90f,
+            0.48f to 0.87f,
+            0.44f to 0.78f,
+            0.34f to 0.66f,
+            0.31f to 0.62f,
+        )
+
+        positions.forEachIndexed { index, foot ->
+            val gated = engine.update(
+                nowMs = 3_000L + index * 100L,
+                landmarks = landmarks(foot.first, foot.second),
+                visibility = visibility,
+                frameWidth = 640,
+                frameHeight = 480,
+                zone = "C",
+                canKick = false,
+                gateReject = "not in shoot",
+                aimHandY = null,
+                flow = null,
+            )
+            assertNull(gated.kick)
+        }
+
+        // Standing still after unlock — previously sticky FOLLOW_THROUGH would fire.
+        val afterUnlock = engine.update(
+            nowMs = 3_000L + positions.size * 100L,
+            landmarks = landmarks(0.31f, 0.62f),
+            visibility = visibility,
+            frameWidth = 640,
+            frameHeight = 480,
+            zone = "C",
+            canKick = true,
+            gateReject = null,
+            aimHandY = null,
+            flow = null,
+        )
+        assertNull(
+            "armed gated swing must not fire when shoot unlocks",
+            afterUnlock.kick,
+        )
     }
 
     @Test

@@ -9,6 +9,7 @@
     <string name="rec_btn">REC</string>
     <string name="calib_hint">Private biomechanical profile — never uploaded.</string>
     <string name="calib_next">NEXT</string>
+    <string name="lobby_ready">I\'M READY</string>
     <string name="calib_skip">SKIP AIM</string>
     <string name="calib_start_over">START OVER</string>
     <string name="calib_done">PLAY</string>

@@ -54,6 +54,8 @@ class PoseAnalyzer(
     companion object {
         const val L_SHO = 11
         const val R_SHO = 12
+        const val L_ELB = 13
+        const val R_ELB = 14
         const val L_WRI = 15
         const val R_WRI = 16
         const val L_PINKY = 17
@@ -78,21 +80,85 @@ class PoseAnalyzer(
         const val BODY_OK_FRAMES = 8
 
         /**
-         * Coarse thumbs-up from Pose landmarks (thumb tip above wrist and
-         * clearly above the index tip). Either hand counts.
+         * Lobby / calib "I'm ready" pose. Prefers thumbs-up; falls back to a
+         * raised hand because distant hand digits are often collapsed by pose.
+         */
+        fun isReadyHand(landmarks: List<FloatArray>?, vis: ((Int) -> Float)? = null): Boolean =
+            isThumbsUp(landmarks, vis) || isHandRaised(landmarks, vis)
+
+        /**
+         * Coarse thumbs-up from Pose landmarks. Either hand counts.
+         * Thresholds are relative to forearm/shoulder size (phone at 2–3 m).
          */
         fun isThumbsUp(landmarks: List<FloatArray>?, vis: ((Int) -> Float)? = null): Boolean {
             if (landmarks == null || landmarks.size < 23) return false
-            fun ok(i: Int): Boolean = vis == null || vis(i) > 0.35f
-            fun hand(thumb: Int, index: Int, wrist: Int): Boolean {
-                if (!ok(thumb) || !ok(index) || !ok(wrist)) return false
-                val ty = landmarks[thumb][1]
-                val iy = landmarks[index][1]
-                val wy = landmarks[wrist][1]
-                // Image Y grows downward — thumb tip should be above wrist & index.
-                return ty < wy - 0.04f && ty < iy - 0.025f
+            fun ok(i: Int): Boolean = i < landmarks.size && (vis == null || vis(i) > 0.20f)
+            fun dist(a: Int, b: Int): Float {
+                val dx = landmarks[a][0] - landmarks[b][0]
+                val dy = landmarks[a][1] - landmarks[b][1]
+                return hypot(dx, dy)
             }
-            return hand(L_THUMB, L_INDEX, L_WRI) || hand(R_THUMB, R_INDEX, R_WRI)
+            fun hand(thumb: Int, index: Int, pinky: Int, wrist: Int, elbow: Int): Boolean {
+                if (!ok(thumb) || !ok(wrist)) return false
+                val ty = landmarks[thumb][1]
+                val tx = landmarks[thumb][0]
+                val wy = landmarks[wrist][1]
+                val wx = landmarks[wrist][0]
+                val iy = if (ok(index)) landmarks[index][1] else wy
+                val py = if (ok(pinky)) landmarks[pinky][1] else iy
+
+                val forearm = if (ok(elbow)) dist(wrist, elbow) else 0f
+                val digitSpan = maxOf(dist(wrist, thumb), if (ok(index)) dist(wrist, index) else 0f)
+                val shoulder = if (landmarks.size > R_SHO) dist(L_SHO, R_SHO) else 0f
+                val scale = when {
+                    forearm >= 0.015f -> forearm
+                    shoulder >= 0.04f -> shoulder * 0.40f
+                    digitSpan >= 0.01f -> digitSpan * 2.5f
+                    else -> 0.035f
+                }
+
+                // Digits often collapse into the wrist at distance — bail to raised-hand.
+                if (digitSpan < scale * 0.10f) return false
+
+                // Image Y grows downward — thumb tip above wrist (& fingers when visible).
+                val aboveWrist = ty < wy - scale * 0.12f
+                val aboveFingers = ty <= iy - scale * 0.03f && ty <= py + scale * 0.02f
+                val rise = wy - ty
+                val lateral = kotlin.math.abs(tx - wx)
+                val upright = rise > lateral * 0.35f
+                return aboveWrist && aboveFingers && upright
+            }
+            return hand(L_THUMB, L_INDEX, L_PINKY, L_WRI, L_ELB) ||
+                hand(R_THUMB, R_INDEX, R_PINKY, R_WRI, R_ELB)
+        }
+
+        /**
+         * Raised hand / wave-ready: wrist clearly above elbow and near/above
+         * the shoulder. Works when thumb tips aren't resolved at phone distance.
+         * Rejects T-pose (wrists level with shoulders, elbows out).
+         */
+        fun isHandRaised(landmarks: List<FloatArray>?, vis: ((Int) -> Float)? = null): Boolean {
+            if (landmarks == null || landmarks.size <= R_WRI) return false
+            fun ok(i: Int): Boolean = i < landmarks.size && (vis == null || vis(i) > 0.25f)
+            if (!ok(L_SHO) || !ok(R_SHO)) return false
+            val shoulderY = (landmarks[L_SHO][1] + landmarks[R_SHO][1]) / 2f
+            val shoulderW = hypot(
+                landmarks[L_SHO][0] - landmarks[R_SHO][0],
+                landmarks[L_SHO][1] - landmarks[R_SHO][1],
+            ).coerceAtLeast(0.04f)
+
+            fun raised(wrist: Int, elbow: Int): Boolean {
+                if (!ok(wrist) || !ok(elbow)) return false
+                val wy = landmarks[wrist][1]
+                val ey = landmarks[elbow][1]
+                // Wrist above elbow (arm lifted), and wrist at/above shoulder line.
+                val lifted = wy < ey - shoulderW * 0.12f
+                val high = wy < shoulderY - shoulderW * 0.08f
+                // Elbow also elevated — avoids pointing sideways at hip height.
+                val elbowHigh = ey < shoulderY + shoulderW * 0.15f
+                return lifted && high && elbowHigh
+            }
+            return raised(L_WRI, L_ELB) || raised(R_WRI, R_ELB)
         }
     }
 

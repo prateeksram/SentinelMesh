@@ -180,6 +180,8 @@ class EdgeKickEngine(
         var peakForce = 0f
         var previousSignalSpeed = 0f
         var maxDisplacement = 0f
+        /** Landmark-only path (excludes optical-flow displacement). */
+        var maxLandmarkDisplacement = 0f
         var maxLift = 0f
         var minKneeAngle = 180f
         var kneeExtension = 0f
@@ -217,12 +219,19 @@ class EdgeKickEngine(
             peakForce = 0f
             previousSignalSpeed = 0f
             maxDisplacement = 0f
+            maxLandmarkDisplacement = 0f
             maxLift = 0f
             minKneeAngle = 180f
             kneeExtension = 0f
             aboveStartedAt = 0L
             aboveThresholdMs = 0L
             aboveThresholdSamples = 0
+        }
+
+        fun discardSwing(reason: String?) {
+            lastReject = reason
+            state = SwingState.REST
+            resetSwingMetrics()
         }
     }
 
@@ -529,9 +538,12 @@ class EdgeKickEngine(
                 track.peakVx = signalVx
                 track.peakVy = signalVy
             }
+            val landmarkDisp = distance(current, track.swingStart)
+            track.maxLandmarkDisplacement = max(track.maxLandmarkDisplacement, landmarkDisp)
+            // Flow may enrich speed/telemetry, but must not invent path alone.
             track.maxDisplacement = max(
                 track.maxDisplacement,
-                max(distance(current, track.swingStart), flowDisplacement),
+                max(landmarkDisp, flowDisplacement),
             )
             track.maxLift = max(track.maxLift, track.rest.y - current.y)
             if (kneeAngle != null) {
@@ -549,25 +561,35 @@ class EdgeKickEngine(
 
         if (track.state != SwingState.FOLLOW_THROUGH) return null
         val swingAge = nowMs - track.swingStartedAt
-        val pathOk = track.maxDisplacement >= MIN_PATH_M ||
+        // Path must come from the foot landmarks — optical flow alone used to
+        // complete phantom kicks while the player was standing still.
+        val pathOk = track.maxLandmarkDisplacement >= MIN_PATH_M ||
             track.maxLift >= MIN_LIFT_M ||
             track.kneeExtension >= MIN_KNEE_EXTENSION_DEG
         if (swingAge < MIN_SWING_MS) return null
         if (swingAge > SWING_TIMEOUT_MS) {
-            track.lastReject = if (track.peakSpeed >= kickMs) "short" else "soft"
-            track.state = SwingState.REST
+            track.discardSwing(if (track.peakSpeed >= kickMs) "short" else "soft")
             return null
         }
         if (!pathOk) {
-            track.lastReject = "short"
+            track.discardSwing("short")
             return null
         }
         if (track.peakSpeed < kickMs) {
-            track.lastReject = "soft"
+            track.discardSwing("soft")
+            return null
+        }
+        if (track.aboveThresholdSamples < MIN_ABOVE_SAMPLES) {
+            // Need a sustained peak — one noisy sample must not fire a shot.
+            if (swingAge > MIN_SWING_MS + 100L) {
+                track.discardSwing("soft")
+            }
             return null
         }
         if (!canKick) {
-            track.lastReject = gateReject ?: "gated"
+            // Discard armed swings when gated. Leaving FOLLOW_THROUGH sticky
+            // made fidget/flow from countdown fire the instant shoot unlocked.
+            track.discardSwing(gateReject ?: "gated")
             return null
         }
 
@@ -684,6 +706,7 @@ class EdgeKickEngine(
         private const val MIN_PATH_M = 0.09f
         private const val MIN_LIFT_M = 0.035f
         private const val MIN_KNEE_EXTENSION_DEG = 8f
+        private const val MIN_ABOVE_SAMPLES = 2
         private const val MIN_LANDMARK_VISIBILITY = 0.18f
         private const val MIN_FLOW_CONFIDENCE = 0.42f
     }

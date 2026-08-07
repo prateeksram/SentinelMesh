@@ -212,6 +212,19 @@
             android:textSize="13sp"
             android:maxLines="3"
             android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/lobbyReadyBtn"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/zone_on"
+            android:gravity="center"
+            android:text="@string/lobby_ready"
+            android:textColor="@color/chalk"
+            android:textStyle="bold"
+            android:textSize="16sp"
+            android:visibility="gone" />
     </LinearLayout>
 
     <!-- Compact AI chip (long-press expands telemetry) -->

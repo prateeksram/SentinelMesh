@@ -74,6 +74,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private var pendingCalibKick: ForcePoseEngine.KickEvent? = null
     private var pendingSport: String = PlayerProfile.SPORT_FOOTBALL
     private var pickingSport = false
+    /** True when CALIBRATE was tapped — always run full height/weight → L/C/R → practice. */
+    private var forceRecalibrate = false
     private var hostSport: String = PlayerProfile.SPORT_FOOTBALL
 
     private var lastAsrMs: Long = -1
@@ -216,6 +218,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         binding.calibBtn.setOnClickListener { beginCalibrationFlow() }
         binding.calibration.calibNext.setOnClickListener { onCalibNext() }
         binding.calibration.calibSkip.setOnClickListener { onCalibSkip() }
+        binding.lobbyReadyBtn.setOnClickListener { startMatchFromLobby() }
         binding.sportFootball.setOnClickListener {
             onSportChosen(PlayerProfile.SPORT_FOOTBALL)
         }
@@ -481,12 +484,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         when (cmd.intent) {
             VoiceCoach.Intent.READY -> {
                 binding.hint.text = "Heard: \"${result.text}\""
-                vibrate(60)
                 if (hostConnected && (lastPhase == null || lastPhase == "lobby")) {
-                    binding.big.text = "STARTING…"
-                    coach?.speak("Here we go!")
-                    game.sendStart()
+                    startMatchFromLobby()
                 } else {
+                    vibrate(60)
                     binding.big.text = "READY"
                     coach?.speak("Locked in. Pick a corner.")
                     askQwen("ready")
@@ -707,6 +708,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             vibrate(40)
             return
         }
+        // Always re-run full calib after sport pick (don't reuse a saved profile).
+        forceRecalibrate = true
         showSportPicker()
     }
 
@@ -779,9 +782,15 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             start()
         }
         pickingSport = true
-        coach?.speak("Choose your game.")
-        binding.hint.text = "Pick football, darts, or basketball"
-        binding.big.text = "PICK A GAME"
+        if (forceRecalibrate) {
+            coach?.speak("Choose a game to calibrate.")
+            binding.hint.text = "Calibrate · height, aim L/C/R, then practice"
+            binding.big.text = "CALIBRATE"
+        } else {
+            coach?.speak("Choose your game.")
+            binding.hint.text = "Pick football, darts, or basketball"
+            binding.big.text = "PICK A GAME"
+        }
     }
 
     private fun hideOnboarding() {
@@ -801,16 +810,20 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         syncSportToHost(pendingSport)
 
         val existing = profile
-        val needsCalib = existing == null ||
+        val recalibrate = forceRecalibrate
+        forceRecalibrate = false
+        // Cold-start can reuse a saved profile; CALIBRATE always runs the full flow.
+        val needsCalib = recalibrate ||
+            existing == null ||
             existing.sport != pendingSport ||
             (PlayerProfile.isHandSport(pendingSport) && existing.throwMs == null)
         if (needsCalib) {
-            startCalibration(pendingSport)
+            startCalibration(pendingSport, seedFrom = existing?.takeIf { recalibrate })
         } else {
             pose?.applyProfile(existing)
             updateProfileHint()
             binding.big.text = "READY?"
-            coach?.speak("${pendingSport.replaceFirstChar { it.uppercase() }} loaded. Show a thumbs up to start.")
+            coach?.speak("${pendingSport.replaceFirstChar { it.uppercase() }} loaded. Show a thumbs up, or tap I'm Ready.")
             promptReadyToStart()
         }
     }
@@ -821,7 +834,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         if (hostConnected) game.sendSport(PlayerProfile.normalizeSport(sport))
     }
 
-    private fun startCalibration(sport: String = pendingSport) {
+    private fun startCalibration(
+        sport: String = pendingSport,
+        seedFrom: PlayerProfile? = null,
+    ) {
         // Don't open calibration mid-match — wait-forever shoot would hang.
         val phase = lastPhase
         if (phase in listOf("announce", "countdown", "shoot", "resolve")) {
@@ -831,17 +847,40 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             return
         }
         calibrating = true
+        showLobbyReadyButton(false)
         pendingSport = PlayerProfile.normalizeSport(sport)
-        calib = CalibrationSession(pendingSport)
+        calib = CalibrationSession(pendingSport).also { session ->
+            // Prefill biometrics when recalibrating so player can edit then NEXT.
+            val src = seedFrom ?: profile?.takeIf { it.sport == pendingSport }
+            if (src != null) {
+                session.heightCm = src.heightCm
+                session.weightKg = src.weightKg
+            }
+        }
         pose?.setSport(pendingSport)
         pendingCalibKick = null
         pose?.calibrationSwing = false
         lastCalibVoice = ""
         lastCalibVoiceAt = 0L
-        binding.calibration.calibPanel.visibility = View.VISIBLE
+        val panel = binding.calibration
+        panel.calibPanel.visibility = View.VISIBLE
+        panel.calibHeight.setText(
+            (calib?.heightCm ?: 175f).roundToInt().toString()
+        )
+        panel.calibWeight.setText(
+            (calib?.weightKg ?: 75f).roundToInt().toString()
+        )
         setTelemetryVisible(false)
         applyChromeForMode()
         refreshCalibUi()
+        coach?.speak(
+            when {
+                PlayerProfile.isHandSport(pendingSport) ->
+                    "Let's calibrate. Enter height and weight, then we'll set aim and practice throws."
+                else ->
+                    "Let's calibrate. Enter height and weight, then we'll set aim and practice kicks."
+            }
+        )
     }
 
     private fun finishCalibration(save: Boolean) {
@@ -906,21 +945,41 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     private var lobbyThumbsHoldMs = 0L
     private var lobbyThumbsLastTs = 0L
+    private var lobbyThumbsMissMs = 0L
 
-    /** After calibration / lobby: thumbs-up (or spoken ready) starts the match. */
+    private fun showLobbyReadyButton(show: Boolean) {
+        binding.lobbyReadyBtn.visibility = if (show) View.VISIBLE else View.GONE
+    }
+
+    /** Shared start path for thumbs-up, voice "ready", and the I'm Ready button. */
+    private fun startMatchFromLobby() {
+        if (calibrating || !hostConnected || profile == null) return
+        if (lastPhase != null && lastPhase != "lobby") return
+        lobbyThumbsHoldMs = 0
+        lobbyThumbsLastTs = 0
+        lobbyThumbsMissMs = 0
+        showLobbyReadyButton(false)
+        binding.big.text = "STARTING…"
+        coach?.speak("Here we go!")
+        vibrate(60)
+        game.sendStart()
+    }
+
+    /** After calibration / lobby: thumbs-up, spoken ready, or tap I'm Ready. */
     private fun promptReadyToStart() {
         if (calibrating || !hostConnected || profile == null) return
         if (lastPhase != null && lastPhase != "lobby") return
+        showLobbyReadyButton(true)
         val now = System.currentTimeMillis()
         if (now - readyPromptAt < 20_000) return
         readyPromptAt = now
         lobbyThumbsHoldMs = 0
         lobbyThumbsLastTs = 0
-        coach?.speak("Show a thumbs up when you are ready to start.")
+        coach?.speak("Thumbs up or raise a hand when ready. Or tap I'm Ready.")
         if (!hintHeldByHost()) {
-            binding.hint.text = "Show a thumbs up to start — or say ready"
+            binding.hint.text = "Thumbs up / raise a hand — or tap I'm Ready"
         }
-        binding.big.text = "THUMBS UP"
+        binding.big.text = "READY?"
     }
 
     private fun refreshCalibUi() {
@@ -976,7 +1035,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 panel.calibNext.text = "I'M READY"
                 panel.calibNext.isEnabled = true
                 panel.calibNext.alpha = 1f
-                binding.big.text = "THUMBS UP"
+                binding.big.text = "READY?"
                 binding.hint.text = ui.hint
             }
             ui.step == CalibrationSession.Step.BIOMETRICS -> {
@@ -1055,6 +1114,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         if (!calibrating) return
         coach?.speak("Starting over.")
         finishCalibration(save = false)
+        forceRecalibrate = true
         showSportPicker()
     }
 
@@ -1193,28 +1253,37 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         showForceChip = hud.liveForce > 8f || lastPhase == "shoot" || calibrating
         refreshNeuralLoad()
 
-        // Lobby: hold thumbs-up to start the match (voice "ready" still works).
+        // Lobby: hold thumbs-up to start the match (voice / I'm Ready still work).
         if (!calibrating && hostConnected && profile != null &&
-            (lastPhase == null || lastPhase == "lobby") &&
-            PoseAnalyzer.isThumbsUp(hud.landmarks)
+            (lastPhase == null || lastPhase == "lobby")
         ) {
             val now = System.currentTimeMillis()
-            val dt = if (lobbyThumbsLastTs == 0L) 0L else (now - lobbyThumbsLastTs).coerceIn(0L, 80L)
+            val dt = if (lobbyThumbsLastTs == 0L) {
+                33L
+            } else {
+                (now - lobbyThumbsLastTs).coerceIn(0L, 80L)
+            }
             lobbyThumbsLastTs = now
-            lobbyThumbsHoldMs += dt
-            if (lobbyThumbsHoldMs >= CalibrationSession.THUMBS_HOLD_MS) {
-                lobbyThumbsHoldMs = 0
-                lobbyThumbsLastTs = 0
-                binding.big.text = "STARTING…"
-                coach?.speak("Here we go!")
-                vibrate(60)
-                game.sendStart()
-            } else if (!hintHeldByHost()) {
-                binding.hint.text = "Hold thumbs up…"
+            if (PoseAnalyzer.isReadyHand(hud.landmarks)) {
+                lobbyThumbsMissMs = 0
+                lobbyThumbsHoldMs += dt
+                if (lobbyThumbsHoldMs >= CalibrationSession.THUMBS_HOLD_MS) {
+                    startMatchFromLobby()
+                } else if (!hintHeldByHost()) {
+                    binding.hint.text = "Hold ready… or tap I'm Ready"
+                }
+            } else if (lobbyThumbsHoldMs > 0L) {
+                // Pose hand tips flicker at distance — tolerate brief misses.
+                lobbyThumbsMissMs += dt
+                if (lobbyThumbsMissMs > 280L) {
+                    lobbyThumbsHoldMs = 0
+                    lobbyThumbsMissMs = 0
+                }
             }
         } else if (!calibrating) {
             lobbyThumbsHoldMs = 0
             lobbyThumbsLastTs = 0
+            lobbyThumbsMissMs = 0
         }
 
         if (calibrating) {
@@ -1292,6 +1361,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             vibrate(100)
             return
         }
+        // Belt-and-suspenders: never send a shot outside the host shoot window.
+        if (lastPhase != "shoot") return
         lastKickMeta = kick
         val zone = lockedAimZone ?: kick.zone
         game.sendKick(
@@ -1382,6 +1453,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             )
             updateHostPill(connected)
             if (connected) syncSportToHost()
+            else showLobbyReadyButton(false)
         }
     }
 
@@ -1525,6 +1597,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     }
                 }
             }
+            if (state.phase != "lobby") showLobbyReadyButton(false)
             lastPhase = state.phase
         }
     }
