@@ -167,6 +167,7 @@ class EdgeKickEngine(
         val samples = ArrayDeque<MotionSample>()
         var state = SwingState.REST
         var previousTimeMs = 0L
+        var lastFrameDeltaMs = 0L
         var previousRaw: Point? = null
         var rest = Point(0f, 0f)
         var restReady = false
@@ -201,6 +202,7 @@ class EdgeKickEngine(
             samples.clear()
             state = SwingState.REST
             previousTimeMs = 0L
+            lastFrameDeltaMs = 0L
             previousRaw = null
             restReady = false
             swingStartedAt = 0L
@@ -408,8 +410,14 @@ class EdgeKickEngine(
             (foot.x - pelvis.x) * metresPerUnit,
             (foot.y - pelvis.y) * metresPerUnit,
         )
-        val dt = if (track.previousTimeMs > 0L) {
-            ((nowMs - track.previousTimeMs) / 1000f).coerceIn(0f, 0.55f)
+        val frameDeltaMs = if (track.previousTimeMs > 0L) {
+            (nowMs - track.previousTimeMs).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        track.lastFrameDeltaMs = frameDeltaMs
+        val dt = if (frameDeltaMs > 0L) {
+            (frameDeltaMs / 1000f).coerceIn(0f, 0.55f)
         } else {
             0f
         }
@@ -563,7 +571,30 @@ class EdgeKickEngine(
             return null
         }
         if (track.peakSpeed < kickMs) {
-            track.lastReject = "soft"
+            track.discardSwing("soft")
+            return null
+        }
+        val landmarkConfidence = (
+            track.lastAnkleVis + track.lastHeelVis + track.lastFootVis
+            ) / 3f
+        val sparsePosePeak = track.lastFrameDeltaMs >= SPARSE_POSE_FRAME_MS &&
+            track.aboveThresholdSamples >= 1 &&
+            landmarkConfidence >= SPARSE_MIN_VISIBILITY &&
+            track.maxLandmarkDisplacement >= SPARSE_MIN_PATH_M &&
+            (
+                track.maxLift >= SPARSE_MIN_LIFT_M ||
+                    track.kneeExtension >= SPARSE_MIN_KNEE_EXTENSION_DEG ||
+                    (track.lastFlowSamples >= 2 &&
+                        track.lastFlowConfidence >= SPARSE_MIN_FLOW_CONFIDENCE)
+                )
+        if (track.aboveThresholdSamples < MIN_ABOVE_SAMPLES && !sparsePosePeak) {
+            // At normal pose rates require a sustained two-sample peak. At the
+            // measured UNO Q rate (~4-6 FPS), a real kick often occupies one
+            // pose frame; accept that peak only with strong landmark path plus
+            // lift/knee/flow corroboration. This keeps stationary flow/jitter out.
+            if (swingAge > MIN_SWING_MS + 100L) {
+                track.discardSwing("soft")
+            }
             return null
         }
         if (!canKick) {
@@ -590,9 +621,6 @@ class EdgeKickEngine(
         } else {
             "drive"
         }
-        val landmarkConfidence = (
-            track.lastAnkleVis + track.lastHeelVis + track.lastFootVis
-            ) / 3f
         val speedScore = (track.peakSpeed / max(kickMs * 1.8f, 0.1f)).coerceIn(0f, 1f)
         val pathScore = (track.maxDisplacement / 0.28f).coerceIn(0f, 1f)
         val temporalConfidence = if (track.lastFlowSamples >= 2) {
@@ -684,6 +712,13 @@ class EdgeKickEngine(
         private const val MIN_PATH_M = 0.09f
         private const val MIN_LIFT_M = 0.035f
         private const val MIN_KNEE_EXTENSION_DEG = 8f
+        private const val MIN_ABOVE_SAMPLES = 2
+        private const val SPARSE_POSE_FRAME_MS = 120L
+        private const val SPARSE_MIN_VISIBILITY = 0.65f
+        private const val SPARSE_MIN_PATH_M = 0.18f
+        private const val SPARSE_MIN_LIFT_M = 0.08f
+        private const val SPARSE_MIN_KNEE_EXTENSION_DEG = 25f
+        private const val SPARSE_MIN_FLOW_CONFIDENCE = 0.55f
         private const val MIN_LANDMARK_VISIBILITY = 0.18f
         private const val MIN_FLOW_CONFIDENCE = 0.42f
     }

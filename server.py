@@ -667,6 +667,7 @@ class Game:
 
                 # ---------------- resolve -----------------
                 points = 0
+                timed_out = not bool(self.kick_msg)
                 if self.kick_msg:
                     sz, power, kick_t = (self.kick_msg["zone"],
                                          self.kick_msg["power"],
@@ -712,6 +713,11 @@ class Game:
                          "keeperZone": kz, "power": round(power, 2),
                          "force": force, "dirDeg": dir_deg,
                          "result": result}
+                if timed_out:
+                    # A missing packet advances the match, but it is not a
+                    # detected shot. Clients use this to avoid animating or
+                    # announcing a phantom "skied" kick.
+                    entry["timedOut"] = True
                 if points:
                     entry["points"] = points
                 if isinstance(gx, (int, float)) and isinstance(gz, (int, float)):
@@ -737,7 +743,9 @@ class Game:
                 self.shotmap.append(entry)
                 self.last = self.shotmap[-1]
 
-                if result == "hit":
+                if timed_out:
+                    self.line = "No kick detected before the timer expired."
+                elif result == "hit":
                     self.line = tline("hit", pts=points)
                 elif result == "miss":
                     self.line = tline("hitmiss")
@@ -914,9 +922,20 @@ class Game:
                                  "apexM": apex_m,
                                  "speed": speed,
                                  "kickState": kick_state,
-                                 "trajectory": trajectory,
-                                 "t": time.monotonic()}
+                                  "trajectory": trajectory,
+                                  "t": time.monotonic()}
+                print(
+                    f"KICK accepted #{self.kick}: zone={msg['zone']} "
+                    f"force={force}N speed={speed} phase={self.phase}",
+                    flush=True,
+                )
                 self.kick_evt.set()
+            else:
+                print(
+                    f"KICK ignored: role={self.sockets.get(ws)} phase={self.phase} "
+                    f"already_received={bool(self.kick_msg)} zone={msg.get('zone')}",
+                    flush=True,
+                )
         elif t == "skel":
             # bullet-time skeleton frames arriving ~0.45 s after the kick
             frames = msg.get("frames")

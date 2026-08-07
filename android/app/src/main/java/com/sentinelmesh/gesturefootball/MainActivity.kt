@@ -1063,9 +1063,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             vibrate(100)
             return
         }
-        lastKickMeta = kick
+        // Belt-and-suspenders: never send a shot outside the host shoot window.
+        if (lastPhase != "shoot") return
         val zone = lockedAimZone ?: kick.zone
-        game.sendKick(
+        val queued = game.sendKick(
             zone = zone,
             power = kick.power,
             force = kick.forceN,
@@ -1077,6 +1078,18 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             kinematics = kick.kinematics,
             trajectory = kick.trajectory,
         )
+        Log.i(
+            "KickFlow",
+            "detected source=${kick.kinematics?.source} speed=${kick.peakSpeed} " +
+                "path=${kick.kinematics?.pathDisplacementM} force=${kick.forceN}N " +
+                "phase=$lastPhase websocketQueued=$queued",
+        )
+        if (!queued) {
+            binding.big.text = "SHOT NOT SENT"
+            binding.hint.text = "Host disconnected — reconnect, then kick again"
+            return
+        }
+        lastKickMeta = kick
         binding.big.text = "SHOT ${kick.height}/${kick.strike} ${kick.forceN} N"
         vibrate(120)
         val kickAt = System.currentTimeMillis()
@@ -1223,10 +1236,13 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 "resolve" -> {
                     lockedAimZone = null
                     val r = state.lastResult
-                    binding.big.text = when (r) {
-                        "goal" -> "GOAL!"
-                        "save" -> "SAVED!"
-                        "post" -> "POST!"
+                    binding.big.text = when {
+                        state.lastTimedOut -> "NO KICK"
+                        r == "goal" -> "GOAL!"
+                        r == "hit" -> "HIT!"
+                        r == "save" -> "SAVED!"
+                        r == "post" -> "POST!"
+                        r == "miss" || r == "wide" -> "MISS!"
                         else -> "SKIED!"
                     }
                     binding.big.setTextColor(
@@ -1245,22 +1261,26 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     val key = "${state.kick}:$r"
                     if (r != null && key != lastResultSpoken) {
                         lastResultSpoken = key
-                        val meta = lastKickMeta
-                        qwen?.remember(
-                            zone = meta?.zone ?: pose?.zone ?: "C",
-                            result = r,
-                            forceN = f ?: meta?.forceN ?: 0,
-                            height = meta?.height ?: "L",
-                            foot = meta?.foot ?: "R",
-                        )
-                        val line = when (r) {
-                            "goal" -> "Goal!"
-                            "save" -> "Saved."
-                            "post" -> "Off the post."
-                            else -> "Missed."
+                        if (state.lastTimedOut) {
+                            coach?.speak("No kick detected. Reset and try again.")
+                        } else {
+                            val meta = lastKickMeta
+                            qwen?.remember(
+                                zone = meta?.zone ?: pose?.zone ?: "C",
+                                result = r,
+                                forceN = f ?: meta?.forceN ?: 0,
+                                height = meta?.height ?: "L",
+                                foot = meta?.foot ?: "R",
+                            )
+                            val line = when (r) {
+                                "goal" -> "Goal!"
+                                "save" -> "Saved."
+                                "post" -> "Off the post."
+                                else -> "Missed."
+                            }
+                            coach?.speak(line)
+                            askQwen(r)
                         }
-                        coach?.speak(line)
-                        askQwen(r)
                     }
                 }
                 "end" -> {
