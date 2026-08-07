@@ -150,13 +150,18 @@
   .rail-right.hide{display:none}
   .rail-right .sports{pointer-events:auto;display:flex;flex-direction:column;gap:8px}
   .rail-right .sports button{
-    width:100%;text-align:left;cursor:pointer;
-    font-family:var(--fBlack);font-size:11px;letter-spacing:.5px;
+    width:100%;cursor:pointer;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:4px;text-align:center;
+    font-family:var(--fBlack);font-size:10px;letter-spacing:.5px;
     color:var(--chalk);
     background:linear-gradient(180deg,rgba(10,20,31,.92),rgba(5,11,18,.94));
-    border:1px solid #24445c;border-radius:12px;padding:10px 11px;
+    border:1px solid #24445c;border-radius:12px;padding:12px 8px 10px;
     box-shadow:0 10px 24px rgba(0,0,0,.5);
     transition:background .15s,border-color .15s,color .15s,transform .08s}
+  .rail-right .sports button .ico{
+    display:block;line-height:1;font-size:28px;font-family:"Segoe UI Emoji","Apple Color Emoji",sans-serif}
+  .rail-right .sports button .lbl{display:block;line-height:1.1}
   .rail-right .sports button:hover{
     color:#fff;border-color:#3f6383;
     background:linear-gradient(180deg,rgba(16,32,48,.95),rgba(8,18,28,.96))}
@@ -167,7 +172,8 @@
     box-shadow:0 6px 16px rgba(0,0,0,.45),0 0 0 1px rgba(255,213,77,.25)}
   @media(max-width:900px){
     .rail-right{width:min(100px,16vw);right:10px}
-    .rail-right .sports button{font-size:10px;padding:9px 8px;letter-spacing:.4px}
+    .rail-right .sports button{font-size:9px;padding:10px 6px 8px}
+    .rail-right .sports button .ico{font-size:22px}
   }
 
   #abortBtn{font:inherit;color:var(--chalk);background:#5a2230;border:1px solid #8a3040;
@@ -322,9 +328,9 @@
 
 <aside class="rail-right" id="sportsRail" aria-label="Choose sport">
   <div class="sports" id="sports">
-    <button data-sport="football">⚽ FOOTBALL</button>
-    <button data-sport="darts">🎯 DARTS</button>
-    <button data-sport="basketball">🏀 BASKETBALL</button>
+    <button data-sport="football"><span class="ico">⚽</span><span class="lbl">FOOTBALL</span></button>
+    <button data-sport="darts"><span class="ico">🎯</span><span class="lbl">DARTS</span></button>
+    <button data-sport="basketball"><span class="ico">🏀</span><span class="lbl">BASKETBALL</span></button>
   </div>
 </aside>
 
