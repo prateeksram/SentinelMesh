@@ -465,4 +465,131 @@
             android:lineSpacingExtra="2dp" />
     </LinearLayout>
 
+    <!-- Cold-start QPlay splash + sport picker -->
+    <FrameLayout
+        android:id="@+id/onboarding"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="@color/ink"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <LinearLayout
+            android:id="@+id/splashPane"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="32dp">
+
+            <TextView
+                android:id="@+id/splashMark"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Q"
+                android:textColor="@color/qcom"
+                android:textSize="72sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.04"
+                android:shadowColor="#663253DC"
+                android:shadowDx="0"
+                android:shadowDy="0"
+                android:shadowRadius="28" />
+
+            <TextView
+                android:id="@+id/splashTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/splash_title"
+                android:textColor="@color/chalk"
+                android:textSize="42sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.12"
+                android:shadowColor="#803253DC"
+                android:shadowDx="0"
+                android:shadowDy="2"
+                android:shadowRadius="18" />
+
+            <TextView
+                android:id="@+id/splashTag"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/splash_tag"
+                android:textColor="@color/cyan"
+                android:textSize="13sp"
+                android:letterSpacing="0.18" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/sportPane"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="28dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/choose_sport"
+                android:textColor="@color/chalk"
+                android:textSize="22sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.06" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:layout_marginBottom="22dp"
+                android:text="@string/choose_sport_hint"
+                android:textColor="@color/muted"
+                android:textSize="12sp"
+                android:gravity="center" />
+
+            <TextView
+                android:id="@+id/sportFootball"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:layout_marginBottom="10dp"
+                android:background="@drawable/card_surface"
+                android:gravity="center"
+                android:text="@string/sport_football"
+                android:textColor="@color/chalk"
+                android:textStyle="bold"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/sportDarts"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:layout_marginBottom="10dp"
+                android:background="@drawable/card_surface"
+                android:gravity="center"
+                android:text="@string/sport_darts"
+                android:textColor="@color/chalk"
+                android:textStyle="bold"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/sportBasketball"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:background="@drawable/card_surface"
+                android:gravity="center"
+                android:text="@string/sport_basketball"
+                android:textColor="@color/chalk"
+                android:textStyle="bold"
+                android:textSize="16sp" />
+        </LinearLayout>
+    </FrameLayout>
+
 </androidx.constraintlayout.widget.ConstraintLayout>

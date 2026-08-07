@@ -11,6 +11,7 @@ import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
 import com.sentinelmesh.gesturefootball.forcepose.ForcePoseEngine
+import com.sentinelmesh.gesturefootball.forcepose.HandThrowEngine
 import com.sentinelmesh.gesturefootball.profile.PlayerProfile
 import kotlin.math.hypot
 
@@ -73,6 +74,7 @@ class PoseAnalyzer(
 
     private val appContext = context.applicationContext
     private val force = ForcePoseEngine()
+    private val handThrow = HandThrowEngine()
     private val edgeForce = EdgeKickEngine()
     private var landmarkerGpu: PoseLandmarker? = null
     private var landmarkerCpu: PoseLandmarker? = null
@@ -84,6 +86,9 @@ class PoseAnalyzer(
         private set
     var phase: String = "lobby"
     var calibrationSwing: Boolean = false
+    /** Darts / basketball: wrist release. Football: foot kick. */
+    @Volatile var usesHandThrow: Boolean = false
+        private set
     private var lastKickAt = 0L
     private var lastShootPhase = false
     @Volatile private var remoteEnteredAt = 0L
@@ -182,15 +187,27 @@ class PoseAnalyzer(
 
     fun applyProfile(profile: PlayerProfile) {
         force.applyProfile(profile)
+        handThrow.applyProfile(profile)
         edgeForce.applyProfile(profile)
+        usesHandThrow = profile.usesHandThrow
         aimLMax = profile.aimLMax
         aimCMin = profile.aimCMin
         aimCMax = profile.aimCMax
         aimRMin = profile.aimRMin
     }
 
+    fun setSport(sport: String) {
+        usesHandThrow = PlayerProfile.isHandSport(PlayerProfile.normalizeSport(sport))
+    }
+
     fun setKickThreshold(ms: Float) {
-        if (mode == Mode.UNO_Q) edgeForce.setKickThreshold(ms) else force.setKickThreshold(ms)
+        if (usesHandThrow) {
+            handThrow.setThrowThreshold(ms)
+        } else if (mode == Mode.UNO_Q) {
+            edgeForce.setKickThreshold(ms)
+        } else {
+            force.setKickThreshold(ms)
+        }
     }
 
     fun forceZone(z: String) {
@@ -271,6 +288,8 @@ class PoseAnalyzer(
     private fun resetSourceState() {
         force.resetBuffers()
         force.resetSwing()
+        handThrow.resetBuffers()
+        handThrow.resetSwing()
         edgeForce.reset()
         bodyOkStreak = 0
         lastKickAt = 0L
@@ -411,6 +430,7 @@ class PoseAnalyzer(
             val jump = hypot(torsoX - lastTorsoX, torsoY - lastTorsoY)
             if (jump > 0.15f) {
                 force.resetBuffers()
+                handThrow.resetBuffers()
                 edgeForce.reset()
                 bodyOkStreak = 0
                 Log.i(TAG, "person-switch jump=$jump — buffers cleared")
@@ -443,7 +463,13 @@ class PoseAnalyzer(
 
         val shoot = phase == "shoot"
         if ((shoot || calibrationSwing) && !lastShootPhase) {
-            if (edgeInput != null) edgeForce.resetSwing() else force.resetSwing()
+            if (usesHandThrow) {
+                handThrow.resetSwing()
+            } else if (edgeInput != null) {
+                edgeForce.resetSwing()
+            } else {
+                force.resetSwing()
+            }
         }
         lastShootPhase = shoot || calibrationSwing
 
@@ -454,7 +480,7 @@ class PoseAnalyzer(
         val framedOk = calibrationSwing || bodyOkStreak >= BODY_OK_FRAMES
         val phaseOk = shoot || calibrationSwing
         val cooldownOk = timestampMs - lastKickAt > 900
-        val canKick = phaseOk && framedOk && cooldownOk
+        val canRelease = phaseOk && framedOk && cooldownOk
         val gateReject = when {
             !phaseOk -> "not in shoot"
             !framedOk -> "not framed"
@@ -462,22 +488,39 @@ class PoseAnalyzer(
             else -> null
         }
 
-        val edgeResult = edgeInput?.let { input ->
-            edgeForce.update(
-                nowMs = timestampMs,
-                landmarks = input.landmarks,
-                visibility = input.visibility,
-                frameWidth = input.frameWidth,
-                frameHeight = input.frameHeight,
-                zone = zone,
-                canKick = canKick,
-                gateReject = gateReject,
-                aimHandY = wristY,
-                flow = input.flowMotion,
-            )
+        val edgeResult = if (!usesHandThrow) {
+            edgeInput?.let { input ->
+                edgeForce.update(
+                    nowMs = timestampMs,
+                    landmarks = input.landmarks,
+                    visibility = input.visibility,
+                    frameWidth = input.frameWidth,
+                    frameHeight = input.frameHeight,
+                    zone = zone,
+                    canKick = canRelease,
+                    gateReject = gateReject,
+                    aimHandY = wristY,
+                    flow = input.flowMotion,
+                )
+            }
+        } else {
+            null
         }
-        val detectedKick = edgeResult?.kick ?: if (edgeInput == null) {
-            force.update(
+        val detectedKick = when {
+            usesHandThrow -> handThrow.update(
+                nowMs = timestampMs,
+                leftWristX = x(L_WRI), leftWristY = y(L_WRI), leftVis = vis(L_WRI),
+                rightWristX = x(R_WRI), rightWristY = y(R_WRI), rightVis = vis(R_WRI),
+                shoulderMidX = shoulderMidX,
+                shoulderMidY = shoulderMidY,
+                hipMidX = hipMidX,
+                hipMidY = hipMidY,
+                zone = zone,
+                canThrow = canRelease,
+                frameAspect = frameAspect,
+            )
+            edgeResult?.kick != null -> edgeResult.kick
+            edgeInput == null -> force.update(
                 nowMs = timestampMs,
                 leftFootX = lfX, leftFootY = lfY, leftVis = vis(L_ANK),
                 rightFootX = rfX, rightFootY = rfY, rightVis = vis(R_ANK),
@@ -486,14 +529,13 @@ class PoseAnalyzer(
                 hipMidX = hipMidX,
                 hipMidY = hipMidY,
                 zone = zone,
-                canKick = canKick,
+                canKick = canRelease,
                 aimHandY = wristY,
                 leftWristX = x(L_WRI), leftWristY = y(L_WRI), leftWristVis = vis(L_WRI),
                 rightWristX = x(R_WRI), rightWristY = y(R_WRI), rightWristVis = vis(R_WRI),
                 frameAspect = frameAspect,
             )
-        } else {
-            null
+            else -> null
         }
         // This is the single source-normalization seam. Every inference mode
         // contributes the same kinematic state; the estimator is deliberately
@@ -523,23 +565,41 @@ class PoseAnalyzer(
             onSkeleton(timestampMs, world)
         }
 
+        val liveForce = when {
+            usesHandThrow -> handThrow.liveForce
+            edgeInput != null -> edgeForce.liveForce
+            else -> force.liveForce
+        }
+        val liveSpeed = when {
+            usesHandThrow -> handThrow.liveSpeed
+            edgeInput != null -> edgeForce.liveSpeed
+            else -> force.liveSpeed
+        }
+        val liveFoot = when {
+            usesHandThrow -> handThrow.liveHand
+            edgeInput != null -> edgeForce.liveFoot
+            else -> force.liveFoot
+        }
+        val kickReject = when {
+            usesHandThrow -> handThrow.consumeReject() ?: gateReject
+            edgeResult != null -> edgeResult.diagnostics?.reject
+            edgeInput == null -> force.consumeReject()
+            else -> gateReject
+        }
+
         onHud(
             Hud(
                 zone, bodyOk,
-                if (edgeInput != null) edgeForce.liveForce else force.liveForce,
+                liveForce,
                 landmarks, latency, label,
                 wristXMirrored = wristXMirrored,
                 wristY = wristY,
-                liveSpeed = if (edgeInput != null) edgeForce.liveSpeed else force.liveSpeed,
-                liveFoot = if (edgeInput != null) edgeForce.liveFoot else force.liveFoot,
+                liveSpeed = liveSpeed,
+                liveFoot = liveFoot,
                 bodyOkStreak = bodyOkStreak,
                 inGuide = inGuide,
                 shoulderY = shoulderMidY,
-                kickReject = edgeResult?.diagnostics?.reject ?: if (edgeInput == null) {
-                    force.consumeReject()
-                } else {
-                    gateReject
-                },
+                kickReject = kickReject,
                 kickDiagnostics = edgeResult?.diagnostics,
                 sourceFps = edgeInput?.sourceFps ?: 0f,
             )

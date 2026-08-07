@@ -1,6 +1,8 @@
 package com.sentinelmesh.gesturefootball
 
 import android.Manifest
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -14,6 +16,8 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import android.view.View
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.view.inputmethod.EditorInfo
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
@@ -27,6 +31,7 @@ import com.sentinelmesh.gesturefootball.calibrate.CalibrationSession
 import com.sentinelmesh.gesturefootball.databinding.ActivityMainBinding
 import com.sentinelmesh.gesturefootball.debug.ScreenRecordService
 import com.sentinelmesh.gesturefootball.forcepose.ForcePoseEngine
+import com.sentinelmesh.gesturefootball.forcepose.HandThrowEngine
 import com.sentinelmesh.gesturefootball.net.GameClient
 import com.sentinelmesh.gesturefootball.pose.EdgeKickEngine
 import com.sentinelmesh.gesturefootball.pose.PoseAnalyzer
@@ -67,6 +72,9 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private var calib: CalibrationSession? = null
     private var profile: PlayerProfile? = null
     private var pendingCalibKick: ForcePoseEngine.KickEvent? = null
+    private var pendingSport: String = PlayerProfile.SPORT_FOOTBALL
+    private var pickingSport = false
+    private var hostSport: String = PlayerProfile.SPORT_FOOTBALL
 
     private var lastAsrMs: Long = -1
     private var lastLlmMs: Long = -1
@@ -195,15 +203,28 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         }
 
         profile = PlayerProfileStore.load(this)
-        profile?.let { pose?.applyProfile(it) }
+        profile?.let {
+            pendingSport = it.sport
+            hostSport = it.sport
+            pose?.applyProfile(it)
+        }
         qwen = QwenCoach(this).also { it.setProfile(profile) }
         updateProfileHint()
         refreshNeuralLoad()
         mainHandler.post(telemTick)
 
-        binding.calibBtn.setOnClickListener { startCalibration() }
+        binding.calibBtn.setOnClickListener { beginCalibrationFlow() }
         binding.calibration.calibNext.setOnClickListener { onCalibNext() }
         binding.calibration.calibSkip.setOnClickListener { onCalibSkip() }
+        binding.sportFootball.setOnClickListener {
+            onSportChosen(PlayerProfile.SPORT_FOOTBALL)
+        }
+        binding.sportDarts.setOnClickListener {
+            onSportChosen(PlayerProfile.SPORT_DARTS)
+        }
+        binding.sportBasketball.setOnClickListener {
+            onSportChosen(PlayerProfile.SPORT_BASKETBALL)
+        }
 
         binding.recBtn.setOnClickListener { toggleScreenRec() }
         ScreenRecordService.onStatus = { msg ->
@@ -223,7 +244,11 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         updateHostPill(connected = false)
         applyChromeForMode()
 
-        if (profile == null) startCalibration()
+        if (profile == null) {
+            showOnboarding(thenPickSport = true)
+        } else {
+            showOnboarding(thenPickSport = false)
+        }
         mainHandler.post(remoteHealthCheck)
 
         val need = mutableListOf<String>()
@@ -668,12 +693,101 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         if (p == null) {
             binding.hint.text = "Calibrate once — private profile on this phone."
         } else if (!calibrating) {
+            val limb = if (p.usesHandThrow) "${p.dominantFoot} hand" else "${p.dominantFoot} foot"
             binding.hint.text =
-                "Profile · ${p.weightKg.roundToInt()} kg · torso ${"%.2f".format(p.torsoM)} m · ${p.dominantFoot} foot"
+                "${p.sport.uppercase()} · ${p.weightKg.roundToInt()} kg · torso ${"%.2f".format(p.torsoM)} m · $limb"
         }
     }
 
-    private fun startCalibration() {
+    private fun beginCalibrationFlow() {
+        val phase = lastPhase
+        if (phase in listOf("announce", "countdown", "shoot", "resolve")) {
+            coach?.speak("Finish the match first.")
+            binding.hint.text = "Finish the match first — then recalibrate."
+            vibrate(40)
+            return
+        }
+        showSportPicker()
+    }
+
+    private fun showOnboarding(thenPickSport: Boolean) {
+        binding.onboarding.visibility = View.VISIBLE
+        binding.splashPane.visibility = View.VISIBLE
+        binding.sportPane.visibility = View.GONE
+        pickingSport = false
+        binding.splashMark.alpha = 0f
+        binding.splashTitle.alpha = 0f
+        binding.splashTag.alpha = 0f
+        binding.splashMark.scaleX = 0.6f
+        binding.splashMark.scaleY = 0.6f
+        binding.splashTitle.translationY = 24f
+        val markIn = AnimatorSet().apply {
+            playTogether(
+                ObjectAnimator.ofFloat(binding.splashMark, View.ALPHA, 0f, 1f),
+                ObjectAnimator.ofFloat(binding.splashMark, View.SCALE_X, 0.6f, 1f),
+                ObjectAnimator.ofFloat(binding.splashMark, View.SCALE_Y, 0.6f, 1f),
+            )
+            duration = 700
+            interpolator = OvershootInterpolator(1.2f)
+        }
+        val titleIn = AnimatorSet().apply {
+            playTogether(
+                ObjectAnimator.ofFloat(binding.splashTitle, View.ALPHA, 0f, 1f),
+                ObjectAnimator.ofFloat(binding.splashTitle, View.TRANSLATION_Y, 24f, 0f),
+                ObjectAnimator.ofFloat(binding.splashTag, View.ALPHA, 0f, 1f),
+            )
+            duration = 550
+            interpolator = AccelerateDecelerateInterpolator()
+            startDelay = 180
+        }
+        markIn.start()
+        titleIn.start()
+        mainHandler.postDelayed({
+            if (thenPickSport) {
+                showSportPicker()
+            } else {
+                hideOnboarding()
+                syncSportToHost()
+            }
+        }, if (thenPickSport) 1600L else 1100L)
+    }
+
+    private fun showSportPicker() {
+        binding.onboarding.visibility = View.VISIBLE
+        binding.splashPane.visibility = View.GONE
+        binding.sportPane.visibility = View.VISIBLE
+        binding.sportPane.alpha = 0f
+        ObjectAnimator.ofFloat(binding.sportPane, View.ALPHA, 0f, 1f).apply {
+            duration = 320
+            start()
+        }
+        pickingSport = true
+        coach?.speak("Choose your game.")
+        binding.hint.text = "Pick football, darts, or basketball"
+    }
+
+    private fun hideOnboarding() {
+        binding.onboarding.visibility = View.GONE
+        binding.splashPane.visibility = View.GONE
+        binding.sportPane.visibility = View.GONE
+        pickingSport = false
+    }
+
+    private fun onSportChosen(sport: String) {
+        pendingSport = PlayerProfile.normalizeSport(sport)
+        pose?.setSport(pendingSport)
+        hideOnboarding()
+        vibrate(35)
+        syncSportToHost()
+        startCalibration(pendingSport)
+    }
+
+    private fun syncSportToHost() {
+        val sport = profile?.sport ?: pendingSport
+        if (hostConnected) game.sendSport(sport)
+    }
+
+    private fun startCalibration(sport: String = pendingSport) {
         // Don't open calibration mid-match — wait-forever shoot would hang.
         val phase = lastPhase
         if (phase in listOf("announce", "countdown", "shoot", "resolve")) {
@@ -683,7 +797,9 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             return
         }
         calibrating = true
-        calib = CalibrationSession()
+        pendingSport = PlayerProfile.normalizeSport(sport)
+        calib = CalibrationSession(pendingSport)
+        pose?.setSport(pendingSport)
         pendingCalibKick = null
         pose?.calibrationSwing = false
         lastCalibVoice = ""
@@ -702,14 +818,18 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 calibrated.copy(
                     kickMs = profile?.kickMs ?: calibrated.kickMs,
                     unoQKickMs = calibrated.kickMs,
+                    throwMs = calibrated.throwMs ?: profile?.throwMs,
                 )
             } else {
                 calibrated.copy(unoQKickMs = profile?.unoQKickMs)
             }
             PlayerProfileStore.save(this, p)
             profile = p
+            pendingSport = p.sport
+            hostSport = p.sport
             pose?.applyProfile(p)
             qwen?.setProfile(p)
+            syncSportToHost()
             vibrate(80)
         }
         calibrating = false
@@ -723,6 +843,30 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         if (lastPhase == null || lastPhase == "lobby") {
             binding.big.text = "READY?"
             promptReadyToStart()
+        }
+    }
+
+    private fun activeSport(): String {
+        if (calibrating) return calib?.sport ?: pendingSport
+        // Live match follows the TV host; lobby / idle follow the phone profile.
+        return if (lastPhase != null && lastPhase != "lobby") {
+            hostSport
+        } else {
+            profile?.sport ?: pendingSport
+        }
+    }
+
+    private fun activeHandSport(): Boolean = PlayerProfile.isHandSport(activeSport())
+
+    private fun releaseVerb(bang: Boolean = false): String {
+        val sport = activeSport()
+        return when {
+            sport == PlayerProfile.SPORT_BASKETBALL && bang -> "SHOOT!"
+            PlayerProfile.isHandSport(sport) && bang -> "THROW!"
+            bang -> "KICK!"
+            sport == PlayerProfile.SPORT_BASKETBALL -> "SHOT"
+            PlayerProfile.isHandSport(sport) -> "THROW"
+            else -> "KICK"
         }
     }
 
@@ -804,12 +948,21 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             }
             ui.step == CalibrationSession.Step.PRACTICE -> {
                 pose?.calibrationSwing = true
-                pose?.setKickThreshold(1.5f)
+                pose?.setSport(calib?.sport ?: pendingSport)
+                pose?.setKickThreshold(
+                    if (ui.usesHandThrow) HandThrowEngine.PRACTICE_FLOOR_MS
+                    else ForcePoseEngine.PRACTICE_FLOOR_MS
+                )
                 showStartOver()
-                panel.calibNext.text = if (ui.canFinishSwing) getString(R.string.calib_confirm_swing) else "SWING…"
+                panel.calibNext.text = when {
+                    ui.canFinishSwing && ui.usesHandThrow -> getString(R.string.calib_confirm_throw)
+                    ui.canFinishSwing -> getString(R.string.calib_confirm_swing)
+                    ui.usesHandThrow -> "THROW…"
+                    else -> "SWING…"
+                }
                 panel.calibNext.isEnabled = ui.canFinishSwing
                 panel.calibNext.alpha = if (ui.canFinishSwing) 1f else 0.45f
-                binding.big.text = "KICK ${ui.swingIndex + 1}/${ui.swingTotal}"
+                binding.big.text = "${releaseVerb()} ${ui.swingIndex + 1}/${ui.swingTotal}"
                 binding.hint.text = ui.hint
             }
             ui.step == CalibrationSession.Step.DONE -> {
@@ -861,7 +1014,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private fun onCalibSkip() {
         if (!calibrating) return
         coach?.speak("Starting over.")
-        startCalibration()
+        finishCalibration(save = false)
+        showSportPicker()
     }
 
     /** Voice "skip" still advances aim/tpose without a full restart. */
@@ -879,7 +1033,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 session.skipAimDefaults()
                 refreshCalibUi()
             }
-            CalibrationSession.Step.PRACTICE -> startCalibration()
+            CalibrationSession.Step.PRACTICE -> {
+                finishCalibration(save = false)
+                showSportPicker()
+            }
             else -> Unit
         }
     }
@@ -1027,11 +1184,19 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             return
         }
 
-        // Foot-only kicks: surface soft/short coaching during shoot (never "hand").
+        // Release coaching during shoot — limb depends on sport.
         if (lastPhase == "shoot" && !hintHeldByHost()) {
             when (hud.kickReject) {
-                "soft" -> binding.hint.text = "Harder — swing through the ball"
-                "short" -> binding.hint.text = "Follow through — kick the ball"
+                "soft" -> binding.hint.text = if (activeHandSport()) {
+                    "Harder — snap the throw"
+                } else {
+                    "Harder — swing through the ball"
+                }
+                "short" -> binding.hint.text = if (activeHandSport()) {
+                    "Follow through — throw toward the target"
+                } else {
+                    "Follow through — kick the ball"
+                }
             }
         }
 
@@ -1059,7 +1224,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private fun handleKick(kick: ForcePoseEngine.KickEvent) {
         if (calibrating) {
             pendingCalibKick = kick
-            binding.big.text = "SWING ${kick.forceN} N"
+            binding.big.text = "${releaseVerb()} ${kick.forceN} N"
             vibrate(100)
             return
         }
@@ -1152,16 +1317,24 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 if (connected) R.drawable.led_on else R.drawable.led_off
             )
             updateHostPill(connected)
+            if (connected) syncSportToHost()
         }
     }
 
     override fun onState(state: GameClient.MatchState) {
         mainHandler.post {
+            hostSport = PlayerProfile.normalizeSport(state.sport)
             if (calibrating) {
                 lastPhase = state.phase
                 return@post
             }
             pose?.phase = state.phase
+            // Prefer host sport during a live match; profile wins in lobby.
+            if (state.phase != "lobby") {
+                pose?.setSport(hostSport)
+            } else {
+                pose?.setSport(profile?.sport ?: pendingSport)
+            }
             binding.big.setTextColor(ContextCompat.getColor(this, R.color.chalk))
             val holdHint = hintHeldByHost()
             when (state.phase) {
@@ -1174,32 +1347,55 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 }
                 "announce" -> {
                     lockedAimZone = null
-                    binding.big.text = "KICK ${state.kick}/${state.kicksTotal}"
+                    hostSport = PlayerProfile.normalizeSport(state.sport)
+                    binding.big.text = "${releaseVerb()} ${state.kick}/${state.kicksTotal}"
                     if (!holdHint) binding.hint.text = "Aim with your hand"
                     showForceChip = false
                     refreshAiChip()
                     if (lastPhase != "announce") {
-                        coach?.speak("Kick ${state.kick} of ${state.kicksTotal}. Pick a corner.")
+                        coach?.speak(
+                            if (activeHandSport()) {
+                                "Throw ${state.kick} of ${state.kicksTotal}. Aim, then throw."
+                            } else {
+                                "Kick ${state.kick} of ${state.kicksTotal}. Pick a corner."
+                            }
+                        )
                     }
                 }
                 "countdown" -> {
                     lockedAimZone = null
-                    binding.big.text = ceil(state.timerMs / 1000.0).toInt().toString()
-                    if (!holdHint) binding.hint.text = "Feint… switch late"
+                    hostSport = PlayerProfile.normalizeSport(state.sport)
+                    val n = ceil(state.timerMs / 1000.0).toInt().coerceAtLeast(1)
+                    binding.big.text = n.toString()
+                    if (!holdHint) {
+                        binding.hint.text = if (activeHandSport()) {
+                            "$n… get ready to throw"
+                        } else {
+                            "Feint… switch late"
+                        }
+                    }
                     if (lastPhase != "countdown") {
                         vibrate(30)
-                        coach?.speak("Ready")
+                        coach?.speak(if (activeHandSport()) "Three, two, one, throw" else "Ready")
                     }
                 }
                 "shoot" -> {
-                    binding.big.text = "KICK!"
-                    if (!holdHint) binding.hint.text = "Swing when ready — aim locked"
+                    hostSport = PlayerProfile.normalizeSport(state.sport)
+                    binding.big.text = releaseVerb(bang = true)
+                    if (!holdHint) {
+                        binding.hint.text = if (activeHandSport()) {
+                            "Throw when ready — aim locked"
+                        } else {
+                            "Swing when ready — aim locked"
+                        }
+                    }
                     showForceChip = true
                     refreshAiChip()
                     if (lastPhase != "shoot") {
                         lockedAimZone = pose?.zone ?: "C"
                         setZone(lockedAimZone!!)
                         vibrateBurst()
+                        if (activeHandSport()) coach?.speak("Throw!")
                     }
                 }
                 "resolve" -> {
@@ -1207,14 +1403,16 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     val r = state.lastResult
                     binding.big.text = when (r) {
                         "goal" -> "GOAL!"
+                        "hit" -> "HIT!"
                         "save" -> "SAVED!"
                         "post" -> "POST!"
+                        "miss", "wide" -> "MISS!"
                         else -> "SKIED!"
                     }
                     binding.big.setTextColor(
                         ContextCompat.getColor(
                             this,
-                            if (r == "goal") R.color.amber else R.color.red
+                            if (r == "goal" || r == "hit") R.color.amber else R.color.red
                         )
                     )
                     val f = state.lastForce

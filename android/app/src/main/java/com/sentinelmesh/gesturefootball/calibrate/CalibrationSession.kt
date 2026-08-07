@@ -1,6 +1,7 @@
 package com.sentinelmesh.gesturefootball.calibrate
 
 import com.sentinelmesh.gesturefootball.forcepose.ForcePoseEngine
+import com.sentinelmesh.gesturefootball.forcepose.HandThrowEngine
 import com.sentinelmesh.gesturefootball.pose.BodyGuide
 import com.sentinelmesh.gesturefootball.pose.PoseAnalyzer
 import com.sentinelmesh.gesturefootball.profile.PlayerProfile
@@ -13,11 +14,14 @@ import kotlin.math.min
  * Conversational on-device calibration.
  *
  * Flow: biometrics → (wait ready) T-pose → (wait) aim L/C/R → (wait) 3 practice
- * swings → done. Each capture stage arms only after a spoken READY/NEXT, and
- * never auto-accepts a wrong pose — the coach tells the player exactly what
- * to fix until the hold fills.
+ * releases → done. Practice is sport-specific: football = leg kicks;
+ * darts/basketball = hand throws. Shared steps stay identical.
  */
-class CalibrationSession {
+class CalibrationSession(
+    sport: String = PlayerProfile.SPORT_FOOTBALL,
+) {
+    val sport: String = PlayerProfile.normalizeSport(sport)
+    val usesHandThrow: Boolean = PlayerProfile.isHandSport(this.sport)
 
     enum class Step {
         BIOMETRICS,
@@ -43,6 +47,7 @@ class CalibrationSession {
         val waitingConfirm: Boolean = false,
         val swingIndex: Int = 0,
         val swingTotal: Int = PRACTICE_SWINGS,
+        val usesHandThrow: Boolean = false,
     )
 
     var step: Step = Step.BIOMETRICS
@@ -53,6 +58,7 @@ class CalibrationSession {
 
     private var torsoM: Float = PlayerProfile.torsoMetresFromHeight(175f)
     private var kickMs: Float = ForcePoseEngine.FLOOR_MS
+    private var throwMs: Float = HandThrowEngine.DEFAULT_THROW_MS
     private var dominantFoot: String = "R"
 
     private var aimLMax: Float = 0.34f
@@ -123,19 +129,63 @@ class CalibrationSession {
             readyVoice = "Centre locked. Now your right corner, above your shoulder, and hold.",
         )
         Step.PRACTICE -> practiceUi()
-        Step.DONE -> Ui(
-            Step.DONE,
-            "PROFILE SAVED",
-            "Private biomechanics ready. ${"%.0f".format(weightKg)} kg · " +
-                "torso ${"%.2f".format(torsoM)} m · kick ≥ ${"%.1f".format(kickMs)} m/s · $dominantFoot",
-            1f,
-            showBiometrics = false,
-            voice = "Calibration complete.",
-        )
+        Step.DONE -> {
+            val release = if (usesHandThrow) {
+                "throw ≥ ${"%.1f".format(throwMs)} m/s · $dominantFoot hand"
+            } else {
+                "kick ≥ ${"%.1f".format(kickMs)} m/s · $dominantFoot foot"
+            }
+            Ui(
+                Step.DONE,
+                "PROFILE SAVED",
+                "${sport.uppercase()} ready. ${"%.0f".format(weightKg)} kg · " +
+                    "torso ${"%.2f".format(torsoM)} m · $release",
+                1f,
+                showBiometrics = false,
+                voice = "Calibration complete.",
+                usesHandThrow = usesHandThrow,
+            )
+        }
     }
 
     private fun practiceUi(): Ui {
         val n = swingPeaks.size
+        if (usesHandThrow) {
+            val target = when (sport) {
+                PlayerProfile.SPORT_BASKETBALL -> "the hoop"
+                else -> "the board"
+            }
+            if (waitingConfirm) {
+                return Ui(
+                    Step.PRACTICE,
+                    "PRACTICE THROW",
+                    "Say ready when you are set for throw ${n + 1} of $PRACTICE_SWINGS.",
+                    progress = n / PRACTICE_SWINGS.toFloat(),
+                    showBiometrics = false,
+                    waitingConfirm = true,
+                    swingIndex = n,
+                    voice = "Ready for practice throws? Say ready, then throw $PRACTICE_SWINGS times with your hand toward $target.",
+                    usesHandThrow = true,
+                )
+            }
+            val rejectHint = when (lastKickReject) {
+                "soft" -> "Harder — snap the throw like you mean it."
+                "short" -> "Follow through — throw toward $target, don't just tap."
+                else -> null
+            }
+            return Ui(
+                Step.PRACTICE,
+                "THROW ${n + 1} OF $PRACTICE_SWINGS",
+                rejectHint ?: "Aim with your hand, then throw hard toward $target — ${n + 1} of $PRACTICE_SWINGS.",
+                progress = n / PRACTICE_SWINGS.toFloat(),
+                showBiometrics = false,
+                canFinishSwing = n >= PRACTICE_SWINGS,
+                swingIndex = n,
+                voice = rejectHint
+                    ?: "Throw hard toward $target. Throw ${n + 1} of $PRACTICE_SWINGS.",
+                usesHandThrow = true,
+            )
+        }
         if (waitingConfirm) {
             return Ui(
                 Step.PRACTICE,
@@ -146,6 +196,7 @@ class CalibrationSession {
                 waitingConfirm = true,
                 swingIndex = n,
                 voice = "Ready for practice kicks? Say ready, then swing $PRACTICE_SWINGS times. Hands don't matter — kick with your leg.",
+                usesHandThrow = false,
             )
         }
         val rejectHint = when (lastKickReject) {
@@ -163,6 +214,7 @@ class CalibrationSession {
             swingIndex = n,
             voice = rejectHint
                 ?: "Kick the real ball hard. Swing ${n + 1} of $PRACTICE_SWINGS.",
+            usesHandThrow = false,
         )
     }
 
@@ -271,7 +323,9 @@ class CalibrationSession {
         weightKg = weightKg,
         torsoM = torsoM,
         kickMs = kickMs,
+        throwMs = if (usesHandThrow) throwMs else null,
         dominantFoot = dominantFoot,
+        sport = sport,
         aimLMax = aimLMax,
         aimCMin = aimCMin,
         aimCMax = aimCMax,
@@ -464,8 +518,15 @@ class CalibrationSession {
         if (swingPeaks.isEmpty()) return
         val sorted = swingPeaks.sorted()
         val median = sorted[sorted.size / 2]
-        // Threshold ≈ 55% of median hard swing; never below the engine floor.
-        kickMs = max(ForcePoseEngine.FLOOR_MS, median * 0.55f)
+        // Threshold ≈ 55% of median hard release; never below the engine floor.
+        if (usesHandThrow) {
+            throwMs = max(HandThrowEngine.FLOOR_MS, median * 0.55f)
+            // Keep a sane football kick floor if they later switch sports.
+            kickMs = ForcePoseEngine.FLOOR_MS
+        } else {
+            kickMs = max(ForcePoseEngine.FLOOR_MS, median * 0.55f)
+            throwMs = HandThrowEngine.DEFAULT_THROW_MS
+        }
         dominantFoot = swingFeet.groupingBy { it }.eachCount()
             .maxByOrNull { it.value }?.key ?: "R"
         advance(Step.DONE)

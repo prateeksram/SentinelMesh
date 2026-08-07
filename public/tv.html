@@ -910,9 +910,15 @@ function onState(st){
       sub.textContent=st.line||(isTarget()
         ?"aim with your hand — the rings are waiting"
         :"aim with your hand — THE WALL is watching it"); break;
-    case "countdown":
-      big.textContent=Math.max(1,Math.ceil(st.timerMs/1000));
-      sub.textContent="…"; pop(); break;
+    case "countdown":{
+      const n=Math.max(1,Math.ceil(st.timerMs/1000));
+      big.textContent=n;
+      // 3-2-1 then sport release cue (THROW / SHOOT / KICK).
+      sub.textContent=isTarget()
+        ?`${n} — get ready to ${ACTION[SPORT()].verb.toLowerCase()}`
+        :`${n} — feint, then ${ACTION[SPORT()].verb.toLowerCase()}`;
+      pop(); break;
+    }
     case "shoot":
       big.textContent=ACTION[SPORT()].bang; big.className="goal";
       sub.textContent=ACTION[SPORT()].hint;

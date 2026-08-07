@@ -76,6 +76,7 @@ class GameClient(
         val timerMs: Int,
         val lastForce: Int?,
         val lastResult: String?,
+        val sport: String = "football",
         val raw: JSONObject,
     )
 
@@ -142,6 +143,7 @@ class GameClient(
                             kicksTotal = o.optInt("kicksTotal", 5),
                             score = o.optInt("score", 0),
                             line = o.optString("line", ""),
+                            sport = o.optString("sport", "football"),
                             timerMs = o.optInt("timerMs", 0),
                             lastForce = last?.optInt("force"),
                             lastResult = last?.optString("result"),
@@ -250,6 +252,16 @@ class GameClient(
     /** Ask the server to start the match (works while it's in the lobby). */
     fun sendStart() {
         ws?.send(JSONObject().put("type", "start").toString())
+    }
+
+    /** Lobby-only sport select (football | darts | basketball). */
+    fun sendSport(sport: String) {
+        ws?.send(
+            JSONObject()
+                .put("type", "sport")
+                .put("sport", sport)
+                .toString()
+        )
     }
 
     fun sendKick(

@@ -13,4 +13,12 @@
     <string name="calib_start_over">START OVER</string>
     <string name="calib_done">PLAY</string>
     <string name="calib_confirm_swing">USE THIS SWING</string>
+    <string name="calib_confirm_throw">USE THIS THROW</string>
+    <string name="splash_title">QPlay</string>
+    <string name="splash_tag">PLAY ANYWHERE</string>
+    <string name="choose_sport">CHOOSE YOUR GAME</string>
+    <string name="choose_sport_hint">Calibrate once, then practice your release</string>
+    <string name="sport_football">FOOTBALL · LEG KICK</string>
+    <string name="sport_darts">DARTS · HAND THROW</string>
+    <string name="sport_basketball">BASKETBALL · HAND THROW</string>
 </resources>
