@@ -66,7 +66,7 @@ class ReportWeb:
             headers={
                 "Cache-Control": "private, no-store",
                 "Content-Disposition": (
-                    f'{disposition}; filename="gesture-football-report.{extension}"'
+                    f'{disposition}; filename="qplay-report.{extension}"'
                 ),
             },
         )
@@ -127,7 +127,7 @@ class ReportWeb:
 def _landing_html(token: str, nickname: str, rate: str, force: str) -> str:
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{nickname} - Gesture Football</title>
+<title>{nickname} - QPlay</title>
 <style>
 *{{box-sizing:border-box}}body{{margin:0;background:#06111a;color:#f4f7f1;font-family:system-ui,sans-serif}}
 main{{width:min(720px,100%);margin:auto;padding:24px}}.tag{{color:#3ec7f4;font-weight:800;letter-spacing:2px}}
@@ -138,7 +138,7 @@ small{{display:block;color:#7890a2;line-height:1.5;margin:16px 0 40px}}
 </style></head><body><main><div class="tag">SNAPDRAGON MULTIVERSE - AI100 MATCH LAB</div>
 <h1>{nickname}</h1><p>Your private post-match scouting card is ready.</p>
 <div class="stats"><b>{rate}% conversion</b><b>{force} N max force</b></div>
-<img src="/report/{token}.png" alt="Gesture Football post-match report">
+<img src="/report/{token}.png" alt="QPlay post-match report">
 <div class="buttons"><a href="/report/{token}.png?download=1">Download PNG</a><a href="/report/{token}.pdf?download=1">Download PDF</a></div>
 <small>For fun, not a professional scouting assessment. The game sample and career penalty benchmarks are different sample sizes. Report assets expire after 30 minutes.</small>
 </main></body></html>"""

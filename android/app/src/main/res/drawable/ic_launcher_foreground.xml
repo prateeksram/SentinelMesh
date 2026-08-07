@@ -4,13 +4,20 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#FFC400"
-        android:pathData="M54,30a24,24 0 1,0 0.1,0z" />
+    <!-- Adaptive-icon safe Q monogram — Qualcomm blue #3253DC -->
     <path
         android:fillColor="#0B1D2A"
-        android:pathData="M54,38a16,16 0 1,0 0.1,0z" />
+        android:pathData="M54,22a32,32 0 1,0 0.1,0z" />
     <path
-        android:fillColor="#F4F7F1"
-        android:pathData="M46,48h16v4h-16zM50,52h8v14h-8z" />
+        android:fillColor="#3253DC"
+        android:pathData="M54,26c15.46,0 28,12.54 28,28s-12.54,28 -28,28 -28,-12.54 -28,-28 12.54,-28 28,-28zM54,34c-11.05,0 -20,8.95 -20,20s8.95,20 20,20 20,-8.95 20,-20 -8.95,-20 -20,-20z" />
+    <path
+        android:fillColor="#07131C"
+        android:pathData="M54,42a12,12 0 1,0 0.1,0z" />
+    <path
+        android:fillColor="#5B78F0"
+        android:pathData="M62,66 L78,82 L72,86 L58,70 Z" />
+    <path
+        android:fillColor="#3253DC"
+        android:pathData="M66,68 L84,68 L78,82 Z" />
 </vector>

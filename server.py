@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GESTURE FOOTBALL — solo edition (laptop host)
+QPlay — solo edition (laptop host)
 =============================================
 One human striker versus THE WALL, an AI goalkeeper.
 
@@ -1181,7 +1181,7 @@ async def main():
         print("HTTPS :  https://0.0.0.0:8443  (use this for the phone camera)")
     else:
         print("No cert.pem/key.pem — HTTPS off. Phone cameras off-localhost need it:")
-        print('  openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 365 -subj "/CN=gesture-football"')
+        print('  openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 365 -subj "/CN=qplay"')
 
     desk = game.desk
     if desk.mode == "geniex":

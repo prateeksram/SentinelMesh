@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 120" role="img" aria-label="QPlay">
+  <defs>
+    <linearGradient id="qRing" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5B78F0"/>
+      <stop offset="55%" stop-color="#3253DC"/>
+      <stop offset="100%" stop-color="#243FBF"/>
+    </linearGradient>
+    <linearGradient id="qTail" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7B93F5"/>
+      <stop offset="100%" stop-color="#3253DC"/>
+    </linearGradient>
+  </defs>
+  <!-- Mark: Q monogram -->
+  <g transform="translate(4,8)">
+    <circle cx="52" cy="52" r="46" fill="#0B1D2A"/>
+    <circle cx="52" cy="52" r="38" fill="none" stroke="url(#qRing)" stroke-width="12"/>
+    <circle cx="52" cy="52" r="22" fill="#07131C"/>
+    <path d="M66 74 L92 100 L82 105 L60 80 Z" fill="url(#qTail)"/>
+    <path d="M72 78 L102 78 L92 100 Z" fill="url(#qTail)" opacity=".9"/>
+  </g>
+  <!-- Wordmark -->
+  <text x="122" y="82" font-family="'Arial Black','Archivo Black',Impact,'Segoe UI Black',sans-serif"
+        font-size="64" font-weight="900" letter-spacing="-1.5">
+    <tspan fill="#3253DC">Q</tspan><tspan fill="#F4F7F1">Play</tspan>
+  </text>
+</svg>

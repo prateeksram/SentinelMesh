@@ -78,7 +78,7 @@ class ScreenRecordService : Service() {
         )
         val n: Notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.presence_video_online)
-            .setContentTitle("Gesture Football")
+            .setContentTitle("QPlay")
             .setContentText("Recording the app screen for debugging")
             .setOngoing(true)
             .build()

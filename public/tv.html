@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Gesture Football — Stadium</title>
+<title>QPlay — Stadium</title>
 <style>
   :root{--night:#0B1D2A;--ink:#07131C;--chalk:#F4F7F1;--mut:#9db4c6;
         --amber:#FFC400;--cyan:#3EC7F4;--red:#FF4438;--green:#3ddc74;
@@ -18,14 +18,22 @@
   /* ---------------- full-bleed stadium canvas ---------------- */
   #pitch{position:fixed;inset:0;width:100vw;height:100vh;display:block}
 
-  /* ---------------- broadcast bug ---------------- */
-  .livebug{position:fixed;top:14px;left:16px;z-index:6;display:flex;align-items:center;gap:9px;
-           font-family:var(--fCond);font-weight:700;letter-spacing:2.5px;font-size:13px;
+  /* ---------------- top-left brand ---------------- */
+  .brandbug{position:fixed;top:12px;left:12px;z-index:6;display:flex;align-items:center;
+            padding:3px 8px;border-radius:6px;
+            background:linear-gradient(180deg,rgba(10,20,30,.88),rgba(5,11,18,.9));
+            border:1px solid rgba(158,190,215,.28);box-shadow:0 4px 12px rgba(0,0,0,.4)}
+  .brandbug .qplay-logo{height:clamp(18px,2.1vw,24px);width:auto;display:block}
+
+  /* ---------------- LIVE mode bug (above waiting / sub line) ---------------- */
+  .livebug{display:inline-flex;align-items:center;gap:6px;margin:0 auto;
+           font-family:var(--fCond);font-weight:700;letter-spacing:1.5px;font-size:11px;
            background:linear-gradient(180deg,rgba(10,20,30,.85),rgba(5,11,18,.88));
-           border:1px solid rgba(158,190,215,.28);border-left:4px solid var(--red);
-           padding:7px 14px;border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.45)}
-  .livebug .reddot{width:8px;height:8px;border-radius:50%;background:var(--red);
-                   box-shadow:0 0 8px var(--red);animation:blink 1.1s infinite}
+           border:1px solid rgba(158,190,215,.28);border-left:3px solid var(--red);
+           padding:4px 10px;border-radius:5px;box-shadow:0 4px 12px rgba(0,0,0,.4)}
+  .livebug.hide{display:none}
+  .livebug .reddot{width:6px;height:6px;border-radius:50%;background:var(--red);
+                   box-shadow:0 0 6px var(--red);animation:blink 1.1s infinite}
   .livebug em{font-style:normal;color:var(--mut);margin-left:2px}
 
   /* ---------------- scorebug ---------------- */
@@ -64,10 +72,15 @@
   .overlay{position:absolute;inset:0;display:flex;flex-direction:column;
            align-items:center;justify-content:center;text-align:center;
            padding:0 4vw;transform:translateY(10vh)}
+  /* Lobby CTA under scoreboard — leave goal / keeper clear in midfield */
+  .overlay.lobby{justify-content:flex-start;transform:none;
+                 padding-top:92px;padding-bottom:0;gap:6px}
+  .overlay.lobby #sub,.overlay.lobby #startBtn,.overlay.lobby .sports{margin-top:0}
   #big{font-family:var(--fBlack);font-size:clamp(42px,8.6vw,124px);line-height:.95;letter-spacing:1px;
        color:#fff;
        text-shadow:0 3px 0 rgba(0,0,0,.4),0 12px 46px rgba(0,0,0,.8),0 0 90px rgba(62,199,244,.22);
        transition:transform .12s}
+  #big:empty{display:none}
   #big.goal{color:var(--amber);
        text-shadow:0 3px 0 rgba(90,60,0,.5),0 12px 46px rgba(0,0,0,.8),0 0 110px rgba(255,196,0,.5)}
   #big.save{color:var(--cyan);
@@ -75,26 +88,26 @@
   #big.warn{color:var(--red);
        text-shadow:0 3px 0 rgba(70,10,0,.5),0 12px 46px rgba(0,0,0,.8),0 0 110px rgba(255,68,56,.45)}
   #big.pop{transform:scale(1.12)}
-  #sub{margin-top:14px;font-family:var(--fCond);font-weight:700;letter-spacing:2px;
-       font-size:clamp(14px,2vw,22px);color:#e8f0f6;max-width:80vw;
+  #sub{margin-top:8px;font-family:var(--fCond);font-weight:700;letter-spacing:1.5px;
+       font-size:clamp(11px,1.3vw,14px);color:#e8f0f6;max-width:56vw;
        background:linear-gradient(180deg,rgba(8,16,25,.72),rgba(5,11,18,.78));
-       border:1px solid rgba(158,190,215,.25);border-radius:999px;padding:9px 22px;
-       box-shadow:0 8px 24px rgba(0,0,0,.45)}
+       border:1px solid rgba(158,190,215,.25);border-radius:999px;padding:5px 14px;
+       box-shadow:0 4px 14px rgba(0,0,0,.4)}
   #sub:empty{display:none}
-  #startBtn{pointer-events:auto;margin-top:28px;font-family:var(--fBlack);
-            font-size:clamp(20px,3vw,30px);letter-spacing:2px;color:var(--ink);
+  #startBtn{pointer-events:auto;margin-top:10px;font-family:var(--fBlack);
+            font-size:clamp(13px,1.6vw,17px);letter-spacing:1.5px;color:var(--ink);
             background:linear-gradient(180deg,#ffd54d,var(--amber));
-            border:none;border-radius:14px;padding:16px 46px;cursor:pointer;
-            box-shadow:0 8px 0 #b98d00,0 16px 40px rgba(0,0,0,.5);
+            border:none;border-radius:10px;padding:8px 22px;cursor:pointer;
+            box-shadow:0 4px 0 #b98d00,0 8px 20px rgba(0,0,0,.45);
             transition:transform .08s,box-shadow .08s}
-  #startBtn:active{transform:translateY(6px);box-shadow:0 2px 0 #b98d00,0 8px 24px rgba(0,0,0,.5)}
-  #startBtn:disabled{background:#31506a;color:#7d95a8;box-shadow:0 8px 0 #22374a;cursor:default}
+  #startBtn:active{transform:translateY(3px);box-shadow:0 1px 0 #b98d00,0 4px 12px rgba(0,0,0,.45)}
+  #startBtn:disabled{background:#31506a;color:#7d95a8;box-shadow:0 4px 0 #22374a;cursor:default}
   #startBtn.hide{display:none}
-  .sports{pointer-events:auto;margin-top:18px;display:flex;gap:10px}
+  .sports{pointer-events:auto;margin-top:8px;display:flex;gap:6px}
   .sports.hide{display:none}
-  .sports button{font-family:var(--fCond);font-weight:700;letter-spacing:2px;font-size:15px;
+  .sports button{font-family:var(--fCond);font-weight:700;letter-spacing:1.5px;font-size:12px;
                  color:var(--mut);background:rgba(10,22,34,.75);border:1px solid #2c4356;
-                 border-radius:999px;padding:9px 20px;cursor:pointer;transition:all .12s}
+                 border-radius:999px;padding:5px 12px;cursor:pointer;transition:all .12s}
   .sports button:hover{color:var(--chalk);border-color:#3f6383}
   .sports button.on{color:var(--ink);background:linear-gradient(180deg,#ffd54d,var(--amber));
                     border-color:var(--amber);font-weight:900}
@@ -154,7 +167,9 @@
 
 <canvas id="pitch" width="1280" height="720"></canvas>
 
-<div class="livebug"><span class="reddot"></span>LIVE<em>PENALTY SHOOTOUT</em></div>
+<div class="brandbug" aria-label="QPlay">
+  <img class="qplay-logo" src="/assets/qplay-logo.svg" alt="QPlay">
+</div>
 
 <div class="board">
   <div class="team you">
@@ -162,7 +177,7 @@
     <div class="score" id="sYou">0</div>
     <div class="dots" id="dYou"></div>
   </div>
-  <div class="mid"><b id="midTop">LOBBY</b><span id="midBot">GESTURE FOOTBALL</span></div>
+  <div class="mid"><b id="midTop">LOBBY</b><span id="midBot">QPlay</span></div>
   <div class="team right wall">
     <div class="tname">THE&nbsp;WALL<small>AI&nbsp;KEEPER</small></div>
     <div class="score" id="sWall">0</div>
@@ -171,8 +186,9 @@
 </div>
 
 <div class="stage">
-  <div class="overlay">
-    <div id="big">GESTURE FOOTBALL</div>
+  <div class="overlay lobby">
+    <div id="big"></div>
+    <div class="livebug" id="livebug"><span class="reddot"></span>LIVE<em>PENALTY SHOOTOUT</em></div>
     <div id="sub">waiting for the striker…</div>
     <div id="reportLine"></div>
     <button id="startBtn" disabled>START MATCH</button>
@@ -461,9 +477,11 @@ function onState(st){
   $("midTop").textContent = st.phase==="lobby"?"LOBBY":st.phase==="end"?"FULL TIME"
     :st.phase==="generating"?"NEXT VENUE":SPORT_LABEL[SPORT()];
   $("midBot").textContent = st.phase==="end"||st.phase==="lobby"||st.phase==="generating"
-    ?(st.level>1?`LEVEL ${st.level}`:"GESTURE ARENA")
+    ?(st.level>1?`LEVEL ${st.level}`:"QPlay")
     :`${ACTION[SPORT()].verb} ${st.kick} OF ${st.kicksTotal}`;
-  document.querySelector(".livebug em").textContent=ACTION[SPORT()].live;
+  const liveEm=document.querySelector("#livebug em");
+  if(liveEm) liveEm.textContent=ACTION[SPORT()].live;
+  $("livebug").classList.toggle("hide", !(st.phase==="lobby" || st.phase==="announce" || st.phase==="countdown"));
 
   $("ledP").classList.toggle("on",!!st.connected?.phone);
   $("ledU").classList.toggle("on",!!st.connected?.unoq);
@@ -487,7 +505,9 @@ function onState(st){
 
   const big=$("big"), sub=$("sub"), btn=$("startBtn"), abort=$("abortBtn");
   const report=$("reportLine"), genWrap=$("genBarWrap"), genBar=$("genBar"), genMeta=$("genMeta");
+  const overlay=document.querySelector(".overlay");
   big.className=""; btn.classList.add("hide");
+  if(overlay) overlay.classList.toggle("lobby", st.phase==="lobby");
   report.classList.remove("show"); report.textContent="";
   genWrap.classList.remove("show"); genMeta.classList.remove("show");
   // END MATCH visible for any live / full-time phase (not lobby).
@@ -495,10 +515,10 @@ function onState(st){
   if(st.phase!=="lobby"){ abort.disabled=false; abort.textContent="END MATCH"; }
   switch(st.phase){
     case "lobby":
-      big.textContent=SPORT()==="football"?"GESTURE FOOTBALL":"GESTURE "+SPORT().toUpperCase();
+      big.textContent="";
       sub.textContent=strikerOn(st)
         ?(isTarget()?"striker ready — rings are live":"striker ready — THE WALL awaits")
-        :"waiting for the striker (phone or UNO Q)…";
+        :"waiting for the striker…";
       btn.classList.remove("hide"); btn.disabled=!strikerOn(st);
       btn.textContent="START MATCH"; break;
     case "announce":
