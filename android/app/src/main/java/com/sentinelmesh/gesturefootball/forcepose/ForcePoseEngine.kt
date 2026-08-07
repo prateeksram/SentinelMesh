@@ -1,8 +1,8 @@
 package com.sentinelmesh.gesturefootball.forcepose
 
-import com.sentinelmesh.gesturefootball.profile.PlayerProfile
 import com.sentinelmesh.gesturefootball.pose.KickKinematicState
 import com.sentinelmesh.gesturefootball.pose.ShotTrajectory
+import com.sentinelmesh.gesturefootball.profile.PlayerProfile
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot

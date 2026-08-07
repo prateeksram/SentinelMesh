@@ -186,7 +186,10 @@
   .telem-block{margin-top:4px;padding-top:10px;border-top:1px solid #1c374c;
                display:flex;flex-direction:column;gap:5px}
   .telem-block .telem-h{font-size:10px;letter-spacing:2px;color:var(--amber);
-                        margin-bottom:2px}
+                        margin-bottom:2px;display:flex;align-items:center;gap:8px}
+  .telem-block .telem-h select{font:inherit;font-size:10px;letter-spacing:1.5px;
+    color:var(--amber);background:#142636;border:1px solid #31506a;border-radius:4px;
+    padding:2px 6px;cursor:pointer;text-transform:uppercase}
   .telem-block .telem-row{display:flex;justify-content:space-between;gap:8px;
                           font-size:11px;letter-spacing:1px;color:var(--mut);
                           font-variant-numeric:tabular-nums}
@@ -307,13 +310,20 @@
       <span><span class="led" id="ledP"></span>PHONE</span>
       <span><span class="led" id="ledU"></span>UNO Q</span>
       <span id="levelBadge" title="Campaign level">LVL —</span>
-      <div class="telem-block" title="Laptop silicon telemetry (telem_state)">
-        <div class="telem-h">LAPTOP TELEM</div>
-        <div class="telem-row">CPU <b id="telemCpu">—</b></div>
-        <div class="telem-row">GPU <b id="telemGpu">—</b></div>
-        <div class="telem-row">NPU <b id="telemNpu">—</b></div>
-        <div class="telem-row">TV FPS <b id="telemFps">—</b></div>
-        <div class="telem-row">MSG/S <b id="telemMsg">—</b></div>
+      <div class="telem-block" title="Silicon telemetry (telem_state) — pick device">
+        <div class="telem-h">
+          <select id="telemDevice" aria-label="Telemetry device">
+            <option value="laptop">Laptop</option>
+            <option value="phone">Phone</option>
+            <option value="unoq">UNO Q</option>
+          </select>
+          TELEM
+        </div>
+        <div class="telem-row"><span id="telemCpuLbl">CPU</span> <b id="telemCpu">—</b></div>
+        <div class="telem-row"><span id="telemGpuLbl">GPU</span> <b id="telemGpu">—</b></div>
+        <div class="telem-row"><span id="telemNpuLbl">NPU</span> <b id="telemNpu">—</b></div>
+        <div class="telem-row"><span id="telemExtra1Lbl">TV FPS</span> <b id="telemFps">—</b></div>
+        <div class="telem-row"><span id="telemExtra2Lbl">MSG/S</span> <b id="telemMsg">—</b></div>
       </div>
       <button id="soundBtn" title="Speak the keeper's lines">SOUND ON</button>
       <button id="abortBtn" class="hide" title="End the match and return to lobby">END MATCH</button>
@@ -416,34 +426,82 @@ function drawPostFX(now){
 /* Neural FX hero plate (from /fx/hero) */
 const HERO={img:null, kick:-1, backend:null, pending:false, ms:0};
 /* Real silicon telemetry (proto TelemetryStore → telem_state) + local TV FPS */
-const TELEM={work:0,frames:0,t0:performance.now(),staleMs:3000,laptop:null};
+const TELEM={
+  work:0,frames:0,t0:performance.now(),staleMs:3000,
+  devices:{}, localFps:null,
+  selected: localStorage.gfTelemDevice||"laptop",
+};
 function setTelem(id,v,hot){
   const el=$(id); if(!el) return;
   el.textContent=v;
   el.parentElement?.classList.toggle("hot",!!hot);
 }
+function setTelemLbl(id,v){ const el=$(id); if(el) el.textContent=v; }
 function unitBusy(units, name){
   const u=units?.[name];
-  if(!u) return {txt:"—", hot:false};
-  if((u.age_ms||0)>TELEM.staleMs) return {txt:"—", hot:false};
+  if(!u) return {txt:"—", hot:false, metric:{}, state:""};
+  if((u.age_ms||0)>TELEM.staleMs) return {txt:"—", hot:false, metric:{}, state:""};
   const busy=Number(u.busy_pct);
-  if(!Number.isFinite(busy)) return {txt:"—", hot:false};
-  return {txt:`${busy.toFixed(0)}%`, hot:busy>=80};
+  if(!Number.isFinite(busy)) return {txt:"—", hot:false, metric:u.metric||{}, state:u.state||""};
+  return {txt:`${busy.toFixed(0)}%`, hot:busy>=80, metric:u.metric||{}, state:u.state||""};
+}
+function mergeMetrics(units){
+  const m={};
+  for(const name of ["cpu","gpu","npu","mcu"]){
+    const u=units?.[name];
+    if(!u || (u.age_ms||0)>TELEM.staleMs) continue;
+    Object.assign(m, u.metric||{});
+  }
+  return m;
 }
 function paintTelem(){
-  const units=TELEM.laptop?.units||{};
+  const sel=TELEM.selected||"laptop";
+  const entry=TELEM.devices[sel]||null;
+  const units=entry?.units||{};
   const cpu=unitBusy(units,"cpu");
   const gpu=unitBusy(units,"gpu");
-  const npu=unitBusy(units,"npu");
+  const npuName=sel==="unoq" && units.mcu ? "mcu" : "npu";
+  const npu=unitBusy(units, npuName);
+  setTelemLbl("telemCpuLbl","CPU");
+  setTelemLbl("telemGpuLbl","GPU");
+  setTelemLbl("telemNpuLbl", npuName==="mcu" ? "MCU" : "NPU");
   setTelem("telemCpu", cpu.txt, cpu.hot);
   setTelem("telemGpu", gpu.txt, gpu.hot);
   setTelem("telemNpu", npu.txt, npu.hot);
-  const m=units.cpu?.metric||units.gpu?.metric||{};
-  const fps=m.fps??TELEM.localFps;
-  const msg=m.msg_rate;
-  setTelem("telemFps", fps!=null?String(fps):"—");
-  setTelem("telemMsg", msg!=null?String(msg):"—");
+  const m=mergeMetrics(units);
+  if(sel==="phone"){
+    setTelemLbl("telemExtra1Lbl","POSE MS");
+    setTelemLbl("telemExtra2Lbl","ASR·LLM");
+    setTelem("telemFps", m.pose_ms!=null?String(m.pose_ms):"—");
+    const asr=m.asr_ms!=null?`${m.asr_ms}`:"—";
+    const llm=m.llm_ms!=null?`${m.llm_ms}`:"—";
+    const be=m.backend?` · ${m.backend}`:"";
+    setTelem("telemMsg", (m.asr_ms!=null||m.llm_ms!=null)?`${asr}/${llm}${be}`:"—");
+  }else if(sel==="unoq"){
+    setTelemLbl("telemExtra1Lbl","POSE FPS");
+    setTelemLbl("telemExtra2Lbl","STATE");
+    setTelem("telemFps", m.fps!=null?String(m.fps):"—");
+    const st=[cpu.state,gpu.state,npu.state].filter(Boolean).join(" · ")||"—";
+    setTelem("telemMsg", st.length>28?st.slice(0,27)+"…":st);
+  }else{
+    setTelemLbl("telemExtra1Lbl","TV FPS");
+    setTelemLbl("telemExtra2Lbl","MSG/S");
+    const fps=m.fps??TELEM.localFps;
+    const msg=m.msg_rate;
+    setTelem("telemFps", fps!=null?String(fps):"—");
+    setTelem("telemMsg", msg!=null?String(msg):"—");
+  }
 }
+(function initTelemDevice(){
+  const sel=$("telemDevice");
+  if(!sel) return;
+  if(["laptop","phone","unoq"].includes(TELEM.selected)) sel.value=TELEM.selected;
+  sel.addEventListener("change",()=>{
+    TELEM.selected=sel.value;
+    localStorage.gfTelemDevice=sel.value;
+    paintTelem();
+  });
+})();
 function setFxBadge(backend){ HERO.backend=backend||null; }
 async function probeFxStatus(){
   try{
@@ -482,11 +540,13 @@ setInterval(()=>{
 function onTelemState(msg){
   TELEM.staleMs=msg.stale_ms||3000;
   const devices=msg.devices||{};
-  // Prefer device:"laptop" entry
-  TELEM.laptop=null;
+  // Index by device kind (laptop / phone / unoq) for the HUD dropdown.
+  const byKind={};
   for(const k in devices){
-    if(devices[k].device==="laptop"){ TELEM.laptop=devices[k]; break; }
+    const d=devices[k];
+    if(d && d.device) byKind[d.device]=d;
   }
+  TELEM.devices=byKind;
   paintTelem();
 }
 
@@ -2390,8 +2450,14 @@ document.addEventListener("keydown",e=>{
     if(fsElement()) exitFullscreen(); else enterFullscreen();
   }
 });
-// Browsers require a gesture — first click / Start Match also goes fullscreen.
-document.addEventListener("pointerdown",()=>enterFullscreen(),{once:true,capture:true});
+// Browsers require a gesture — first non-control click / Start Match goes fullscreen.
+// Ignore select/button/input so the telem device dropdown doesn't force fullscreen.
+function onFirstGestureFs(e){
+  if(e.target?.closest?.("select,button,input,textarea,a,label,.telem-block")) return;
+  document.removeEventListener("pointerdown", onFirstGestureFs, true);
+  enterFullscreen();
+}
+document.addEventListener("pointerdown", onFirstGestureFs, {capture:true});
 const _startFs=$("startBtn").onclick;
 $("startBtn").onclick=(ev)=>{ enterFullscreen(); if(_startFs) _startFs(ev); };
 syncFullscreenClass();

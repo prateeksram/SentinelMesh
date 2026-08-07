@@ -104,6 +104,17 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         }
     }
 
+    /** Rolling pose samples for 1 Hz laptop telem (NEURAL LOAD → TelemetryStore). */
+    private var lastPoseMs: Long = -1
+    private var lastPoseDelegate: String = "—"
+    private var poseFramesSinceTelem = 0
+    private val telemTick = object : Runnable {
+        override fun run() {
+            flushSiliconTelem()
+            mainHandler.postDelayed(this, 1000L)
+        }
+    }
+
     private enum class HostPill { OFFLINE, CONNECTING, CONNECTED, FAILED }
 
     private val permissionLauncher = registerForActivityResult(
@@ -188,6 +199,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         qwen = QwenCoach(this).also { it.setProfile(profile) }
         updateProfileHint()
         refreshNeuralLoad()
+        mainHandler.post(telemTick)
 
         binding.calibBtn.setOnClickListener { startCalibration() }
         binding.calibration.calibNext.setOnClickListener { onCalibNext() }
@@ -511,6 +523,56 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         binding.llmStat.text = if (lastLlmMs >= 0) "$llm · $backend" else backend
         binding.forceStat.text = lastForceLabel
         refreshAiChip()
+    }
+
+    /**
+     * Map on-device NEURAL LOAD onto laptop TelemetryStore units (cpu/gpu/npu).
+     * Pose lands on the active delegate unit; ASR/LLM claim npu (or cpu for COACH).
+     */
+    private fun flushSiliconTelem() {
+        if (!game.isConnected()) {
+            poseFramesSinceTelem = 0
+            return
+        }
+        val fps = poseFramesSinceTelem
+        poseFramesSinceTelem = 0
+        val poseMs = lastPoseMs
+        val delegate = lastPoseDelegate.uppercase()
+        if (poseMs >= 0 && delegate in setOf("NPU", "GPU", "CPU")) {
+            val unit = when (delegate) {
+                "NPU" -> "npu"
+                "GPU" -> "gpu"
+                else -> "cpu"
+            }
+            val busy = minOf(100.0, poseMs / 33.0 * 100.0)
+            game.sendTelem(
+                unit = unit,
+                source = "pose",
+                busyPct = kotlin.math.round(busy * 10.0) / 10.0,
+                metric = mapOf("pose_ms" to poseMs, "fps" to fps),
+                state = "pose:$delegate",
+            )
+        }
+        if (lastAsrMs >= 0) {
+            game.sendTelem(
+                unit = "npu",
+                source = "asr",
+                busyPct = 0.0,
+                metric = mapOf("asr_ms" to lastAsrMs),
+                state = "asr:whisper",
+            )
+        }
+        if (lastLlmMs >= 0) {
+            val backend = (qwen?.backendLabel ?: "COACH").uppercase()
+            val unit = if (backend == "QWEN") "npu" else "cpu"
+            game.sendTelem(
+                unit = unit,
+                source = "llm",
+                busyPct = 0.0,
+                metric = mapOf("llm_ms" to lastLlmMs, "backend" to backend),
+                state = "llm:$backend",
+            )
+        }
     }
 
     private fun refreshAiChip() {
@@ -899,6 +961,9 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         lastForceLabel = if (hud.liveForce > 5f)
             "${hud.liveForce.roundToInt()} N"
         else "0 N"
+        lastPoseMs = hud.latencyMs
+        lastPoseDelegate = hud.delegateLabel
+        poseFramesSinceTelem++
         lastPoseMsLabel = "${hud.delegateLabel} · ${hud.latencyMs} ms"
         binding.npuBadge.text = lastPoseMsLabel
         val diag = hud.kickDiagnostics
@@ -1207,6 +1272,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(remoteHealthCheck)
+        mainHandler.removeCallbacks(telemTick)
         binding.edgePreview.close()
         ScreenRecordService.onStatus = null
         if (ScreenRecordService.running) ScreenRecordService.stop(this)

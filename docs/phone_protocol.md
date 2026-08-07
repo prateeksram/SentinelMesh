@@ -76,6 +76,33 @@ Bullet-time skeleton for TV orbit replay:
 }
 ```
 
+### `telem`
+Self-reported silicon duty cycle (~1 Hz while connected). Ingested into
+`TelemetryStore` and fanned out as `telem_state` to dashboards / TV.
+```json
+{
+  "type": "telem",
+  "unit": "npu",
+  "source": "pose",
+  "busy_pct": 42.5,
+  "metric": { "pose_ms": 18, "fps": 28 },
+  "state": "pose:NPU"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `unit` | string | `cpu` \| `gpu` \| `npu` (UNO Q may also use `mcu`) |
+| `source` | string | Workload id; phone uses `pose` / `asr` / `llm` |
+| `busy_pct` | number | 0…100 self-reported duty cycle |
+| `metric` | object | Opaque scalars (e.g. `pose_ms`, `asr_ms`, `llm_ms`, `backend`) |
+| `state` | string | Short label for HUD / dashboard |
+| `temp_c` | number | Optional; rarely populated |
+
+Phone mapping: pose lands on the active delegate unit; Whisper ASR → `npu` /
+`asr`; coach LLM → `npu` if `QWEN` else `cpu` / `llm`. No transcripts, frames,
+or profile data.
+
 ## Server → client
 
 ### `state`
@@ -99,5 +126,5 @@ Bullet-time skeleton for TV orbit replay:
 
 - Player calibration profile (`player_profile.json`)
 - Whisper transcripts / Qwen coach lines
-- Predictability HUD / NEURAL LOAD strip
-- Delegate toggle (CPU / GPU / NPU)
+- Predictability HUD copy (the strip stays local; **scalars** may leave via `telem`)
+- Delegate toggle UI (the chosen unit is implied by which `telem.unit` is reported)

@@ -155,12 +155,17 @@ Kick JSON extras beyond classic zone/power:
 
 ### 4.8 Telemetry HUD — NEURAL LOAD
 
-On-device strip (not on the wire):
+On-device strip plus LAN `telem` to the laptop:
 
 - **POSE** ms (current delegate)
 - **ASR** ms (last Whisper utterance)
 - **LLM** ms · backend (`COACH` / `QWEN`)
 - Live ForcePose force chip during shoot / calib
+
+While HOST is connected, the app emits ~1 Hz `{type:"telem"}` messages mapping
+those scalars onto `phone.cpu` / `phone.gpu` / `phone.npu` for
+`telemetry.html` and the TV rail device dropdown (see [`phone_protocol.md`](phone_protocol.md)).
+No transcripts, frames, or `player_profile.json` leave the device.
 
 ### 4.9 Debug — REC
 
@@ -510,13 +515,13 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 
 - Camera / video frames
 - `player_profile.json` (biometrics, torso, aim envelope, kick threshold, dominant foot)
-- Whisper transcripts
-- Qwen / grounded coach lines
-- NEURAL LOAD numbers, DELEGATE choice, predictability HUD
+- Whisper transcripts / Qwen grounded coach lines
+- Predictability HUD copy / full NEURAL LOAD strip UI
 
 **May leave the phone (LAN WebSocket only)**
 
 - `hello`, `aim`, `kick` scalars/enums, `skel` landmark samples, `start`
+- `telem` duty-cycle scalars (`busy_pct`, `pose_ms` / `asr_ms` / `llm_ms`, delegate unit) — no media or profile
 
 On-device AI (pose / Whisper / coach) works **offline**. Only the match connection needs the laptop on the same LAN.
 

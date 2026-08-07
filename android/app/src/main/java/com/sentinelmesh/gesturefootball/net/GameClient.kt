@@ -333,6 +333,42 @@ class GameClient(
         ws?.send(JSONObject().put("type", "skel").put("kick", kickNo).put("frames", arr).toString())
     }
 
+    /**
+     * Self-reported silicon duty cycle for the laptop TelemetryStore / TV HUD.
+     * Same shape as tv.html: unit ∈ cpu|gpu|npu, opaque metric dict, optional temp_c.
+     */
+    fun sendTelem(
+        unit: String,
+        source: String,
+        busyPct: Double,
+        metric: Map<String, Any?> = emptyMap(),
+        state: String = "",
+        tempC: Double? = null,
+    ) {
+        val sock = ws ?: return
+        if (!open.get()) return
+        val m = JSONObject()
+        for ((k, v) in metric) {
+            when (v) {
+                null -> { /* skip */ }
+                is Number -> m.put(k, v)
+                is Boolean -> m.put(k, v)
+                else -> m.put(k, v.toString())
+            }
+        }
+        val o = JSONObject()
+            .put("type", "telem")
+            .put("unit", unit)
+            .put("source", source)
+            .put("busy_pct", busyPct)
+            .put("metric", m)
+            .put("state", state)
+        if (tempC != null) o.put("temp_c", tempC)
+        sock.send(o.toString())
+    }
+
+    fun isConnected(): Boolean = open.get()
+
     fun close() {
         allowReconnect.set(false)
         userConnectAttempt.set(false)
