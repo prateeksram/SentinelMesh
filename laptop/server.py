@@ -37,6 +37,7 @@ from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 import geniex_client
 import neural_fx
 import scene_engine
+import telemetry_store
 
 ROOT = Path(__file__).parent
 PUBLIC = ROOT / "public"
@@ -377,7 +378,11 @@ class Game:
             "replay": self.replay,
             "line": self.line,
             "llm": self.desk.mode,
-            "connected": {"phone": "phone" in self.sockets.values()},
+            "connected": {
+                "phone": "phone" in self.sockets.values(),
+                "unoq": "unoq" in self.sockets.values()
+                or "bridge" in self.sockets.values(),
+            },
             "level": self.campaign_level,
             "scene": self.scene,
             "report": self.report,
@@ -696,12 +701,28 @@ class Game:
         self.report_task = asyncio.get_event_loop().create_task(run())
 
     async def on_message(self, ws, msg):
+        TELEM.msg_count += 1
         t = msg.get("type")
         if t == "hello":
             client = msg.get("client")
-            if client in ("phone", "tv"):
+            roles = msg.get("roles") if isinstance(msg.get("roles"), list) else []
+            if client in ("phone", "tv", "unoq", "bridge", "dashboard"):
                 self.sockets[ws] = client
-            await self.broadcast()
+            if client == "dashboard" or "dashboard" in roles:
+                DASHBOARDS.add(ws)
+                await ws.send_json(TELEM.snapshot())
+            if client in ("phone", "tv", "unoq", "bridge"):
+                await self.broadcast()
+        elif t == "telem":
+            # Self-reported duty cycle from phone / TV / UNO Q / laptop workers.
+            client = self.sockets.get(ws) or "unknown"
+            kind = client if client in ("phone", "tv", "unoq", "laptop", "bridge") else "unknown"
+            if kind == "bridge":
+                kind = "unoq"
+            if kind == "tv":
+                kind = "laptop"  # TV render load is laptop GPU work
+            key = kind if kind in ("laptop", "phone", "unoq") else f"dev:{id(ws)}"
+            TELEM.ingest(key, kind, f"{kind}", msg)
         elif t == "aim":
             z = msg.get("zone")
             if self.sockets.get(ws) == "phone" and z in ZONES:
@@ -791,12 +812,22 @@ class Game:
 
     def on_close(self, ws):
         self.sockets.pop(ws, None)
+        DASHBOARDS.discard(ws)
+        # Drop device key only when no sockets of that kind remain.
+        kinds = set(self.sockets.values())
+        if "phone" not in kinds:
+            TELEM.drop("phone")
+        if "unoq" not in kinds and "bridge" not in kinds:
+            TELEM.drop("unoq")
 
 
 # ================================================================ HTTP ======
 report_store = report_engine.ReportStore()
 game = Game(Desk())
 report_web = ReportWeb(game, report_store, KICKS)
+TELEM = telemetry_store.TelemetryStore()
+DASHBOARDS: set[web.WebSocketResponse] = set()
+FX_STATS = {"count": 0, "last_ms": 0, "backend": None, "pending": 0}
 
 
 def normalize_edge_packet(packet: dict) -> dict | None:
@@ -1038,7 +1069,59 @@ async def fx_hero(request):
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
-    return web.json_response(neural_fx.hero(payload))
+    FX_STATS["pending"] += 1
+    t0 = time.perf_counter()
+    out = neural_fx.hero(payload)
+    FX_STATS["pending"] -= 1
+    FX_STATS["count"] += 1
+    FX_STATS["last_ms"] = int((time.perf_counter() - t0) * 1000)
+    FX_STATS["backend"] = out.get("backend") if isinstance(out, dict) else None
+    return web.json_response(out)
+
+
+async def telem_loop():
+    """1 Hz laptop self-report + fan-out to dashboards and TV clients."""
+    while True:
+        await asyncio.sleep(1.0)
+        TELEM.self_report()
+        if FX_STATS["count"]:
+            backend = FX_STATS["backend"] or "procedural"
+            unit = "npu" if backend == "qnn" else "cpu"
+            TELEM.ingest("laptop", "laptop", "laptop", {
+                "unit": unit,
+                "source": "fx",
+                "busy_pct": 0,
+                "metric": {
+                    "fx_plate_ms": FX_STATS["last_ms"],
+                    "fx_plates": FX_STATS["count"],
+                    "fx_queue": FX_STATS["pending"],
+                },
+                "state": f"fx:{backend}",
+            })
+        # SceneEngine / GenieX venue gen — lands on NPU when source=geniex
+        sm = game.scene_metrics or {}
+        if sm.get("source") == "geniex" and (sm.get("tok_per_s") or sm.get("total_ms")):
+            TELEM.ingest("laptop", "laptop", "laptop", {
+                "unit": "npu",
+                "source": "scene",
+                "busy_pct": min(100.0, float(sm.get("tok_per_s") or 0) * 4),
+                "metric": {
+                    "tok_per_s": sm.get("tok_per_s"),
+                    "tokens": sm.get("tokens"),
+                    "total_ms": sm.get("total_ms"),
+                },
+                "state": "scene:geniex",
+            })
+        snap = TELEM.snapshot()
+        targets = set(DASHBOARDS)
+        for ws, client in list(game.sockets.items()):
+            if client == "tv":
+                targets.add(ws)
+        for ws in list(targets):
+            try:
+                await ws.send_json(snap)
+            except Exception:
+                DASHBOARDS.discard(ws)
 
 
 async def scene_status(_request):
@@ -1152,6 +1235,7 @@ def make_app():
     app.router.add_get("/scene/brief", scene_brief)
     app.router.add_post("/scene/upload", scene_upload)
     app.router.add_get("/hw/status", hw_status)
+    app.router.add_get("/telemetry", lambda r: web.HTTPFound("/telemetry.html"))
     report_web.register(app)
     app.router.add_get("/", lambda r: web.HTTPFound("/tv.html"))
     app.router.add_static("/", PUBLIC, show_index=True)
@@ -1163,6 +1247,7 @@ async def main():
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", 8080).start()
+    asyncio.create_task(telem_loop())
     loop = asyncio.get_running_loop()
     edge_transport = None
     try:
@@ -1172,7 +1257,7 @@ async def main():
         )
     except OSError as exc:
         print(f"UNO Q :  UDP :{EDGE_POSE_PORT} unavailable ({exc}); local phone pose still works")
-    print("HTTP  :  http://0.0.0.0:8080   (tv.html · phone.html)")
+    print("HTTP  :  http://0.0.0.0:8080   (tv.html · phone.html · telemetry.html)")
 
     cert, key = ROOT / "cert.pem", ROOT / "key.pem"
     if cert.exists() and key.exists():

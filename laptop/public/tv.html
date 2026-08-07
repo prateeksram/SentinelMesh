@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Gesture Football — Stadium</title>
 <style>
   :root{--night:#0B1D2A;--ink:#07131C;--chalk:#F4F7F1;--mut:#9db4c6;
@@ -11,9 +13,18 @@
         --fCond:'Barlow Condensed','Arial Narrow',Arial,sans-serif;
         --fBody:Barlow,'Segoe UI',system-ui,sans-serif}
   *{box-sizing:border-box;margin:0}
-  html,body{height:100%}
+  html,body{height:100%;height:100dvh}
   body{background:#04070d;color:var(--chalk);font-family:var(--fBody);
        overflow:hidden;user-select:none}
+  html:fullscreen,html:-webkit-full-screen{background:#04070d}
+  html:fullscreen body,html:-webkit-full-screen body{height:100%;height:100dvh}
+  #fsBtn{position:fixed;top:14px;right:16px;z-index:10;pointer-events:auto;
+         font-family:var(--fCond);font-weight:800;letter-spacing:2px;font-size:12px;
+         color:var(--chalk);background:linear-gradient(180deg,rgba(10,20,31,.92),rgba(5,11,18,.94));
+         border:1px solid rgba(158,190,215,.35);border-radius:999px;padding:8px 14px;cursor:pointer;
+         box-shadow:0 6px 18px rgba(0,0,0,.45)}
+  #fsBtn:hover{border-color:var(--cyan);color:#fff}
+  body.is-fs #fsBtn{display:none}
 
   /* ---------------- full-bleed stadium canvas ---------------- */
   #pitch{position:fixed;inset:0;width:100vw;height:100vh;display:block}
@@ -61,125 +72,191 @@
   .stage{position:fixed;inset:0;z-index:4;pointer-events:none}
   .overlay{position:absolute;inset:0;display:flex;flex-direction:column;
            align-items:center;justify-content:center;text-align:center;
-           padding:0 4vw;transform:translateY(10vh)}
-  #big{font-family:var(--fBlack);font-size:clamp(42px,8.6vw,124px);line-height:.95;letter-spacing:1px;
+           padding:0 4vw;transform:translateY(8vh)}
+  /* Lobby: CTA under the scoreboard — keep ball / players clear */
+  .overlay.lobby{justify-content:flex-start;transform:none;
+                 padding-top:118px;padding-bottom:0;gap:10px}
+  .overlay.lobby #sub{margin-top:0}
+  .overlay.lobby #startBtn{margin-top:0}
+  #big{font-family:var(--fBlack);font-size:clamp(28px,5.2vw,68px);line-height:.95;letter-spacing:1px;
        color:#fff;
-       text-shadow:0 3px 0 rgba(0,0,0,.4),0 12px 46px rgba(0,0,0,.8),0 0 90px rgba(62,199,244,.22);
-       transition:transform .12s}
-  #big.goal{color:var(--amber);
+       text-shadow:0 2px 0 rgba(0,0,0,.4),0 10px 36px rgba(0,0,0,.75),0 0 70px rgba(62,199,244,.18);
+       transition:transform .12s,font-size .2s,opacity .2s}
+  /* Lobby brand — tucked under the scoreboard, not over the players */
+  #big.brand{position:fixed;top:86px;left:50%;transform:translateX(-50%);z-index:6;
+             font-size:clamp(16px,1.8vw,22px);letter-spacing:4px;margin:0;
+             padding:6px 16px;border-radius:999px;
+             background:linear-gradient(180deg,rgba(10,20,31,.88),rgba(5,11,18,.9));
+             border:1px solid rgba(158,190,215,.28);
+             animation:brandGlow 3.2s ease-in-out infinite}
+  @keyframes brandGlow{
+    0%,100%{opacity:.92;box-shadow:0 6px 18px rgba(0,0,0,.4),0 0 20px rgba(62,199,244,.08)}
+    50%{opacity:1;box-shadow:0 6px 18px rgba(0,0,0,.4),0 0 28px rgba(255,196,0,.22),0 0 40px rgba(62,199,244,.16)}
+  }
+  #big.goal{color:var(--amber);position:static;transform:none;padding:0;background:none;border:none;animation:none;
        text-shadow:0 3px 0 rgba(90,60,0,.5),0 12px 46px rgba(0,0,0,.8),0 0 110px rgba(255,196,0,.5)}
-  #big.save{color:var(--cyan);
+  #big.save{color:var(--cyan);position:static;transform:none;padding:0;background:none;border:none;animation:none;
        text-shadow:0 3px 0 rgba(0,50,70,.5),0 12px 46px rgba(0,0,0,.8),0 0 110px rgba(62,199,244,.5)}
-  #big.warn{color:var(--red);
+  #big.warn{color:var(--red);position:static;transform:none;padding:0;background:none;border:none;animation:none;
        text-shadow:0 3px 0 rgba(70,10,0,.5),0 12px 46px rgba(0,0,0,.8),0 0 110px rgba(255,68,56,.45)}
-  #big.pop{transform:scale(1.12)}
-  #sub{margin-top:14px;font-family:var(--fCond);font-weight:700;letter-spacing:2px;
-       font-size:clamp(14px,2vw,22px);color:#e8f0f6;max-width:80vw;
+  #big.pop{transform:scale(1.08)}
+  #big.brand.pop{transform:translateX(-50%) scale(1.04)}
+  #sub{margin-top:12px;font-family:var(--fCond);font-weight:700;letter-spacing:2px;
+       font-size:clamp(13px,1.6vw,18px);color:#e8f0f6;max-width:70vw;
        background:linear-gradient(180deg,rgba(8,16,25,.72),rgba(5,11,18,.78));
-       border:1px solid rgba(158,190,215,.25);border-radius:999px;padding:9px 22px;
+       border:1px solid rgba(158,190,215,.25);border-radius:999px;padding:8px 18px;
        box-shadow:0 8px 24px rgba(0,0,0,.45)}
   #sub:empty{display:none}
-  #startBtn{pointer-events:auto;margin-top:28px;font-family:var(--fBlack);
-            font-size:clamp(20px,3vw,30px);letter-spacing:2px;color:var(--ink);
-            background:linear-gradient(180deg,#ffd54d,var(--amber));
-            border:none;border-radius:14px;padding:16px 46px;cursor:pointer;
-            box-shadow:0 8px 0 #b98d00,0 16px 40px rgba(0,0,0,.5);
-            transition:transform .08s,box-shadow .08s}
-  #startBtn:active{transform:translateY(6px);box-shadow:0 2px 0 #b98d00,0 8px 24px rgba(0,0,0,.5)}
-  #startBtn:disabled{background:#31506a;color:#7d95a8;box-shadow:0 8px 0 #22374a;cursor:default}
+  #startBtn{pointer-events:auto;margin-top:16px;position:relative;z-index:2;
+            overflow:hidden;font-family:var(--fBlack);
+            font-size:clamp(16px,2.2vw,24px);letter-spacing:2.5px;color:var(--ink);
+            background:linear-gradient(180deg,#ffe27a,#ffc400 50%,#e5b000);
+            border:2px solid rgba(255,255,255,.55);border-radius:14px;padding:13px 38px;cursor:pointer;
+            box-shadow:0 6px 0 #b98d00,0 0 0 0 rgba(255,196,0,.55),0 14px 32px rgba(0,0,0,.5);
+            transition:background .2s,color .2s,border-color .2s;
+            animation:startPulse 1.4s ease-in-out infinite}
+  #startBtn::after{content:"";position:absolute;top:0;bottom:0;left:-60%;width:45%;
+            background:linear-gradient(100deg,transparent,rgba(255,255,255,.7),transparent);
+            transform:skewX(-20deg);animation:startSheen 1.8s linear infinite;pointer-events:none}
+  @keyframes startPulse{
+    0%,100%{transform:translateY(0) scale(1);
+      box-shadow:0 6px 0 #b98d00,0 0 10px 2px rgba(255,196,0,.35),0 14px 32px rgba(0,0,0,.45)}
+    50%{transform:translateY(-4px) scale(1.06);
+      box-shadow:0 10px 0 #b98d00,0 0 34px 10px rgba(255,196,0,.55),0 18px 40px rgba(0,0,0,.55)}
+  }
+  @keyframes startSheen{
+    0%{left:-60%}
+    100%{left:130%}
+  }
+  #startBtn:hover:not(:disabled){filter:brightness(1.08)}
+  #startBtn:active:not(:disabled){animation:none;transform:translateY(4px) scale(.97);
+            box-shadow:0 2px 0 #b98d00,0 8px 24px rgba(0,0,0,.5)}
+  /* Waiting for phone — still animated, cooler tone */
+  #startBtn:disabled{color:#c5d6e4;cursor:default;border-color:rgba(62,199,244,.45);
+            background:linear-gradient(180deg,#3a6a88,#2a4f6a 55%,#1e3a52);
+            box-shadow:0 6px 0 #152a3c,0 0 0 0 rgba(62,199,244,.4),0 14px 32px rgba(0,0,0,.5);
+            animation:startWait 1.8s ease-in-out infinite}
+  #startBtn:disabled::after{background:linear-gradient(100deg,transparent,rgba(160,220,255,.45),transparent)}
+  @keyframes startWait{
+    0%,100%{transform:translateY(0) scale(1);
+      box-shadow:0 6px 0 #152a3c,0 0 8px 2px rgba(62,199,244,.25),0 14px 28px rgba(0,0,0,.45)}
+    50%{transform:translateY(-3px) scale(1.04);
+      box-shadow:0 9px 0 #152a3c,0 0 26px 8px rgba(62,199,244,.45),0 16px 36px rgba(0,0,0,.5)}
+  }
   #startBtn.hide{display:none}
   #abortBtn{font:inherit;color:var(--chalk);background:#5a2230;border:1px solid #8a3040;
-            border-radius:8px;padding:5px 10px;cursor:pointer;letter-spacing:1.5px}
+            border-radius:8px;padding:7px 12px;cursor:pointer;letter-spacing:1.5px;
+            justify-content:center}
   #abortBtn.hide{display:none}
   #abortBtn:hover{background:#7a2a3a}
 
-  /* ---------------- lower-third ticker ---------------- */
-  .ticker{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:6;
-          width:min(1280px,95vw);display:flex;align-items:stretch;min-height:54px;
-          background:linear-gradient(180deg,rgba(10,20,31,.92),rgba(5,11,18,.94));
-          border:1px solid #24445c;border-radius:10px;overflow:hidden;
-          box-shadow:0 14px 34px rgba(0,0,0,.55)}
-  .desk{display:flex;align-items:center;gap:10px;
+  /* ---------------- left rail (desk + status; pitch stays clear) ---------------- */
+  .rail-left{
+    position:fixed;left:14px;top:78px;z-index:6;width:min(268px,20vw);
+    max-height:min(560px,76vh);display:flex;flex-direction:column;gap:10px;
+    pointer-events:none}
+  .rail-card{
+    background:linear-gradient(180deg,rgba(10,20,31,.92),rgba(5,11,18,.94));
+    border:1px solid #24445c;border-radius:12px;overflow:hidden;
+    box-shadow:0 14px 34px rgba(0,0,0,.55);pointer-events:auto}
+  .rail-card.desk-card{display:flex;flex-direction:column;min-height:0;
+                       max-height:min(240px,34vh)}
+  .desk{display:flex;align-items:center;gap:10px;flex-shrink:0;
         background:linear-gradient(135deg,#ffd54d,var(--amber) 60%,#e5b000);color:var(--ink);
-        font-family:var(--fBlack);font-size:14px;letter-spacing:1px;
-        padding:0 26px 0 18px;white-space:nowrap;
-        clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%)}
+        font-family:var(--fBlack);font-size:13px;letter-spacing:1px;
+        padding:10px 14px;white-space:nowrap}
   .desk.tmpl{background:linear-gradient(135deg,#3a5c7a,#2a4a66);color:var(--chalk)}
-  .desk .pulse{width:10px;height:10px;border-radius:50%;background:var(--ink)}
+  .desk .pulse{width:9px;height:9px;border-radius:50%;background:var(--ink);flex-shrink:0}
   .desk.live .pulse{background:var(--red);box-shadow:0 0 8px var(--red);animation:blink 1.1s infinite}
   @keyframes blink{50%{opacity:.25}}
-  #line{flex:1;display:flex;align-items:center;padding:8px 18px;font-weight:700;
-        font-size:clamp(14px,1.8vw,20px);color:var(--chalk);
-        overflow:hidden}
-  .links{display:flex;gap:14px;padding:0 16px;font-family:var(--fCond);
-         font-weight:700;letter-spacing:1.5px;font-size:13px;color:var(--mut);align-items:center;
-         border-left:1px solid #1c374c}
+  /* Fixed type — long lines clamp, never grow the rail or the font. */
+  #line{flex:1;min-height:0;padding:12px 14px;font-weight:700;
+        font-size:14px;line-height:1.35;color:var(--chalk);
+        overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;
+        -webkit-line-clamp:5;word-break:break-word}
+  .links{display:flex;flex-direction:column;align-items:stretch;gap:8px;
+         padding:12px 14px;font-family:var(--fCond);font-weight:700;
+         letter-spacing:1.5px;font-size:12px;color:var(--mut)}
+  .links > span,.links > button{display:flex;align-items:center;white-space:nowrap}
   .led{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--red);
-       margin-right:6px;vertical-align:1px;box-shadow:0 0 6px rgba(255,68,56,.8)}
+       margin-right:8px;flex-shrink:0;box-shadow:0 0 6px rgba(255,68,56,.8)}
   .led.on{background:var(--green);box-shadow:0 0 6px rgba(61,220,116,.8)}
+  #levelBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
+  #levelBadge.on{color:var(--cyan)}
+  .telem-block{margin-top:4px;padding-top:10px;border-top:1px solid #1c374c;
+               display:flex;flex-direction:column;gap:5px}
+  .telem-block .telem-h{font-size:10px;letter-spacing:2px;color:var(--amber);
+                        margin-bottom:2px}
+  .telem-block .telem-row{display:flex;justify-content:space-between;gap:8px;
+                          font-size:11px;letter-spacing:1px;color:var(--mut);
+                          font-variant-numeric:tabular-nums}
+  .telem-block .telem-row b{color:var(--chalk);font-weight:700}
+  .telem-block .telem-row.hot b{color:var(--amber)}
   #soundBtn{font:inherit;color:var(--chalk);background:#22374a;border:1px solid #31506a;
-            border-radius:999px;padding:5px 14px;cursor:pointer;letter-spacing:1.5px}
+            border-radius:999px;padding:7px 12px;cursor:pointer;letter-spacing:1.5px;
+            justify-content:center;margin-top:4px}
   #soundBtn.off{color:var(--mut);background:transparent}
-  #fxBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
-  #fxBadge.on{color:var(--cyan)}
-  #fxBadge.qnn{color:var(--amber)}
-  #deskBadge,#sceneBadge,#levelBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
-  #deskBadge.on,#sceneBadge.on,#levelBadge.on{color:var(--cyan)}
-  #genBarWrap{position:fixed;left:50%;transform:translateX(-50%);bottom:78px;z-index:6;
+  #genBarWrap{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:6;
               width:min(480px,70vw);height:6px;border-radius:999px;background:rgba(20,40,60,.7);
               border:1px solid rgba(158,190,215,.25);overflow:hidden;display:none}
   #genBarWrap.show{display:block}
   #genBar{height:100%;width:0%;background:linear-gradient(90deg,var(--cyan),var(--amber));
           transition:width .2s linear}
-  #genMeta{position:fixed;left:50%;transform:translateX(-50%);bottom:90px;z-index:6;
+  #genMeta{position:fixed;left:50%;transform:translateX(-50%);bottom:34px;z-index:6;
            font-family:var(--fCond);font-weight:700;letter-spacing:1.5px;font-size:12px;
            color:var(--mut);display:none;max-width:min(720px,92vw);text-align:center;
            white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #genMeta.show{display:block}
-  #sceneDebug{position:fixed;left:12px;bottom:78px;z-index:9;display:none;
+  #sceneDebug{position:fixed;left:14px;bottom:18px;z-index:9;display:none;
               font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:1.35;
               color:#cfe6f5;background:rgba(4,10,16,.82);border:1px solid #355873;
               padding:8px 10px;border-radius:8px;max-width:min(420px,70vw);
               white-space:pre-wrap}
   #sceneDebug.show{display:block}
+  @media(max-width:900px){
+    .rail-left{width:min(200px,28vw)}
+    #line{font-size:12px;-webkit-line-clamp:4}
+    .links{font-size:11px;gap:7px;padding:10px}
+  }
   #reportLine{margin-top:10px;font-family:var(--fCond);font-weight:600;letter-spacing:1px;
               font-size:clamp(13px,1.6vw,18px);color:var(--mut);max-width:70vw;display:none}
   #reportLine.show{display:block}
-  #reportPanel{position:fixed;right:18px;top:108px;z-index:8;width:min(310px,24vw);
-               padding:18px;background:linear-gradient(160deg,rgba(9,25,37,.97),rgba(5,13,22,.98));
-               border:1px solid #355873;border-top:4px solid var(--amber);border-radius:18px;
-               box-shadow:0 22px 60px rgba(0,0,0,.65);display:none;pointer-events:auto}
+  #reportPanel{position:fixed;right:14px;top:88px;z-index:8;width:min(168px,16vw);
+               padding:10px;background:linear-gradient(160deg,rgba(9,25,37,.97),rgba(5,13,22,.98));
+               border:1px solid #355873;border-top:3px solid var(--amber);border-radius:12px;
+               box-shadow:0 12px 32px rgba(0,0,0,.55);display:none;pointer-events:auto}
   #reportPanel.show{display:block;animation:reportIn .35s ease-out}
-  @keyframes reportIn{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
-  #reportClose{position:absolute;right:9px;top:9px;width:32px;height:32px;border:1px solid #49677d;
-               border-radius:50%;background:#102536;color:var(--chalk);font:700 22px/1 system-ui,sans-serif;
+  @keyframes reportIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+  #reportClose{position:absolute;right:6px;top:6px;width:24px;height:24px;border:1px solid #49677d;
+               border-radius:50%;background:#102536;color:var(--chalk);font:700 16px/1 system-ui,sans-serif;
                cursor:pointer;display:none;place-items:center;padding:0;transition:background .15s,border-color .15s}
   #reportClose:hover,#reportClose:focus-visible{background:#21445b;border-color:var(--cyan);outline:none}
   #reportPanel.ready #reportClose{display:grid}
-  #reportPanel .eyebrow{font-family:var(--fCond);font-weight:800;letter-spacing:2px;
-                       color:var(--cyan);font-size:12px}
-  #reportTitle{font-family:var(--fBlack);font-size:clamp(18px,2vw,28px);line-height:1.05;margin:7px 30px 4px 0;color:var(--amber)}
-  #reportStatus{font-family:var(--fCond);font-weight:700;color:var(--mut);font-size:14px;line-height:1.3}
-  #reportQr{display:none;width:100%;aspect-ratio:1;margin:14px 0 10px;background:#fff;border-radius:10px;padding:8px}
+  #reportPanel .eyebrow{font-family:var(--fCond);font-weight:800;letter-spacing:1.5px;
+                       color:var(--cyan);font-size:10px}
+  #reportTitle{font-family:var(--fBlack);font-size:14px;line-height:1.1;margin:5px 22px 3px 0;color:var(--amber)}
+  #reportStatus{font-family:var(--fCond);font-weight:700;color:var(--mut);font-size:11px;line-height:1.25}
+  #reportQr{display:none;width:100%;aspect-ratio:1;margin:8px 0 6px;background:#fff;border-radius:8px;padding:5px}
   #reportQr.show{display:block}
-  #reportStats{display:none;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}
+  #reportStats{display:none;grid-template-columns:1fr 1fr;gap:5px;margin-top:6px}
   #reportStats.show{display:grid}
-  #reportStats b{background:#102b3d;border:1px solid #294b62;border-radius:9px;padding:8px;
-                 color:var(--chalk);font-family:var(--fCond);font-size:13px;text-align:center}
+  #reportStats b{background:#102b3d;border:1px solid #294b62;border-radius:7px;padding:5px;
+                 color:var(--chalk);font-family:var(--fCond);font-size:10px;text-align:center}
   #reportOpen{display:none;text-decoration:none;text-align:center;background:var(--amber);color:var(--ink);
-              font-family:var(--fBlack);font-size:13px;letter-spacing:1px;padding:11px;border-radius:10px;margin-top:9px}
+              font-family:var(--fBlack);font-size:11px;letter-spacing:1px;padding:8px;border-radius:8px;margin-top:6px}
   #reportOpen.show{display:block}
-  #reportPanel .spin{display:none;width:34px;height:34px;margin:16px auto 8px;border-radius:50%;
-                     border:4px solid #26465c;border-top-color:var(--amber);animation:reportSpin .8s linear infinite}
+  #reportPanel .spin{display:none;width:24px;height:24px;margin:10px auto 6px;border-radius:50%;
+                     border:3px solid #26465c;border-top-color:var(--amber);animation:reportSpin .8s linear infinite}
   #reportPanel.generating .spin{display:block}
   @keyframes reportSpin{to{transform:rotate(360deg)}}
-  @media(max-width:900px){#reportPanel{width:250px;right:10px;top:94px;padding:13px}}
+  @media(max-width:900px){#reportPanel{width:140px;right:10px;top:80px;padding:8px}}
 </style>
 </head>
 <body>
 
 <canvas id="pitch" width="1280" height="720"></canvas>
 
+<button id="fsBtn" type="button" title="Hide browser tabs (F)">FULLSCREEN</button>
 <div class="livebug"><span class="reddot"></span>LIVE<em>PENALTY SHOOTOUT</em></div>
 
 <div class="board">
@@ -190,15 +267,15 @@
   </div>
   <div class="mid"><b id="midTop">LOBBY</b><span id="midBot">GESTURE FOOTBALL</span></div>
   <div class="team right wall">
-    <div class="tname">THE&nbsp;WALL<small>AI&nbsp;KEEPER</small></div>
+    <div class="tname">AI&nbsp;KEEPER<small>ON-DEVICE</small></div>
     <div class="score" id="sWall">0</div>
     <div class="dots" id="dWall"></div>
   </div>
 </div>
 
 <div class="stage">
-  <div class="overlay">
-    <div id="big">GESTURE FOOTBALL</div>
+  <div class="overlay lobby">
+    <div id="big" class="brand">GESTURE FOOTBALL</div>
     <div id="sub">waiting for the striker…</div>
     <div id="reportLine"></div>
     <button id="startBtn" disabled>START MATCH</button>
@@ -220,20 +297,29 @@
 <div id="genMeta"></div>
 <div id="sceneDebug"></div>
 
-<div class="ticker">
-  <div class="desk tmpl" id="desk"><span class="pulse"></span><span id="deskName">TEMPLATE DESK</span></div>
-  <div id="line">Open phone.html on your phone, prop it up so it sees your whole body.</div>
-  <div class="links">
-    <span><span class="led" id="ledP"></span>PHONE</span>
-    <span><span class="led on"></span>THE WALL</span>
-    <span id="deskBadge" title="Commentary desk backend">DESK · …</span>
-    <span id="fxBadge" title="On-device stadium neural FX">FX · …</span>
-    <span id="sceneBadge" title="SceneEngine">SCENE · …</span>
-    <span id="levelBadge" title="Campaign level">LVL —</span>
-    <button id="soundBtn" title="Speak the keeper's lines">SOUND ON</button>
-    <button id="abortBtn" class="hide" title="End the match and return to lobby">END MATCH</button>
+<aside class="rail-left" aria-label="Desk and match status">
+  <div class="rail-card desk-card">
+    <div class="desk tmpl" id="desk"><span class="pulse"></span><span id="deskName">TEMPLATE DESK</span></div>
+    <div id="line">Open phone.html on your phone, prop it up so it sees your whole body.</div>
   </div>
-</div>
+  <div class="rail-card">
+    <div class="links">
+      <span><span class="led" id="ledP"></span>PHONE</span>
+      <span><span class="led" id="ledU"></span>UNO Q</span>
+      <span id="levelBadge" title="Campaign level">LVL —</span>
+      <div class="telem-block" title="Laptop silicon telemetry (telem_state)">
+        <div class="telem-h">LAPTOP TELEM</div>
+        <div class="telem-row">CPU <b id="telemCpu">—</b></div>
+        <div class="telem-row">GPU <b id="telemGpu">—</b></div>
+        <div class="telem-row">NPU <b id="telemNpu">—</b></div>
+        <div class="telem-row">TV FPS <b id="telemFps">—</b></div>
+        <div class="telem-row">MSG/S <b id="telemMsg">—</b></div>
+      </div>
+      <button id="soundBtn" title="Speak the keeper's lines">SOUND ON</button>
+      <button id="abortBtn" class="hide" title="End the match and return to lobby">END MATCH</button>
+    </div>
+  </div>
+</aside>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -329,16 +415,36 @@ function drawPostFX(now){
 
 /* Neural FX hero plate (from /fx/hero) */
 const HERO={img:null, kick:-1, backend:null, pending:false, ms:0};
-function setFxBadge(backend){
-  const el=$("fxBadge");
-  if(!el) return;
-  el.classList.remove("on","qnn");
-  if(backend==="qnn"){ el.textContent="FX · QNN"; el.classList.add("qnn"); }
-  else if(backend==="cpu"){ el.textContent="FX · CPU"; el.classList.add("on"); }
-  else if(backend==="procedural"){ el.textContent="FX · NPU-READY"; el.classList.add("on"); }
-  else if(backend){ el.textContent="FX · "+String(backend).toUpperCase(); el.classList.add("on"); }
-  else el.textContent="FX · OFF";
+/* Real silicon telemetry (proto TelemetryStore → telem_state) + local TV FPS */
+const TELEM={work:0,frames:0,t0:performance.now(),staleMs:3000,laptop:null};
+function setTelem(id,v,hot){
+  const el=$(id); if(!el) return;
+  el.textContent=v;
+  el.parentElement?.classList.toggle("hot",!!hot);
 }
+function unitBusy(units, name){
+  const u=units?.[name];
+  if(!u) return {txt:"—", hot:false};
+  if((u.age_ms||0)>TELEM.staleMs) return {txt:"—", hot:false};
+  const busy=Number(u.busy_pct);
+  if(!Number.isFinite(busy)) return {txt:"—", hot:false};
+  return {txt:`${busy.toFixed(0)}%`, hot:busy>=80};
+}
+function paintTelem(){
+  const units=TELEM.laptop?.units||{};
+  const cpu=unitBusy(units,"cpu");
+  const gpu=unitBusy(units,"gpu");
+  const npu=unitBusy(units,"npu");
+  setTelem("telemCpu", cpu.txt, cpu.hot);
+  setTelem("telemGpu", gpu.txt, gpu.hot);
+  setTelem("telemNpu", npu.txt, npu.hot);
+  const m=units.cpu?.metric||units.gpu?.metric||{};
+  const fps=m.fps??TELEM.localFps;
+  const msg=m.msg_rate;
+  setTelem("telemFps", fps!=null?String(fps):"—");
+  setTelem("telemMsg", msg!=null?String(msg):"—");
+}
+function setFxBadge(backend){ HERO.backend=backend||null; }
 async function probeFxStatus(){
   try{
     const r=await fetch("/fx/status");
@@ -346,26 +452,7 @@ async function probeFxStatus(){
     setFxBadge(j.backend||"procedural");
   }catch(_){ setFxBadge(null); }
 }
-async function probeHwStatus(){
-  try{
-    const r=await fetch("/hw/status");
-    const j=await r.json();
-    const desk=$("deskBadge");
-    if(desk){
-      const m=(j.desk||"templates").toUpperCase();
-      desk.textContent="DESK · "+(m==="GENIEX"?"GENIEX":m==="LOCAL"?"LOCAL":m==="CLOUD"?"CLOUD":"TEMPLATES");
-      desk.classList.toggle("on", !!j.desk);
-    }
-    if(j.fx?.backend) setFxBadge(j.fx.backend);
-  }catch(_){}
-}
-function setSceneBadge(source){
-  const el=$("sceneBadge");
-  if(!el) return;
-  if(source==="geniex"){ el.textContent="SCENE · READY"; el.classList.add("on"); }
-  else if(source==="template"){ el.textContent="SCENE · TEMPLATE"; el.classList.remove("on"); }
-  else{ el.textContent="SCENE · …"; el.classList.remove("on"); }
-}
+function setSceneBadge(){ /* scene metrics flow via telem_state NPU */ }
 function setLevelBadge(level){
   const el=$("levelBadge");
   if(!el) return;
@@ -373,7 +460,35 @@ function setLevelBadge(level){
   else{ el.textContent="LVL —"; el.classList.remove("on"); }
 }
 probeFxStatus();
-probeHwStatus();
+setInterval(()=>{
+  if(!ws || ws.readyState!==1 || !TELEM.frames) {
+    TELEM.work=0; TELEM.frames=0; TELEM.t0=performance.now();
+    return;
+  }
+  const elapsed=Math.max(0.001,(performance.now()-TELEM.t0)/1000);
+  const fps=Math.round(TELEM.frames/elapsed);
+  const drawMs=Math.round((TELEM.work/TELEM.frames)*100)/100;
+  TELEM.localFps=fps;
+  // Report TV canvas work as laptop.gpu (proto honesty: canvas2d = main-thread)
+  ws.send(JSON.stringify({
+    type:"telem", unit:"gpu", source:"tv",
+    busy_pct:Math.min(100, Math.round(TELEM.work/10)),
+    metric:{fps, draw_ms:drawMs, renderer:"canvas2d"},
+    state:"canvas2d (main-thread raster)"
+  }));
+  TELEM.work=0; TELEM.frames=0; TELEM.t0=performance.now();
+  paintTelem();
+},1000);
+function onTelemState(msg){
+  TELEM.staleMs=msg.stale_ms||3000;
+  const devices=msg.devices||{};
+  // Prefer device:"laptop" entry
+  TELEM.laptop=null;
+  for(const k in devices){
+    if(devices[k].device==="laptop"){ TELEM.laptop=devices[k]; break; }
+  }
+  paintTelem();
+}
 
 /* Scene atmosphere (campaign venues) */
 let SCENE_GRADE="night", FLOODLIGHTS=true, CROWD_LEVEL=1;
@@ -482,7 +597,11 @@ function connect(){
   ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
   ws.onopen =()=>ws.send(JSON.stringify({type:"hello",client:"tv"}));
   ws.onclose=()=>setTimeout(connect,1500);
-  ws.onmessage=ev=>onState(JSON.parse(ev.data));
+  ws.onmessage=ev=>{
+    let m; try{ m=JSON.parse(ev.data); }catch(_){ return; }
+    if(m.type==="telem_state"){ onTelemState(m); return; }
+    if(m.type==="state" || m.phase) onState(m);
+  };
 }
 $("startBtn").onclick=()=>{ if(!S)return;
   ws.send(JSON.stringify({type:S.phase==="end"?"again":"start"})); };
@@ -567,6 +686,8 @@ function onState(st){
     `KICK ${st.kick} OF ${st.kicksTotal}`;
 
   $("ledP").classList.toggle("on",!!st.connected?.phone);
+  const ledU=$("ledU");
+  if(ledU) ledU.classList.toggle("on",!!(st.connected?.unoq||st.connected?.bridge));
 
   const desk=$("desk");
   desk.className="desk "+(st.llm?"live":"tmpl");
@@ -575,14 +696,14 @@ function onState(st){
     st.llm==="cloud"?"CLAUDE DESK":
     st.llm==="local"?"LOCAL AI DESK":"TEMPLATE DESK";
   if(st.line) $("line").textContent=st.line;
-
   setLevelBadge(st.level);
-  if(st.sceneMetrics?.source) setSceneBadge(st.sceneMetrics.source);
   updateReportPanel(st);
 
   const big=$("big"), sub=$("sub"), btn=$("startBtn"), abort=$("abortBtn");
   const report=$("reportLine"), genWrap=$("genBarWrap"), genBar=$("genBar"), genMeta=$("genMeta");
+  const overlay=document.querySelector(".overlay");
   big.className=""; btn.classList.add("hide");
+  if(overlay) overlay.classList.toggle("lobby", st.phase==="lobby");
   report.classList.remove("show"); report.textContent="";
   genWrap.classList.remove("show"); genMeta.classList.remove("show");
   // END MATCH visible for any live / full-time phase (not lobby).
@@ -591,12 +712,13 @@ function onState(st){
   switch(st.phase){
     case "lobby":
       big.textContent="GESTURE FOOTBALL";
-      sub.textContent=st.connected?.phone?"striker ready — THE WALL awaits":"waiting for the striker…";
+      big.className="brand";
+      sub.textContent=st.connected?.phone?"striker ready — AI Keeper awaits":"waiting for the striker…";
       btn.classList.remove("hide"); btn.disabled=!st.connected?.phone;
       btn.textContent="START MATCH"; break;
     case "announce":
       big.textContent=`KICK ${st.kick}`;
-      sub.textContent=st.line||"aim with your hand — THE WALL is watching it"; break;
+      sub.textContent=st.line||"aim with your hand — AI Keeper is watching it"; break;
     case "countdown":
       big.textContent=Math.max(1,Math.ceil(st.timerMs/1000));
       sub.textContent="…"; pop(); break;
@@ -642,7 +764,7 @@ function onState(st){
       }
       big.textContent=`${st.score} / ${st.kicksTotal}`;
       big.className=st.score>st.kicksTotal/2?"goal":"save";
-      sub.textContent=st.score>st.kicksTotal/2?"YOU BEAT THE WALL":"THE WALL STANDS";
+      sub.textContent=st.score>st.kicksTotal/2?"YOU BEAT AI KEEPER":"AI KEEPER STANDS";
       if(st.report){ report.textContent=st.report; report.classList.add("show"); }
       btn.classList.remove("hide"); btn.disabled=false;
       btn.textContent=st.level?"NEXT VENUE":"PLAY AGAIN";
@@ -961,7 +1083,7 @@ function drawFan(c,x,y,r,shirt,skin,hair,sh,up){
 }
 
 /* ---------------------------- static: LED ad boards ---------------------------- */
-const BRANDS=[["FORCEPOSE","#FFC400"],["SENTINELMESH","#3EC7F4"],["THE WALL","#e9f2f7"],
+const BRANDS=[["FORCEPOSE","#FFC400"],["SENTINELMESH","#3EC7F4"],["AI KEEPER","#e9f2f7"],
               ["GESTURE FC","#3ddc74"],["BULLET-TIME","#FFC400"],["POSE//NET","#3EC7F4"],
               ["MESHCAM","#e9f2f7"],["NIGHT LEAGUE","#ff8a3c"]];
 function buildBoards(){
@@ -1348,9 +1470,25 @@ function drawFlightGuide(){
   cx.stroke();
   cx.restore();
 }
+/* Classic truncated-icosahedron panels (12 pentagon centres). */
+const BALL_PENTS=(()=>{
+  const t=(1+Math.sqrt(5))/2;
+  return [
+    [0,1,t],[0,-1,t],[0,1,-t],[0,-1,-t],
+    [1,t,0],[-1,t,0],[1,-t,0],[-1,-t,0],
+    [t,0,1],[t,0,-1],[-t,0,1],[-t,0,-1],
+  ].map(v=>{const L=Math.hypot(v[0],v[1],v[2]);return[v[0]/L,v[1]/L,v[2]/L];});
+})();
+function _ballNorm(v){const L=Math.hypot(v[0],v[1],v[2])||1;return[v[0]/L,v[1]/L,v[2]/L];}
+function _ballCross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
+function _ballRot(p,yaw,pitch){
+  const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
+  const x1=p[0]*cy+p[2]*sy, z1=-p[0]*sy+p[2]*cy;
+  return [x1, p[1]*cp-z1*sp, p[1]*sp+z1*cp];
+}
 function drawBall(){
   if(B.mode==="gone") return;
-  const s=sc(B.d), x=W/2+B.x*s, y=gy(B.d)-B.y*s, r=Math.max(4,0.11*s);
+  const s=sc(B.d), x=W/2+B.x*s, y=gy(B.d)-B.y*s, r=Math.max(5,0.115*s);
   const I=vfxTier(B.force||VFX.force);
   const drive=B.strike!=="chip";
   // Connected streak — laser drive vs soft chip loft.
@@ -1370,23 +1508,91 @@ function drawBall(){
     cx.stroke();
     cx.restore();
   }
-  for(let i=0;i<B.trail.length;i++){                     // motion blur
-    const p=B.trail[i], a=(i+1)/B.trail.length*0.38;
+  for(let i=0;i<B.trail.length;i++){
+    const p=B.trail[i], a=(i+1)/B.trail.length*0.28;
     cx.fillStyle=`rgba(244,247,241,${a})`;
     cx.beginPath(); cx.arc(p.x,p.y,p.r*(0.45+0.5*(i+1)/B.trail.length),0,7); cx.fill();
   }
-  cx.fillStyle=`rgba(4,12,6,${clamp(0.34-B.y*0.16,0.05,0.34)})`;   // shadow
-  cx.beginPath(); cx.ellipse(x,gy(B.d),r*1.05,r*0.3,0,0,7); cx.fill();
-  const g=cx.createRadialGradient(x-r*0.35,y-r*0.4,r*0.15,x,y,r);
-  g.addColorStop(0,"#ffffff"); g.addColorStop(0.75,"#e8eef0"); g.addColorStop(1,"#b9c6cc");
-  cx.fillStyle=g; cx.beginPath(); cx.arc(x,y,r,0,7); cx.fill();
-  cx.strokeStyle="rgba(20,40,50,.4)"; cx.lineWidth=Math.max(1,r*0.08); cx.stroke();
-  cx.fillStyle="#25353d";
-  for(let k=0;k<5;k++){                                   // rolling panel dots
-    const a=B.rot+k*Math.PI*2/5;
-    cx.beginPath(); cx.arc(x+Math.cos(a)*r*0.55,y+Math.sin(a)*r*0.52,r*0.17,0,7); cx.fill();
+  // Ground contact shadow
+  cx.fillStyle=`rgba(4,12,6,${clamp(0.38-B.y*0.18,0.06,0.38)})`;
+  cx.beginPath(); cx.ellipse(x,gy(B.d),r*1.15,r*0.32,0,0,7); cx.fill();
+
+  cx.save();
+  cx.beginPath(); cx.arc(x,y,r,0,7); cx.clip();
+
+  // Soft leather body
+  const body=cx.createRadialGradient(x-r*0.32,y-r*0.38,r*0.08,x,y,r*1.05);
+  body.addColorStop(0,"#ffffff");
+  body.addColorStop(0.45,"#f2f4f6");
+  body.addColorStop(0.82,"#d5dde2");
+  body.addColorStop(1,"#9aa8b0");
+  cx.fillStyle=body;
+  cx.fillRect(x-r-1,y-r-1,r*2+2,r*2+2);
+
+  // Rotating blue pentagons on white — crisp white panel borders
+  const yaw=B.rot, pitch=B.rot*0.62+0.35;
+  const ang=0.58; // panel angular radius
+  const sa=Math.sin(ang), ca=Math.cos(ang);
+  const blueFill=(z)=>`rgb(${Math.round(22+38*z)},${Math.round(88+55*z)},${Math.round(168+40*z)})`;
+  for(let i=0;i<BALL_PENTS.length;i++){
+    const c=_ballRot(BALL_PENTS[i],yaw,pitch);
+    if(c[2]<0.18) continue;
+    let a=Math.abs(c[1])<0.9?[0,1,0]:[1,0,0];
+    const u=_ballNorm(_ballCross(a,c));
+    const v=_ballCross(c,u);
+    cx.beginPath();
+    for(let k=0;k<5;k++){
+      const th=k*Math.PI*2/5 - Math.PI/2;
+      const q=_ballNorm([
+        c[0]*ca+(u[0]*Math.cos(th)+v[0]*Math.sin(th))*sa,
+        c[1]*ca+(u[1]*Math.cos(th)+v[1]*Math.sin(th))*sa,
+        c[2]*ca+(u[2]*Math.cos(th)+v[2]*Math.sin(th))*sa,
+      ]);
+      const px=x+q[0]*r, py=y-q[1]*r;
+      k?cx.lineTo(px,py):cx.moveTo(px,py);
+    }
+    cx.closePath();
+    cx.fillStyle=blueFill(c[2]);
+    cx.fill();
+    cx.strokeStyle=`rgba(255,255,255,${0.75+0.2*c[2]})`;
+    cx.lineWidth=Math.max(1.1,r*0.055);
+    cx.stroke();
+    cx.strokeStyle=`rgba(30,90,180,${0.35+0.25*c[2]})`;
+    cx.lineWidth=Math.max(0.5,r*0.022);
+    cx.stroke();
   }
-  cx.beginPath(); cx.arc(x+Math.cos(B.rot*1.6)*r*0.15,y+Math.sin(B.rot*1.6)*r*0.15,r*0.19,0,7); cx.fill();
+
+  // White seam ring between panels
+  cx.strokeStyle="rgba(255,255,255,.55)";
+  cx.lineWidth=Math.max(0.6,r*0.028);
+  cx.beginPath(); cx.arc(x,y,r*0.97,0,7); cx.stroke();
+  cx.strokeStyle="rgba(37,99,235,.35)";
+  cx.lineWidth=Math.max(0.5,r*0.018);
+  cx.beginPath(); cx.arc(x,y,r*0.94,0,7); cx.stroke();
+
+  // Specular highlight
+  const hi=cx.createRadialGradient(x-r*0.28,y-r*0.34,0,x-r*0.18,y-r*0.22,r*0.55);
+  hi.addColorStop(0,"rgba(255,255,255,.7)");
+  hi.addColorStop(0.35,"rgba(255,255,255,.22)");
+  hi.addColorStop(1,"rgba(255,255,255,0)");
+  cx.fillStyle=hi;
+  cx.beginPath(); cx.arc(x,y,r,0,7); cx.fill();
+
+  // Soft limb darkening at the rim
+  const rim=cx.createRadialGradient(x,y,r*0.72,x,y,r);
+  rim.addColorStop(0,"rgba(0,0,0,0)");
+  rim.addColorStop(1,"rgba(10,18,24,.28)");
+  cx.fillStyle=rim;
+  cx.beginPath(); cx.arc(x,y,r,0,7); cx.fill();
+  cx.restore();
+
+  // Outer edge — blue trim on white
+  cx.strokeStyle="rgba(37,99,235,.75)";
+  cx.lineWidth=Math.max(1.2,r*0.07);
+  cx.beginPath(); cx.arc(x,y,r,0,7); cx.stroke();
+  cx.strokeStyle="rgba(255,255,255,.45)";
+  cx.lineWidth=Math.max(0.6,r*0.03);
+  cx.beginPath(); cx.arc(x,y,r*0.92,0,7); cx.stroke();
 }
 
 /* ============================== goal + net ============================== */
@@ -1818,7 +2024,7 @@ const KIT_KEEPER={
   sleeve:"#2eb4e0",sleeveHi:"#5ad4f8",short:"#13273a",shortFill:"#0e1c28",
   sock:"#1a2740",boot:"#0a0f14",bootToe:"#1c2836",
   hand:"#f4f7f1",skin:"#e0ad82",hair:"#11161b",gloveStroke:"rgba(10,25,38,.55)",
-  label:"THE WALL",labelCol:"#062028",num:"1"
+  label:"AI KEEPER",labelCol:"#062028",num:"1"
 };
 /* ---- Option B: ForcePose skeleton → solid striker on the pitch ---- */
 const MP={NOSE:0,L_SHO:11,R_SHO:12,L_ELB:13,R_ELB:14,L_WRI:15,R_WRI:16,
@@ -2042,6 +2248,7 @@ let lastT=0;
 function draw(now){
   requestAnimationFrame(draw);
   if(!W) return;
+  const tDraw0=performance.now();
   const dt=clamp((now-lastT)/1000||0.016,0.001,0.05); lastT=now;
   updateCrowd(now,dt); updateBall(now,dt);
   cx.save();
@@ -2076,6 +2283,8 @@ function draw(now){
   drawPostFX(now);
   if(S?.phase==="resolve" && S.replay?.frames?.length>1) drawReplay(now);
   else replayKick=-1;
+  TELEM.work+=performance.now()-tDraw0;
+  TELEM.frames++;
 }
 
 /* ============ bullet-time: orbiting slow-mo 3D skeleton ============ */
@@ -2150,6 +2359,42 @@ function drawReplay(now){
     cx.beginPath(); cx.arc(fx,fy,Math.max(3,H*0.006),0,7); cx.fill(); }
   cx.restore();
 }
+
+/* ============================ fullscreen (hide browser tabs) ============================ */
+function fsElement(){
+  return document.fullscreenElement||document.webkitFullscreenElement||null;
+}
+function enterFullscreen(){
+  if(fsElement()) return;
+  const el=document.documentElement;
+  const req=el.requestFullscreen||el.webkitRequestFullscreen||el.webkitRequestFullScreen;
+  if(!req) return;
+  try{ const p=req.call(el); if(p&&p.catch) p.catch(()=>{}); }catch(_){}
+}
+function exitFullscreen(){
+  if(!fsElement()) return;
+  const ex=document.exitFullscreen||document.webkitExitFullscreen;
+  if(!ex) return;
+  try{ const p=ex.call(document); if(p&&p.catch) p.catch(()=>{}); }catch(_){}
+}
+function syncFullscreenClass(){
+  document.body.classList.toggle("is-fs", !!fsElement());
+}
+document.addEventListener("fullscreenchange", syncFullscreenClass);
+document.addEventListener("webkitfullscreenchange", syncFullscreenClass);
+$("fsBtn").onclick=(e)=>{ e.stopPropagation(); enterFullscreen(); };
+document.addEventListener("keydown",e=>{
+  if(e.key==="f"||e.key==="F"){
+    if(e.target&&/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    e.preventDefault();
+    if(fsElement()) exitFullscreen(); else enterFullscreen();
+  }
+});
+// Browsers require a gesture — first click / Start Match also goes fullscreen.
+document.addEventListener("pointerdown",()=>enterFullscreen(),{once:true,capture:true});
+const _startFs=$("startBtn").onclick;
+$("startBtn").onclick=(ev)=>{ enterFullscreen(); if(_startFs) _startFs(ev); };
+syncFullscreenClass();
 
 rebuild();
 requestAnimationFrame(draw);
