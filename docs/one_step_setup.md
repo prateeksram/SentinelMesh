@@ -15,8 +15,8 @@
 | `-UnoQIp <ip>` | prompted (suggests `192.168.150.72`) | UNO Q address |
 | `-UnoQUser <user>` | `arduino` | SSH user on the board |
 | `-LaptopIp <ip>` | auto-detected | Laptop interface routed to the UNO Q (override if detection picks wrong) |
-| `-CameraMode Laptop\|UnoQ` | `Laptop` | Where the USB camera is plugged in |
-| `-CameraIndex <n>` | `1` | Windows capture device index (`0` if the USB cam is first) |
+| `-CameraMode Laptop\|UnoQ` | `UnoQ` | Where the USB camera is plugged in |
+| `-CameraIndex <n>` | `1` | Windows capture device index in Laptop mode (`0` if the USB cam is first) |
 | `-RemoteCamera <dev>` | `/dev/video0` | Board camera device (UnoQ mode; check `v4l2-ctl --list-devices`) |
 | `-UnoQDnnTarget cpu\|opencl\|opencl-fp16` | `cpu` | OpenCV-DNN target; OpenCL modes are diagnostic and much slower on the currently tested board image |
 | `-SnapKickRoot <path>` | `%USERPROFILE%\Desktop\snap-kick\snapkick-starter` | External SnapKick checkout providing `camera_relay.py` (Laptop camera mode only) |
@@ -35,22 +35,22 @@
 .\start-game.bat -SkipUnoQ
 ```
 
-**Laptop USB camera relayed to the UNO Q for inference:**
+**Camera plugged into the UNO Q directly (default):**
 
 ```powershell
-.\start-game.bat -UnoQIp 192.168.150.72 -CameraIndex 1
+.\start-game.bat -UnoQIp 192.168.150.72
 ```
 
 **Sync the streamer first (after editing it, or on a fresh board dir):**
 
 ```powershell
-.\start-game.bat -UnoQIp 192.168.150.72 -CameraIndex 1 -SyncUnoQ
+.\start-game.bat -UnoQIp 192.168.150.72 -SyncUnoQ
 ```
 
-**Camera plugged into the UNO Q directly:**
+**Laptop USB camera relayed to the UNO Q for inference:**
 
 ```powershell
-.\start-game.bat -UnoQIp 192.168.150.72 -CameraMode UnoQ -RemoteCamera /dev/video0
+.\start-game.bat -UnoQIp 192.168.150.72 -CameraMode Laptop -CameraIndex 1
 ```
 
 **Add the independent SnapKick UDP 5005 transport:**

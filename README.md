@@ -247,7 +247,7 @@ AI100 supplies decorative artwork only. All numbers, labels, comparisons, and ch
 |---|---|---|
 | Copilot+ PC | Match authority, referee, AI goalkeeper, TV rendering, replay, telemetry dashboard, SceneEngine, Neural FX, report storage | Optional prompts to configured AI services; report downloads to player |
 | Galaxy S25 | Camera capture, pose inference, ForcePose metrics, local calibration, optional Whisper and coach | Compact aim, kick, skeleton, and utilization telemetry |
-| Arduino UNO Q | Pose landmarks, optical flow, kick candidates, optional camera relay | UDP pose/SnapKick packets; optional JPEG previews |
+| Arduino UNO Q | Pose landmarks, optical-flow motion samples, optional camera relay | UDP pose/SnapKick packets; optional JPEG previews |
 | Qualcomm Cloud AI100 | Generate text-free stadium art for the scorecard | Generated image response |
 | Download phone | Scan QR and save the result | HTTP request containing an unguessable report token |
 
@@ -418,22 +418,21 @@ See [`android/README.md`](android/README.md) and [`docs/README_GalaxyS25.md`](do
 
 ### Option B: Arduino UNO Q
 
-Laptop-camera mode:
+UNO Q-connected camera mode (default):
 
 ```powershell
 .\start-game.bat `
   -UnoQIp 192.168.150.72 `
-  -CameraIndex 1 `
   -SyncUnoQ
 ```
 
-UNO Q-connected camera mode:
+Laptop-camera relay mode:
 
 ```powershell
 .\start-game.bat `
   -UnoQIp 192.168.150.72 `
-  -CameraMode UnoQ `
-  -RemoteCamera /dev/video0
+  -CameraMode Laptop `
+  -CameraIndex 1
 ```
 
 Useful flags:

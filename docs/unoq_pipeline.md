@@ -55,19 +55,22 @@ Use the real UVC capture device, not a Qualcomm Venus codec device.
 
 ## 4. Board environment
 
-Activate the SnapKick venv if it exists, else create one:
+The launcher prefers the SnapKick venv when it exists and otherwise falls back
+to the board's `python3`. On the currently deployed board the venv is absent,
+so the tested runtime is system Python 3.13 with OpenCV 4.10:
 
 ```bash
-cd /home/arduino/snapkick-starter/unoq
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+PY=/home/arduino/snapkick-starter/unoq/.venv/bin/python
+if [ ! -x "$PY" ]; then PY=python3; fi
+"$PY" -c 'import cv2, numpy; print(cv2.__version__)'
 ```
 
 ## 5. Run inference on the board
 
 ```bash
-source /home/arduino/snapkick-starter/unoq/.venv/bin/activate
-python3 /home/arduino/sentinelmesh/sentinel_pose_streamer.py \
+PY=/home/arduino/snapkick-starter/unoq/.venv/bin/python
+if [ ! -x "$PY" ]; then PY=python3; fi
+"$PY" /home/arduino/sentinelmesh/sentinel_pose_streamer.py \
   --laptop-ip LAPTOP_IP \
   --camera /dev/video0 \
   --model /home/arduino/models/opencv-mediapipe/pose_estimation_mediapipe_2023mar.onnx \
