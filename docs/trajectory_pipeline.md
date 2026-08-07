@@ -51,7 +51,7 @@ No new process or port is required. Start the existing laptop host and use any
 pose mode in the native phone app:
 
 ```powershell
-python laptop\server.py
+python server.py
 ```
 
 Open `http://localhost:8080/tv.html`, connect the phone, and play normally.

@@ -12,6 +12,7 @@ param(
     [string]$IdentityFile,
     [switch]$SyncUnoQ,
     [switch]$SkipUnoQ,
+    [switch]$EnableSnapkickBridge,
     [ValidateRange(0, 86400)]
     [int]$AutoStopAfterSeconds = 0
 )
@@ -21,10 +22,12 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $runLogDir = Join-Path $repoRoot "logs\game-run"
-$serverScript = Join-Path $repoRoot "laptop\server.py"
+$serverScript = Join-Path $repoRoot "server.py"
+$bridgeScript = Join-Path $repoRoot "snapkick_bridge.py"
 $streamerScript = Join-Path $repoRoot "unoq\sentinel_pose_streamer.py"
 $serverProcess = $null
 $relayProcess = $null
+$bridgeProcess = $null
 $remoteStarted = $false
 $scriptExitCode = 0
 
@@ -72,9 +75,13 @@ function Get-SshBaseArgs {
 }
 
 function Invoke-UnoQ([string]$Command, [switch]$IgnoreFailure) {
+    # PowerShell here-strings use CRLF on Windows. Passing those bytes through
+    # ssh makes Bash parse tokens such as `set -e\r` and `do\r`, so normalize
+    # once at the transport boundary for every remote command.
+    $unixCommand = $Command.Replace("`r`n", "`n").Replace("`r", "`n")
     $sshArguments = @(Get-SshBaseArgs)
     $sshArguments += "$UnoQUser@$UnoQIp"
-    $sshArguments += $Command
+    $sshArguments += $unixCommand
     & ssh @sshArguments
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0 -and -not $IgnoreFailure) {
@@ -88,6 +95,8 @@ function Stop-KnownLocalServices {
         Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty OwningProcess
         Get-NetUDPEndpoint -LocalPort 9999 -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess
+        Get-NetUDPEndpoint -LocalPort 5005 -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty OwningProcess
     ) | Sort-Object -Unique
     $knownPids = [System.Collections.Generic.HashSet[int]]::new()
@@ -118,7 +127,8 @@ function Stop-KnownLocalServices {
         Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object {
             $line = $_.CommandLine
             if (-not $line -or $_.Name -notmatch "^(python|python3|pythonw)(\.exe)?$") { return }
-            if ($line -match "(?i)laptop[\\/]server\.py" -or
+            if ($line -match "(?i)(?:laptop[\\/])?server\.py" -or
+                $line -match "(?i)snapkick_bridge\.py" -or
                 $line -match "(?i)snap-kick.*unoq[\\/]camera_relay\.py") {
                 $knownPids.Add([int]$_.ProcessId) | Out-Null
             }
@@ -248,11 +258,20 @@ try {
     Stop-KnownLocalServices
     Assert-PortAvailable 8080
     Assert-UdpPortAvailable 9999
+    if ($EnableSnapkickBridge) { Assert-UdpPortAvailable 5005 }
 
     Write-Step "Starting SentinelMesh host"
     $serverPython = (Get-Command python -ErrorAction Stop).Source
     $serverProcess = Start-LoggedProcess "server" $serverPython @("-u", $serverScript) $repoRoot
     Wait-EdgeStatus "server" 12 "the laptop server" | Out-Null
+
+    if ($EnableSnapkickBridge) {
+        Write-Step "Starting optional pre-solved SnapKick bridge on UDP 5005"
+        if (-not (Test-Path -LiteralPath $bridgeScript)) { throw "Missing $bridgeScript" }
+        $bridgeProcess = Start-LoggedProcess "snapkick-bridge" $serverPython @(
+            "-u", $bridgeScript, "--host", "127.0.0.1:8080", "--udp-port", "5005"
+        ) $repoRoot
+    }
 
     if ($CameraMode -eq "Laptop" -and -not $SkipUnoQ) {
         Write-Step "Starting laptop USB-camera relay (camera $CameraIndex)"
@@ -345,6 +364,10 @@ echo "UNO Q pose streamer started as PID $pid"
             $relayProcess.Refresh()
             if ($relayProcess.HasExited) { throw "Camera relay exited. See $runLogDir\camera-relay.err.log" }
         }
+        if ($bridgeProcess) {
+            $bridgeProcess.Refresh()
+            if ($bridgeProcess.HasExited) { throw "SnapKick bridge exited. See $runLogDir\snapkick-bridge.err.log" }
+        }
         if ($AutoStopAfterSeconds -gt 0 -and
             ([DateTime]::UtcNow - $readyAt).TotalSeconds -ge $AutoStopAfterSeconds) {
             Write-Host "Automatic stop timer reached."
@@ -357,6 +380,7 @@ echo "UNO Q pose streamer started as PID $pid"
 } finally {
     Write-Step "Shutting down Gesture Football"
     Stop-Child $relayProcess "camera relay"
+    Stop-Child $bridgeProcess "SnapKick bridge"
     Stop-Child $serverProcess "laptop server"
     if ($remoteStarted) {
         Write-Host "Stopping UNO Q pose streamer (SSH may request your password)"

@@ -1,5 +1,7 @@
 package com.sentinelmesh.gesturefootball.net
 
+import com.sentinelmesh.gesturefootball.pose.KickKinematicState
+import com.sentinelmesh.gesturefootball.pose.ShotTrajectory
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -29,8 +31,41 @@ class GameClient(
     interface Listener {
         fun onConnected(connected: Boolean)
         fun onConnectStatus(status: ConnectStatus) {}
+        fun onEdgePose(frame: EdgePoseFrame) {}
         fun onState(state: MatchState)
     }
+
+    data class EdgePoseFrame(
+        val seq: Long,
+        val captureNs: Long,
+        val width: Int,
+        val height: Int,
+        val rotation: Int,
+        val mirrored: Boolean,
+        val landmarks: List<FloatArray>,
+        val visibility: FloatArray,
+        val inferenceMs: Long,
+        val fps: Float,
+        val flowMotion: EdgeFlowMotion? = null,
+    )
+
+    data class EdgeFlowFoot(
+        val vxNorm: Float,
+        val vyNorm: Float,
+        val peakVxNorm: Float,
+        val peakVyNorm: Float,
+        val dxNorm: Float,
+        val dyNorm: Float,
+        val confidence: Float,
+        val samples: Int,
+    )
+
+    data class EdgeFlowMotion(
+        val timestampNs: Long,
+        val fps: Float,
+        val left: EdgeFlowFoot?,
+        val right: EdgeFlowFoot?,
+    )
 
     data class MatchState(
         val phase: String,
@@ -92,6 +127,10 @@ class GameClient(
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
                     val o = JSONObject(text)
+                    if (o.optString("type") == "edge_pose") {
+                        parseEdgePose(o)?.let(listener::onEdgePose)
+                        return
+                    }
                     if (o.optString("type") != "state") return
                     phase = o.optString("phase", "lobby")
                     kick = o.optInt("kick", 0)
@@ -202,6 +241,12 @@ class GameClient(
         ws?.send(JSONObject().put("type", "aim").put("zone", zone).toString())
     }
 
+    /** HTTP endpoint paired with the current match-host WebSocket URL. */
+    fun edgeFrameUrl(): String = url
+        .replaceFirst("ws://", "http://")
+        .replaceFirst("wss://", "https://")
+        .removeSuffix("/ws") + "/edge/frame.jpg"
+
     /** Ask the server to start the match (works while it's in the lobby). */
     fun sendStart() {
         ws?.send(JSONObject().put("type", "start").toString())
@@ -216,20 +261,64 @@ class GameClient(
         spin: Float = 0f,
         strike: String = "drive",
         foot: String = "R",
+        kinematics: KickKinematicState? = null,
+        trajectory: ShotTrajectory? = null,
     ) {
-        ws?.send(
-            JSONObject()
-                .put("type", "kick")
-                .put("zone", zone)
-                .put("power", power.toDouble())
-                .put("force", force)
-                .put("dirDeg", dirDeg)
-                .put("height", height)
-                .put("spin", spin.toDouble())
-                .put("strike", strike)
-                .put("foot", foot)
-                .toString()
-        )
+        val packet = JSONObject()
+            .put("type", "kick")
+            .put("zone", zone)
+            .put("power", power.toDouble())
+            .put("force", force)
+            .put("dirDeg", dirDeg)
+            .put("height", height)
+            .put("spin", spin.toDouble())
+            .put("strike", strike)
+            .put("foot", foot)
+        kinematics?.let { state ->
+            packet.put(
+                "kickState",
+                JSONObject()
+                    .put("schema", "sentinel.kick.state.v1")
+                    .put("source", state.source)
+                    .put("peakFootSpeedMps", state.peakFootSpeedMps.toDouble())
+                    .put("lateralVelocityMps", state.lateralVelocityMps.toDouble())
+                    .put("upwardVelocityMps", state.upwardVelocityMps.toDouble())
+                    .put("pathDisplacementM", state.pathDisplacementM.toDouble())
+                    .put("liftM", state.liftM.toDouble())
+                    .put("swingDurationMs", state.swingDurationMs)
+                    .put("confidence", state.confidence.toDouble()),
+            )
+        }
+        trajectory?.let { shot ->
+            val points = JSONArray()
+            shot.points.forEach { point ->
+                points.put(
+                    JSONArray()
+                        .put(point.timeS.toDouble())
+                        .put(point.xM.toDouble())
+                        .put(point.yM.toDouble())
+                        .put(point.zM.toDouble()),
+                )
+            }
+            packet.put(
+                "trajectory",
+                JSONObject()
+                    .put("schema", "sentinel.trajectory.v1")
+                    .put("model", shot.model)
+                    .put("confidence", shot.confidence.toDouble())
+                    .put("launchVelocity", JSONArray()
+                        .put(shot.launchVxMps.toDouble())
+                        .put(shot.launchVyMps.toDouble())
+                        .put(shot.launchVzMps.toDouble()))
+                    .put("launchSpeedMps", shot.launchSpeedMps.toDouble())
+                    .put("flightTimeS", shot.flightTimeS.toDouble())
+                    .put("goalX", shot.goalXM.toDouble())
+                    .put("goalZ", shot.goalZM.toDouble())
+                    .put("apexM", shot.apexM.toDouble())
+                    .put("points", points),
+            )
+        }
+        ws?.send(packet.toString())
     }
 
     fun sendSkeleton(kickNo: Int, frames: List<Pair<Int, List<FloatArray>>>) {
@@ -255,6 +344,62 @@ class GameClient(
         const val DEFAULT_URL = "ws://127.0.0.1:8080/ws"
         const val PREFS = "gf_net"
         const val PREF_URL = "host_url"
+
+        private fun parseEdgePose(o: JSONObject): EdgePoseFrame? {
+            val points = o.optJSONArray("landmarks") ?: return null
+            if (points.length() != 0 && points.length() != 33) return null
+            val landmarks = ArrayList<FloatArray>(points.length())
+            val visibility = FloatArray(points.length())
+            for (i in 0 until points.length()) {
+                val p = points.optJSONArray(i) ?: return null
+                if (p.length() < 4) return null
+                landmarks += floatArrayOf(
+                    p.optDouble(0).toFloat(),
+                    p.optDouble(1).toFloat(),
+                    p.optDouble(2).toFloat(),
+                )
+                visibility[i] = p.optDouble(3, 1.0).toFloat().coerceIn(0f, 1f)
+            }
+            val frame = o.optJSONObject("frame") ?: JSONObject()
+            val diagnostics = o.optJSONObject("diagnostics") ?: JSONObject()
+            val motion = parseEdgeFlow(o.optJSONObject("motion"))
+            return EdgePoseFrame(
+                seq = o.optLong("seq", 0L),
+                captureNs = o.optLong("t_capture_ns", 0L),
+                width = frame.optInt("width", 1).coerceAtLeast(1),
+                height = frame.optInt("height", 1).coerceAtLeast(1),
+                rotation = frame.optInt("rotation", 0),
+                mirrored = frame.optBoolean("mirrored", true),
+                landmarks = landmarks,
+                visibility = visibility,
+                inferenceMs = diagnostics.optDouble("inference_ms", 0.0).toLong(),
+                fps = diagnostics.optDouble("fps", 0.0).toFloat(),
+                flowMotion = motion,
+            )
+        }
+
+        private fun parseEdgeFlow(o: JSONObject?): EdgeFlowMotion? {
+            if (o == null) return null
+            fun foot(name: String): EdgeFlowFoot? {
+                val value = o.optJSONObject(name) ?: return null
+                return EdgeFlowFoot(
+                    vxNorm = value.optDouble("vx", 0.0).toFloat(),
+                    vyNorm = value.optDouble("vy", 0.0).toFloat(),
+                    peakVxNorm = value.optDouble("peak_vx", 0.0).toFloat(),
+                    peakVyNorm = value.optDouble("peak_vy", 0.0).toFloat(),
+                    dxNorm = value.optDouble("dx", 0.0).toFloat(),
+                    dyNorm = value.optDouble("dy", 0.0).toFloat(),
+                    confidence = value.optDouble("confidence", 0.0).toFloat().coerceIn(0f, 1f),
+                    samples = value.optInt("samples", 0).coerceAtLeast(0),
+                )
+            }
+            return EdgeFlowMotion(
+                timestampNs = o.optLong("t_ns", 0L).coerceAtLeast(0L),
+                fps = o.optDouble("fps", 0.0).toFloat().coerceAtLeast(0f),
+                left = foot("left"),
+                right = foot("right"),
+            )
+        }
 
         fun normalizeUrl(raw: String): String {
             var u = raw.trim()

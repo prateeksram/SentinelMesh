@@ -41,7 +41,7 @@ From the SentinelMesh repository:
 
 ```powershell
 python -m pip install -r requirements.txt
-python laptop\server.py
+python server.py
 ```
 
 Check the new relay before starting the board:

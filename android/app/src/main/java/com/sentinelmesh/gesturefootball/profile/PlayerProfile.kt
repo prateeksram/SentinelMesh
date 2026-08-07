@@ -15,6 +15,8 @@ data class PlayerProfile(
     val torsoM: Float,
     /** Min foot speed (m/s) to count as a kick — personalised from practice swing. */
     val kickMs: Float,
+    /** Separate threshold for the lower-rate UNO Q detector; absent in legacy profiles. */
+    val unoQKickMs: Float? = null,
     /** Dominant kicking foot from practice swing. */
     val dominantFoot: String = "R",
     /** Mirrored wrist-X thresholds for L / C / R aim (user's left = L). */
@@ -29,6 +31,7 @@ data class PlayerProfile(
         .put("weightKg", weightKg.toDouble())
         .put("torsoM", torsoM.toDouble())
         .put("kickMs", kickMs.toDouble())
+        .apply { unoQKickMs?.let { put("unoQKickMs", it.toDouble()) } }
         .put("dominantFoot", dominantFoot)
         .put("aimLMax", aimLMax.toDouble())
         .put("aimCMin", aimCMin.toDouble())
@@ -47,6 +50,11 @@ data class PlayerProfile(
             weightKg = o.getDouble("weightKg").toFloat(),
             torsoM = o.getDouble("torsoM").toFloat(),
             kickMs = o.getDouble("kickMs").toFloat(),
+            unoQKickMs = if (o.has("unoQKickMs")) {
+                o.optDouble("unoQKickMs").toFloat()
+            } else {
+                null
+            },
             dominantFoot = o.optString("dominantFoot", "R"),
             aimLMax = o.optDouble("aimLMax", 0.34).toFloat(),
             aimCMin = o.optDouble("aimCMin", 0.40).toFloat(),
