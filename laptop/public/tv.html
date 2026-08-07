@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Gesture Football — Stadium</title>
 <style>
   :root{--night:#0B1D2A;--ink:#07131C;--chalk:#F4F7F1;--mut:#9db4c6;
@@ -11,9 +13,18 @@
         --fCond:'Barlow Condensed','Arial Narrow',Arial,sans-serif;
         --fBody:Barlow,'Segoe UI',system-ui,sans-serif}
   *{box-sizing:border-box;margin:0}
-  html,body{height:100%}
+  html,body{height:100%;height:100dvh}
   body{background:#04070d;color:var(--chalk);font-family:var(--fBody);
        overflow:hidden;user-select:none}
+  html:fullscreen,html:-webkit-full-screen{background:#04070d}
+  html:fullscreen body,html:-webkit-full-screen body{height:100%;height:100dvh}
+  #fsBtn{position:fixed;top:14px;right:16px;z-index:10;pointer-events:auto;
+         font-family:var(--fCond);font-weight:800;letter-spacing:2px;font-size:12px;
+         color:var(--chalk);background:linear-gradient(180deg,rgba(10,20,31,.92),rgba(5,11,18,.94));
+         border:1px solid rgba(158,190,215,.35);border-radius:999px;padding:8px 14px;cursor:pointer;
+         box-shadow:0 6px 18px rgba(0,0,0,.45)}
+  #fsBtn:hover{border-color:var(--cyan);color:#fff}
+  body.is-fs #fsBtn{display:none}
 
   /* ---------------- full-bleed stadium canvas ---------------- */
   #pitch{position:fixed;inset:0;width:100vw;height:100vh;display:block}
@@ -245,6 +256,7 @@
 
 <canvas id="pitch" width="1280" height="720"></canvas>
 
+<button id="fsBtn" type="button" title="Hide browser tabs (F)">FULLSCREEN</button>
 <div class="livebug"><span class="reddot"></span>LIVE<em>PENALTY SHOOTOUT</em></div>
 
 <div class="board">
@@ -2347,6 +2359,42 @@ function drawReplay(now){
     cx.beginPath(); cx.arc(fx,fy,Math.max(3,H*0.006),0,7); cx.fill(); }
   cx.restore();
 }
+
+/* ============================ fullscreen (hide browser tabs) ============================ */
+function fsElement(){
+  return document.fullscreenElement||document.webkitFullscreenElement||null;
+}
+function enterFullscreen(){
+  if(fsElement()) return;
+  const el=document.documentElement;
+  const req=el.requestFullscreen||el.webkitRequestFullscreen||el.webkitRequestFullScreen;
+  if(!req) return;
+  try{ const p=req.call(el); if(p&&p.catch) p.catch(()=>{}); }catch(_){}
+}
+function exitFullscreen(){
+  if(!fsElement()) return;
+  const ex=document.exitFullscreen||document.webkitExitFullscreen;
+  if(!ex) return;
+  try{ const p=ex.call(document); if(p&&p.catch) p.catch(()=>{}); }catch(_){}
+}
+function syncFullscreenClass(){
+  document.body.classList.toggle("is-fs", !!fsElement());
+}
+document.addEventListener("fullscreenchange", syncFullscreenClass);
+document.addEventListener("webkitfullscreenchange", syncFullscreenClass);
+$("fsBtn").onclick=(e)=>{ e.stopPropagation(); enterFullscreen(); };
+document.addEventListener("keydown",e=>{
+  if(e.key==="f"||e.key==="F"){
+    if(e.target&&/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    e.preventDefault();
+    if(fsElement()) exitFullscreen(); else enterFullscreen();
+  }
+});
+// Browsers require a gesture — first click / Start Match also goes fullscreen.
+document.addEventListener("pointerdown",()=>enterFullscreen(),{once:true,capture:true});
+const _startFs=$("startBtn").onclick;
+$("startBtn").onclick=(ev)=>{ enterFullscreen(); if(_startFs) _startFs(ev); };
+syncFullscreenClass();
 
 rebuild();
 requestAnimationFrame(draw);
