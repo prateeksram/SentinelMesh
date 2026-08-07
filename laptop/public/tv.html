@@ -163,22 +163,28 @@
         font-size:14px;line-height:1.35;color:var(--chalk);
         overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;
         -webkit-line-clamp:5;word-break:break-word}
-  .links{display:flex;flex-direction:column;align-items:stretch;gap:9px;
+  .links{display:flex;flex-direction:column;align-items:stretch;gap:8px;
          padding:12px 14px;font-family:var(--fCond);font-weight:700;
          letter-spacing:1.5px;font-size:12px;color:var(--mut)}
   .links > span,.links > button{display:flex;align-items:center;white-space:nowrap}
   .led{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--red);
        margin-right:8px;flex-shrink:0;box-shadow:0 0 6px rgba(255,68,56,.8)}
   .led.on{background:var(--green);box-shadow:0 0 6px rgba(61,220,116,.8)}
+  #levelBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
+  #levelBadge.on{color:var(--cyan)}
+  .telem-block{margin-top:4px;padding-top:10px;border-top:1px solid #1c374c;
+               display:flex;flex-direction:column;gap:5px}
+  .telem-block .telem-h{font-size:10px;letter-spacing:2px;color:var(--amber);
+                        margin-bottom:2px}
+  .telem-block .telem-row{display:flex;justify-content:space-between;gap:8px;
+                          font-size:11px;letter-spacing:1px;color:var(--mut);
+                          font-variant-numeric:tabular-nums}
+  .telem-block .telem-row b{color:var(--chalk);font-weight:700}
+  .telem-block .telem-row.hot b{color:var(--amber)}
   #soundBtn{font:inherit;color:var(--chalk);background:#22374a;border:1px solid #31506a;
             border-radius:999px;padding:7px 12px;cursor:pointer;letter-spacing:1.5px;
-            justify-content:center;margin-top:2px}
+            justify-content:center;margin-top:4px}
   #soundBtn.off{color:var(--mut);background:transparent}
-  #fxBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
-  #fxBadge.on{color:var(--cyan)}
-  #fxBadge.qnn{color:var(--amber)}
-  #deskBadge,#sceneBadge,#levelBadge{font:inherit;color:var(--mut);letter-spacing:1.5px;white-space:nowrap}
-  #deskBadge.on,#sceneBadge.on,#levelBadge.on{color:var(--cyan)}
   #genBarWrap{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:6;
               width:min(480px,70vw);height:6px;border-radius:999px;background:rgba(20,40,60,.7);
               border:1px solid rgba(158,190,215,.25);overflow:hidden;display:none}
@@ -287,11 +293,16 @@
   <div class="rail-card">
     <div class="links">
       <span><span class="led" id="ledP"></span>PHONE</span>
-      <span><span class="led on"></span>AI KEEPER</span>
-      <span id="deskBadge" title="Commentary desk backend">DESK · …</span>
-      <span id="fxBadge" title="On-device stadium neural FX">FX · …</span>
-      <span id="sceneBadge" title="SceneEngine">SCENE · …</span>
+      <span><span class="led" id="ledU"></span>UNO Q</span>
       <span id="levelBadge" title="Campaign level">LVL —</span>
+      <div class="telem-block" title="Laptop silicon telemetry (telem_state)">
+        <div class="telem-h">LAPTOP TELEM</div>
+        <div class="telem-row">CPU <b id="telemCpu">—</b></div>
+        <div class="telem-row">GPU <b id="telemGpu">—</b></div>
+        <div class="telem-row">NPU <b id="telemNpu">—</b></div>
+        <div class="telem-row">TV FPS <b id="telemFps">—</b></div>
+        <div class="telem-row">MSG/S <b id="telemMsg">—</b></div>
+      </div>
       <button id="soundBtn" title="Speak the keeper's lines">SOUND ON</button>
       <button id="abortBtn" class="hide" title="End the match and return to lobby">END MATCH</button>
     </div>
@@ -392,16 +403,36 @@ function drawPostFX(now){
 
 /* Neural FX hero plate (from /fx/hero) */
 const HERO={img:null, kick:-1, backend:null, pending:false, ms:0};
-function setFxBadge(backend){
-  const el=$("fxBadge");
-  if(!el) return;
-  el.classList.remove("on","qnn");
-  if(backend==="qnn"){ el.textContent="FX · QNN"; el.classList.add("qnn"); }
-  else if(backend==="cpu"){ el.textContent="FX · CPU"; el.classList.add("on"); }
-  else if(backend==="procedural"){ el.textContent="FX · NPU-READY"; el.classList.add("on"); }
-  else if(backend){ el.textContent="FX · "+String(backend).toUpperCase(); el.classList.add("on"); }
-  else el.textContent="FX · OFF";
+/* Real silicon telemetry (proto TelemetryStore → telem_state) + local TV FPS */
+const TELEM={work:0,frames:0,t0:performance.now(),staleMs:3000,laptop:null};
+function setTelem(id,v,hot){
+  const el=$(id); if(!el) return;
+  el.textContent=v;
+  el.parentElement?.classList.toggle("hot",!!hot);
 }
+function unitBusy(units, name){
+  const u=units?.[name];
+  if(!u) return {txt:"—", hot:false};
+  if((u.age_ms||0)>TELEM.staleMs) return {txt:"—", hot:false};
+  const busy=Number(u.busy_pct);
+  if(!Number.isFinite(busy)) return {txt:"—", hot:false};
+  return {txt:`${busy.toFixed(0)}%`, hot:busy>=80};
+}
+function paintTelem(){
+  const units=TELEM.laptop?.units||{};
+  const cpu=unitBusy(units,"cpu");
+  const gpu=unitBusy(units,"gpu");
+  const npu=unitBusy(units,"npu");
+  setTelem("telemCpu", cpu.txt, cpu.hot);
+  setTelem("telemGpu", gpu.txt, gpu.hot);
+  setTelem("telemNpu", npu.txt, npu.hot);
+  const m=units.cpu?.metric||units.gpu?.metric||{};
+  const fps=m.fps??TELEM.localFps;
+  const msg=m.msg_rate;
+  setTelem("telemFps", fps!=null?String(fps):"—");
+  setTelem("telemMsg", msg!=null?String(msg):"—");
+}
+function setFxBadge(backend){ HERO.backend=backend||null; }
 async function probeFxStatus(){
   try{
     const r=await fetch("/fx/status");
@@ -409,26 +440,7 @@ async function probeFxStatus(){
     setFxBadge(j.backend||"procedural");
   }catch(_){ setFxBadge(null); }
 }
-async function probeHwStatus(){
-  try{
-    const r=await fetch("/hw/status");
-    const j=await r.json();
-    const desk=$("deskBadge");
-    if(desk){
-      const m=(j.desk||"templates").toUpperCase();
-      desk.textContent="DESK · "+(m==="GENIEX"?"GENIEX":m==="LOCAL"?"LOCAL":m==="CLOUD"?"CLOUD":"TEMPLATES");
-      desk.classList.toggle("on", !!j.desk);
-    }
-    if(j.fx?.backend) setFxBadge(j.fx.backend);
-  }catch(_){}
-}
-function setSceneBadge(source){
-  const el=$("sceneBadge");
-  if(!el) return;
-  if(source==="geniex"){ el.textContent="SCENE · READY"; el.classList.add("on"); }
-  else if(source==="template"){ el.textContent="SCENE · TEMPLATE"; el.classList.remove("on"); }
-  else{ el.textContent="SCENE · …"; el.classList.remove("on"); }
-}
+function setSceneBadge(){ /* scene metrics flow via telem_state NPU */ }
 function setLevelBadge(level){
   const el=$("levelBadge");
   if(!el) return;
@@ -436,7 +448,35 @@ function setLevelBadge(level){
   else{ el.textContent="LVL —"; el.classList.remove("on"); }
 }
 probeFxStatus();
-probeHwStatus();
+setInterval(()=>{
+  if(!ws || ws.readyState!==1 || !TELEM.frames) {
+    TELEM.work=0; TELEM.frames=0; TELEM.t0=performance.now();
+    return;
+  }
+  const elapsed=Math.max(0.001,(performance.now()-TELEM.t0)/1000);
+  const fps=Math.round(TELEM.frames/elapsed);
+  const drawMs=Math.round((TELEM.work/TELEM.frames)*100)/100;
+  TELEM.localFps=fps;
+  // Report TV canvas work as laptop.gpu (proto honesty: canvas2d = main-thread)
+  ws.send(JSON.stringify({
+    type:"telem", unit:"gpu", source:"tv",
+    busy_pct:Math.min(100, Math.round(TELEM.work/10)),
+    metric:{fps, draw_ms:drawMs, renderer:"canvas2d"},
+    state:"canvas2d (main-thread raster)"
+  }));
+  TELEM.work=0; TELEM.frames=0; TELEM.t0=performance.now();
+  paintTelem();
+},1000);
+function onTelemState(msg){
+  TELEM.staleMs=msg.stale_ms||3000;
+  const devices=msg.devices||{};
+  // Prefer device:"laptop" entry
+  TELEM.laptop=null;
+  for(const k in devices){
+    if(devices[k].device==="laptop"){ TELEM.laptop=devices[k]; break; }
+  }
+  paintTelem();
+}
 
 /* Scene atmosphere (campaign venues) */
 let SCENE_GRADE="night", FLOODLIGHTS=true, CROWD_LEVEL=1;
@@ -545,7 +585,11 @@ function connect(){
   ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
   ws.onopen =()=>ws.send(JSON.stringify({type:"hello",client:"tv"}));
   ws.onclose=()=>setTimeout(connect,1500);
-  ws.onmessage=ev=>onState(JSON.parse(ev.data));
+  ws.onmessage=ev=>{
+    let m; try{ m=JSON.parse(ev.data); }catch(_){ return; }
+    if(m.type==="telem_state"){ onTelemState(m); return; }
+    if(m.type==="state" || m.phase) onState(m);
+  };
 }
 $("startBtn").onclick=()=>{ if(!S)return;
   ws.send(JSON.stringify({type:S.phase==="end"?"again":"start"})); };
@@ -630,6 +674,8 @@ function onState(st){
     `KICK ${st.kick} OF ${st.kicksTotal}`;
 
   $("ledP").classList.toggle("on",!!st.connected?.phone);
+  const ledU=$("ledU");
+  if(ledU) ledU.classList.toggle("on",!!(st.connected?.unoq||st.connected?.bridge));
 
   const desk=$("desk");
   desk.className="desk "+(st.llm?"live":"tmpl");
@@ -638,9 +684,7 @@ function onState(st){
     st.llm==="cloud"?"CLAUDE DESK":
     st.llm==="local"?"LOCAL AI DESK":"TEMPLATE DESK";
   if(st.line) $("line").textContent=st.line;
-
   setLevelBadge(st.level);
-  if(st.sceneMetrics?.source) setSceneBadge(st.sceneMetrics.source);
   updateReportPanel(st);
 
   const big=$("big"), sub=$("sub"), btn=$("startBtn"), abort=$("abortBtn");
@@ -2192,6 +2236,7 @@ let lastT=0;
 function draw(now){
   requestAnimationFrame(draw);
   if(!W) return;
+  const tDraw0=performance.now();
   const dt=clamp((now-lastT)/1000||0.016,0.001,0.05); lastT=now;
   updateCrowd(now,dt); updateBall(now,dt);
   cx.save();
@@ -2226,6 +2271,8 @@ function draw(now){
   drawPostFX(now);
   if(S?.phase==="resolve" && S.replay?.frames?.length>1) drawReplay(now);
   else replayKick=-1;
+  TELEM.work+=performance.now()-tDraw0;
+  TELEM.frames++;
 }
 
 /* ============ bullet-time: orbiting slow-mo 3D skeleton ============ */
