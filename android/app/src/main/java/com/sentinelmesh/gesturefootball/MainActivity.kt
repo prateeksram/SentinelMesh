@@ -493,16 +493,19 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 }
             }
             VoiceCoach.Intent.LEFT -> {
+                if (lastPhase == "shoot") return // aim locked
                 pose?.forceZone("L")
                 setZone("L")
                 if (!hintHeldByHost()) binding.hint.text = "Aim · Left"
             }
             VoiceCoach.Intent.CENTER -> {
+                if (lastPhase == "shoot") return
                 pose?.forceZone("C")
                 setZone("C")
                 if (!hintHeldByHost()) binding.hint.text = "Aim · Centre"
             }
             VoiceCoach.Intent.RIGHT -> {
+                if (lastPhase == "shoot") return
                 pose?.forceZone("R")
                 setZone("R")
                 if (!hintHeldByHost()) binding.hint.text = "Aim · Right"
@@ -807,7 +810,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             pose?.applyProfile(existing)
             updateProfileHint()
             binding.big.text = "READY?"
-            coach?.speak("${pendingSport.replaceFirstChar { it.uppercase() }} loaded. Say ready to start.")
+            coach?.speak("${pendingSport.replaceFirstChar { it.uppercase() }} loaded. Show a thumbs up to start.")
             promptReadyToStart()
         }
     }
@@ -901,17 +904,23 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         }
     }
 
-    /** After calibration / entering the lobby: ask aloud, start on a spoken "ready". */
+    private var lobbyThumbsHoldMs = 0L
+    private var lobbyThumbsLastTs = 0L
+
+    /** After calibration / lobby: thumbs-up (or spoken ready) starts the match. */
     private fun promptReadyToStart() {
         if (calibrating || !hostConnected || profile == null) return
         if (lastPhase != null && lastPhase != "lobby") return
         val now = System.currentTimeMillis()
         if (now - readyPromptAt < 20_000) return
         readyPromptAt = now
-        coach?.speak("Are you ready? Say ready to start the match.")
+        lobbyThumbsHoldMs = 0
+        lobbyThumbsLastTs = 0
+        coach?.speak("Show a thumbs up when you are ready to start.")
         if (!hintHeldByHost()) {
-            binding.hint.text = "Say \"ready\" to start the match"
+            binding.hint.text = "Show a thumbs up to start — or say ready"
         }
+        binding.big.text = "THUMBS UP"
     }
 
     private fun refreshCalibUi() {
@@ -967,7 +976,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                 panel.calibNext.text = "I'M READY"
                 panel.calibNext.isEnabled = true
                 panel.calibNext.alpha = 1f
-                binding.big.text = "READY?"
+                binding.big.text = "THUMBS UP"
                 binding.hint.text = ui.hint
             }
             ui.step == CalibrationSession.Step.BIOMETRICS -> {
@@ -1183,6 +1192,30 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         }
         showForceChip = hud.liveForce > 8f || lastPhase == "shoot" || calibrating
         refreshNeuralLoad()
+
+        // Lobby: hold thumbs-up to start the match (voice "ready" still works).
+        if (!calibrating && hostConnected && profile != null &&
+            (lastPhase == null || lastPhase == "lobby") &&
+            PoseAnalyzer.isThumbsUp(hud.landmarks)
+        ) {
+            val now = System.currentTimeMillis()
+            val dt = if (lobbyThumbsLastTs == 0L) 0L else (now - lobbyThumbsLastTs).coerceIn(0L, 80L)
+            lobbyThumbsLastTs = now
+            lobbyThumbsHoldMs += dt
+            if (lobbyThumbsHoldMs >= CalibrationSession.THUMBS_HOLD_MS) {
+                lobbyThumbsHoldMs = 0
+                lobbyThumbsLastTs = 0
+                binding.big.text = "STARTING…"
+                coach?.speak("Here we go!")
+                vibrate(60)
+                game.sendStart()
+            } else if (!hintHeldByHost()) {
+                binding.hint.text = "Hold thumbs up…"
+            }
+        } else if (!calibrating) {
+            lobbyThumbsHoldMs = 0
+            lobbyThumbsLastTs = 0
+        }
 
         if (calibrating) {
             val session = calib ?: return
@@ -1400,33 +1433,42 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     binding.big.text = n.toString()
                     if (!holdHint) {
                         binding.hint.text = if (activeHandSport()) {
-                            "$n… get ready to throw"
+                            "$n… aim, then wait for lock"
                         } else {
                             "Feint… switch late"
                         }
                     }
                     if (lastPhase != "countdown") {
                         vibrate(30)
-                        coach?.speak(if (activeHandSport()) "Three, two, one, throw" else "Ready")
+                        coach?.speak(if (activeHandSport()) "Three, two, one" else "Ready")
                     }
                 }
                 "shoot" -> {
                     hostSport = PlayerProfile.normalizeSport(state.sport)
-                    binding.big.text = releaseVerb(bang = true)
+                    val secsLeft = ceil(state.timerMs / 1000.0).toInt().coerceAtLeast(0)
+                    binding.big.text = "AIM LOCKED"
                     if (!holdHint) {
                         binding.hint.text = if (activeHandSport()) {
-                            "Throw when ready — aim locked"
+                            "Aim locked — throw when ready · ${secsLeft}s"
                         } else {
-                            "Swing when ready — aim locked"
+                            "Aim locked — kick when ready · ${secsLeft}s"
                         }
                     }
                     showForceChip = true
                     refreshAiChip()
                     if (lastPhase != "shoot") {
                         lockedAimZone = pose?.zone ?: "C"
+                        pose?.forceZone(lockedAimZone!!)
+                        pose?.phase = "shoot"
                         setZone(lockedAimZone!!)
                         vibrateBurst()
-                        if (activeHandSport()) coach?.speak("Throw!")
+                        coach?.speak(
+                            if (activeHandSport()) "Aim is locked. Throw when ready."
+                            else "Aim is locked. Kick when ready."
+                        )
+                    } else {
+                        // Keep detector pinned to the frozen corner every tick.
+                        lockedAimZone?.let { pose?.forceZone(it) }
                     }
                 }
                 "resolve" -> {

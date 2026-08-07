@@ -46,7 +46,8 @@ def _f(name, default):
     return float(os.environ.get(name, default))
 
 KICKS         = int(os.environ.get("GF_KICKS", 5))      # kicks per match
-SHOOT_WINDOW  = _f("GF_SHOOT_WINDOW", 0)     # seconds to swing; <= 0 waits forever for the kick
+SHOOT_WINDOW  = _f("GF_SHOOT_WINDOW", 60)    # seconds to release; timeout → skied (over)
+MIN_SHOOT_WINDOW = _f("GF_MIN_SHOOT_WINDOW", 60)  # floor so level difficulty can't rush the throw
 KEEPER_REACT  = _f("GF_KEEPER_REACTION", 0.45)  # keeper reads your aim this many s BEFORE the kick — feint inside this window to beat it
 KEEPER_IQ     = _f("GF_KEEPER_IQ", 0.75)     # 0 = guesses randomly, 1 = near-psychic
 ANNOUNCE_S    = _f("GF_ANNOUNCE_S", 3.5)     # long enough for the spoken keeper line on the TV
@@ -619,22 +620,23 @@ class Game:
 
                 # ---------------- shoot -------------------
                 self.phase = "shoot"
-                if self.k_window > 0:
-                    self.timer_end = time.monotonic() + self.k_window
-                    await self.broadcast()
-                    if not self._alive(gen):
-                        return
+                # Always a positive wait: aim locked, then release or sky on timeout.
+                window = max(float(self.k_window or 0), float(MIN_SHOOT_WINDOW), 1.0)
+                self.timer_end = time.monotonic() + window
+                await self.broadcast()
+                if not self._alive(gen):
+                    return
+                # Tick the HUD clock until kick or timeout (empty kick_msg → skied).
+                end = self.timer_end
+                while time.monotonic() < end and not self.kick_evt.is_set():
                     try:
-                        await asyncio.wait_for(self.kick_evt.wait(), self.k_window)
+                        await asyncio.wait_for(
+                            self.kick_evt.wait(),
+                            min(1.0, max(0.01, end - time.monotonic())),
+                        )
                     except asyncio.TimeoutError:
-                        pass
-                else:
-                    # Wait as long as it takes — the kick decides the tempo.
-                    self.timer_end = 0.0
-                    await self.broadcast()
-                    if not self._alive(gen):
-                        return
-                    await self.kick_evt.wait()
+                        if time.monotonic() < end and not self.kick_evt.is_set():
+                            await self.broadcast()
                 if not self._alive(gen):
                     return
 
@@ -775,7 +777,9 @@ class Game:
         # in every sport.
         d = scene["difficulty"]
         self.k_iq, self.k_react = d["keeperIq"], d["keeperReaction"]
-        self.k_window, self.k_beat = d["shootWindow"], d["powerBeat"]
+        # Never undercut the play wait — rings/IQ can tighten, the throw window stays ≥ 60s.
+        self.k_window = max(float(d.get("shootWindow") or 0), float(MIN_SHOOT_WINDOW), float(SHOOT_WINDOW))
+        self.k_beat = d["powerBeat"]
         self.ring_scale = d.get("ringScale", scene_engine.RING_SCALE.get(level, 1.0))
         self.scene = scene
         self.report = scene.get("report", "")

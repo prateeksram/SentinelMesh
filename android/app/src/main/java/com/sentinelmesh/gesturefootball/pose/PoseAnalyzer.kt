@@ -56,6 +56,12 @@ class PoseAnalyzer(
         const val R_SHO = 12
         const val L_WRI = 15
         const val R_WRI = 16
+        const val L_PINKY = 17
+        const val R_PINKY = 18
+        const val L_INDEX = 19
+        const val R_INDEX = 20
+        const val L_THUMB = 21
+        const val R_THUMB = 22
         const val L_HIP = 23
         const val R_HIP = 24
         const val L_KNEE = 25
@@ -70,6 +76,24 @@ class PoseAnalyzer(
         private const val TAG = "PoseAnalyzer"
         /** Full-body frames required before a kick can fire (anti-cheat). */
         const val BODY_OK_FRAMES = 8
+
+        /**
+         * Coarse thumbs-up from Pose landmarks (thumb tip above wrist and
+         * clearly above the index tip). Either hand counts.
+         */
+        fun isThumbsUp(landmarks: List<FloatArray>?, vis: ((Int) -> Float)? = null): Boolean {
+            if (landmarks == null || landmarks.size < 23) return false
+            fun ok(i: Int): Boolean = vis == null || vis(i) > 0.35f
+            fun hand(thumb: Int, index: Int, wrist: Int): Boolean {
+                if (!ok(thumb) || !ok(index) || !ok(wrist)) return false
+                val ty = landmarks[thumb][1]
+                val iy = landmarks[index][1]
+                val wy = landmarks[wrist][1]
+                // Image Y grows downward — thumb tip should be above wrist & index.
+                return ty < wy - 0.04f && ty < iy - 0.025f
+            }
+            return hand(L_THUMB, L_INDEX, L_WRI) || hand(R_THUMB, R_INDEX, R_WRI)
+        }
     }
 
     private val appContext = context.applicationContext
@@ -453,11 +477,14 @@ class PoseAnalyzer(
             val wx = 1f - x(wrists)
             wristXMirrored = wx
             wristY = y(wrists)
-            zone = when {
-                zone != "L" && wx < aimLMax -> "L"
-                zone != "R" && wx > aimRMin -> "R"
-                zone != "C" && wx > aimCMin && wx < aimCMax -> "C"
-                else -> zone
+            // After shoot starts aim is locked — hand motion must not drag L/C/R.
+            if (phase != "shoot") {
+                zone = when {
+                    zone != "L" && wx < aimLMax -> "L"
+                    zone != "R" && wx > aimRMin -> "R"
+                    zone != "C" && wx > aimCMin && wx < aimCMax -> "C"
+                    else -> zone
+                }
             }
         }
 

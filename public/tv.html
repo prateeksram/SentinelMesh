@@ -919,10 +919,14 @@ function onState(st){
         :`${n} — feint, then ${ACTION[SPORT()].verb.toLowerCase()}`;
       pop(); break;
     }
-    case "shoot":
-      big.textContent=ACTION[SPORT()].bang; big.className="goal";
-      sub.textContent=ACTION[SPORT()].hint;
+    case "shoot":{
+      const left=Math.max(0,Math.ceil((st.timerMs||0)/1000));
+      big.textContent="AIM LOCKED"; big.className="goal";
+      sub.textContent=isTarget()
+        ?`Aim locked — ${ACTION[SPORT()].verb.toLowerCase()} when ready · ${left}s`
+        :`Aim locked — kick when ready · ${left}s`;
       if(prev?.phase!=="shoot") pop(); break;
+    }
     case "resolve":{
       const r=st.last?.result;
       big.textContent=r==="goal"?"GOAL!":r==="save"?"SAVED!":r==="post"?"POST!"
@@ -1683,10 +1687,11 @@ function shoot(last){                       // called by the HUD on resolve entr
   const power=last.power??0.5;
   const metric=typeof last.goalX==="number"&&typeof last.goalZ==="number";
   let tx,ty,td=M.DG;
-  // Longer flight so the eye can track the ball into the goal.
-  let T=0.62+0.28*(1-power);
-  if(typeof last.speed==="number"&&last.speed>1)
-    T=clamp(M.DG/last.speed,0.45,1.05);
+  // Football: longer flight to track the ball. Darts/hoops: snappy release.
+  let T=isTarget()?(0.32+0.18*(1-power)):(0.62+0.28*(1-power));
+  if(typeof last.speed==="number"&&last.speed>1){
+    T=isTarget()?clamp(M.DG/last.speed,0.28,0.55):clamp(M.DG/last.speed,0.45,1.05);
+  }
   if(metric){
     // UNO Q trajectory: fly to the TRUE impact point on the goal plane.
     tx=clamp(last.goalX,-6,6); ty=clamp(last.goalZ,0.05,4.2);
@@ -1710,16 +1715,16 @@ function shoot(last){                       // called by the HUD on resolve entr
   const y0=SPORT()==="darts"?1.55:SPORT()==="basketball"?2.05:0.11;
   const grav=SPORT()==="darts"?3.2:9.8;
   const t0=performance.now();
-  // Plant/load first, then ball leaves at foot contact (~35% of kick anim).
-  const contact=0.17;
-  const kickT=contact/0.35;
+  // Football plant/load then release; darts/hoops leave the hand immediately.
+  const contact=isTarget()?0.02:0.17;
+  const kickT=isTarget()?0.12:contact/0.35;
   // Curve: prefer explicit spin; fall back to dirDeg.
   const dirDeg=typeof last.dirDeg==="number"?last.dirDeg:0;
   const spinIn=typeof last.spin==="number"?clamp(last.spin,-1,1):clamp(dirDeg/45,-1,1);
   const driveBoost=last.strike==="drive"?1.15:last.strike==="chip"?0.72:1;
   const spin=(spinIn*(Math.random()*0.25+0.8)+(Math.random()*2-1)*0.12)*driveBoost;
   const tFly=t0+contact*1000;
-  B={x:0,y:y0,y0,grav,d:M.DSPOT,mode:"windup",rot:0,res,zone:z,t0,tFly,tImpact:tFly+T*1000,trail:[],
+  B={x:0,y:y0,y0,grav,d:M.DSPOT,mode:isTarget()?"fly":"windup",rot:0,res,zone:z,t0,tFly,tImpact:tFly+T*1000,trail:[],
      curve:spin*2.4,
      katch:res==="save"&&power<0.62&&z===kz,netFrom:null,netTo:null,
      tx,ty,td,T,strike:last.strike||"drive",force:last.force||0};
@@ -1845,8 +1850,8 @@ function drawFlightGuide(){
 function drawBall(){
   if(B.mode==="gone") return;
   const spd=SPORT()==="darts", spb=SPORT()==="basketball";
-  // Target sports: projectile is in the striker's hand until release.
-  if((spd||spb)&&(B.mode==="rest"||B.mode==="rollin"||B.mode==="windup")) return;
+  // Hide only while idle — once resolve starts we fly immediately (no hidden windup).
+  if((spd||spb)&&(B.mode==="rest"||B.mode==="rollin")) return;
   const s=sc(B.d), x=W/2+B.x*s, y=gy(B.d)-B.y*s,
         r=Math.max(spd?3:4,(spd?0.05:spb?0.125:0.11)*s);
   const I=vfxTier(B.force||VFX.force);
