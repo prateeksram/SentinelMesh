@@ -48,7 +48,6 @@ The application is open source under MIT and can be cloned, installed, and run f
 | Parth Shinde | |
 | Ananya Bhargavi Kodali | |
 
-All members must also submit the required feedback form.
 
 ---
 
