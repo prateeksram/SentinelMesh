@@ -1,6 +1,13 @@
+import asyncio
+import json
+import socket
+import time
 import unittest
 
-from server import Desk, Game, make_app, normalize_edge_packet
+import aiohttp
+from aiohttp import web
+
+from server import Desk, EdgePoseProtocol, Game, make_app, normalize_edge_packet
 
 
 def edge_packet(seq=7):
@@ -82,6 +89,53 @@ class UnifiedEdgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(2.1, game.kick_msg["goalX"])
         self.assertEqual(1.15, game.kick_msg["goalZ"])
         self.assertEqual(2, len(game.kick_msg["trajectory"]["points"]))
+
+    async def test_root_host_round_trips_preview_and_pose_to_phone(self):
+        runner = web.AppRunner(make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        http_port = site._server.sockets[0].getsockname()[1]
+        edge_transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+            EdgePoseProtocol, local_addr=("127.0.0.1", 0)
+        )
+        udp_port = edge_transport.get_extra_info("sockname")[1]
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(f"http://127.0.0.1:{http_port}/ws") as ws:
+                    await ws.send_json({"type": "hello", "client": "phone"})
+                    jpeg = b"\xff\xd8\xff\xe0unoq-preview\xff\xd9"
+                    async with session.post(
+                        f"http://127.0.0.1:{http_port}/edge/frame", data=jpeg
+                    ) as posted:
+                        self.assertEqual(200, posted.status)
+                        posted_seq = (await posted.json())["seq"]
+                    async with session.get(
+                        f"http://127.0.0.1:{http_port}/edge/frame.jpg"
+                    ) as fetched:
+                        self.assertEqual(200, fetched.status)
+                        self.assertEqual(str(posted_seq), fetched.headers["X-Edge-Seq"])
+                        self.assertEqual(jpeg, await fetched.read())
+
+                    packet = edge_packet(seq=99)
+                    packet["t_capture_ns"] = time.time_ns()
+                    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    try:
+                        sender.sendto(json.dumps(packet).encode("utf-8"), ("127.0.0.1", udp_port))
+                    finally:
+                        sender.close()
+
+                    for _ in range(4):
+                        message = await asyncio.wait_for(ws.receive_json(), timeout=2.0)
+                        if message.get("type") == "edge_pose":
+                            self.assertEqual(99, message["seq"])
+                            self.assertEqual(33, len(message["landmarks"]))
+                            break
+                    else:
+                        self.fail("phone did not receive the UNO Q edge_pose frame")
+        finally:
+            edge_transport.close()
+            await runner.cleanup()
 
 
 if __name__ == "__main__":

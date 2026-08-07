@@ -75,9 +75,13 @@ function Get-SshBaseArgs {
 }
 
 function Invoke-UnoQ([string]$Command, [switch]$IgnoreFailure) {
+    # PowerShell here-strings use CRLF on Windows. Passing those bytes through
+    # ssh makes Bash parse tokens such as `set -e\r` and `do\r`, so normalize
+    # once at the transport boundary for every remote command.
+    $unixCommand = $Command.Replace("`r`n", "`n").Replace("`r", "`n")
     $sshArguments = @(Get-SshBaseArgs)
     $sshArguments += "$UnoQUser@$UnoQIp"
-    $sshArguments += $Command
+    $sshArguments += $unixCommand
     & ssh @sshArguments
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0 -and -not $IgnoreFailure) {
