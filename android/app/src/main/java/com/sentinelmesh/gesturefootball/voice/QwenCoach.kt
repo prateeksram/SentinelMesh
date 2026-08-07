@@ -66,7 +66,9 @@ class QwenCoach(context: Context) : AutoCloseable {
         exec.execute {
             val t0 = SystemClock.elapsedRealtime()
             val text = generate(event)
-            val ms = SystemClock.elapsedRealtime() - t0
+            // Rule-based COACH can finish in 0 ms on the clock — show at least 1 ms
+            // so the NEURAL LOAD strip never looks broken.
+            val ms = (SystemClock.elapsedRealtime() - t0).coerceAtLeast(1L)
             lastLatencyMs = ms
             onDone(Reply(text, ms, backendLabel))
         }

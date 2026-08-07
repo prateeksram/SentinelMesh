@@ -330,11 +330,12 @@ async def generate(ctx, level, progress_cb=None):
     used_tokens = MAX_TOKENS
     source = "geniex"
     model = geniex_client.GENIEX_MODEL
+    geniex_fail = "" if data else (geniex_client.last_fail() or "no reply")
 
     if not data and MAX_TOKENS_RETRY > 0 and MAX_TOKENS_RETRY < MAX_TOKENS:
         await _emit(
             progress_cb, 48,
-            "GenieX timed out — compact on-device retry",
+            f"GenieX fail · {geniex_fail} — compact retry",
         )
         data = await _chat_json_with_progress(
             SYSTEM,
@@ -345,17 +346,19 @@ async def generate(ctx, level, progress_cb=None):
             lo=48,
             hi=62,
             provider="geniex",
-            step="On-device GenieX · compact retry (smaller token budget)",
+            step=f"On-device GenieX · retry after {geniex_fail}",
         )
         used_tokens = MAX_TOKENS_RETRY
+        if not data:
+            geniex_fail = geniex_client.last_fail() or geniex_fail
 
     if not data and openai_client.configured():
         cloud_model = openai_client.scene_model()
         await _emit(
             progress_cb, 65,
-            f"On-device missed — falling back to OpenAI cloud ({cloud_model})",
+            f"GenieX · {geniex_fail} → OpenAI {cloud_model}",
         )
-        print("[scene] GenieX missed — trying OpenAI cloud", flush=True)
+        print(f"[scene] GenieX fail ({geniex_fail}) — trying OpenAI cloud", flush=True)
         data = await _chat_json_with_progress(
             SYSTEM,
             user,
@@ -375,12 +378,13 @@ async def generate(ctx, level, progress_cb=None):
     if not data:
         await _emit(
             progress_cb, 90,
-            "Cloud missed — applying offline template venue",
+            f"Cloud missed — template (GenieX: {geniex_fail or 'n/a'})",
         )
     else:
+        why = f" · GenieX was {geniex_fail}" if geniex_fail and source != "geniex" else ""
         await _emit(
             progress_cb, 90,
-            f"Got venue from {source} — applying difficulty knobs",
+            f"Got venue from {source}{why}",
         )
 
     # Hold the generating overlay long enough to be readable on fast fallbacks.
@@ -393,7 +397,12 @@ async def generate(ctx, level, progress_cb=None):
         scene = template_scene(level, ctx)
         scene["metrics"]["total_ms"] = elapsed_ms
         scene["metrics"]["tokens_budget"] = used_tokens
-        await _emit(progress_cb, 96, "Template venue locked · offline difficulty curve")
+        if geniex_fail:
+            scene["metrics"]["geniex_fail"] = geniex_fail
+        await _emit(
+            progress_cb, 96,
+            f"Template locked · GenieX {geniex_fail or 'offline'}",
+        )
     else:
         scene = _scene_from_llm(
             data,
@@ -403,6 +412,8 @@ async def generate(ctx, level, progress_cb=None):
             elapsed_ms=elapsed_ms,
             used_tokens=used_tokens,
         )
+        if geniex_fail and source != "geniex":
+            scene["metrics"]["geniex_fail"] = geniex_fail
         await _emit(
             progress_cb, 96,
             f"Writing Level {level} · source={source}",
@@ -419,13 +430,19 @@ async def generate(ctx, level, progress_cb=None):
                     "total_ms": scene["metrics"].get("total_ms", 0),
                     "tokens_budget": scene["metrics"].get("tokens_budget"),
                     "model": scene["metrics"].get("model"),
+                    "geniex_fail": scene["metrics"].get("geniex_fail"),
                 }
             )
             + "\n"
         )
     src = scene["metrics"]["source"]
+    fail_bit = (
+        f" · GenieX {scene['metrics'].get('geniex_fail')}"
+        if scene["metrics"].get("geniex_fail")
+        else ""
+    )
     await _emit(
         progress_cb, 100,
-        f"Venue ready · {src} · {scene['metrics'].get('total_ms', 0)} ms",
+        f"Venue ready · {src} · {scene['metrics'].get('total_ms', 0)} ms{fail_bit}",
     )
     return scene

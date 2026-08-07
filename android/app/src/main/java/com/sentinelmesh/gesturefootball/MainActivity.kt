@@ -552,10 +552,22 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     private fun refreshNeuralLoad() {
         val asr = if (lastAsrMs >= 0) "${lastAsrMs} ms" else "—"
-        val llm = if (lastLlmMs >= 0) "${lastLlmMs} ms" else "—"
+        // Prefer live reply latency; fall back to coach's last measured call.
+        val qLat = qwen?.lastLatencyMs ?: -1L
+        val llmMs = when {
+            lastLlmMs >= 0 -> lastLlmMs
+            qLat >= 0 -> qLat
+            else -> -1L
+        }
         val backend = qwen?.backendLabel ?: "—"
         binding.asrStat.text = asr
-        binding.llmStat.text = if (lastLlmMs >= 0) "$llm · $backend" else backend
+        binding.llmStat.text = when {
+            llmMs < 0 -> backend
+            backend.equals("COACH", ignoreCase = true) ->
+                // Instant rule coach — label clearly so 1 ms isn't mistaken for NPU LLM.
+                if (llmMs <= 1L) "<1 ms · COACH" else "$llmMs ms · COACH"
+            else -> "$llmMs ms · $backend"
+        }
         binding.forceStat.text = lastForceLabel
         refreshAiChip()
     }

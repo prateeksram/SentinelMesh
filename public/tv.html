@@ -1065,10 +1065,16 @@ function onState(st){
         const src=(m.source||"").toUpperCase()||"—";
         const ms=m.total_ms?`${m.total_ms} ms`:"—";
         const title=(st.scene?.title||`Level ${st.level||1}`).toString();
+        const why=m.geniex_fail
+          ? `GenieX fail · ${m.geniex_fail}`
+          : (src==="GENIEX" ? "on-device GenieX" : "pipeline ok");
+        // Shorter body for judges — report stays secondary.
+        const body = (st.report||st.line||"Venue ready.").toString();
+        const short = body.length>110 ? body.slice(0,107)+"…" : body;
         showMsg(
           `NEXT VENUE · ${title}`,
-          st.report||st.line||"Venue ready.",
-          `source ${src} · ${ms}`
+          short,
+          `source ${src} · ${ms} · ${why}`
         );
       }
       if(st.scene) maybeNavigateVenue(st.scene);

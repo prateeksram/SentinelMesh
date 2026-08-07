@@ -34,6 +34,17 @@ _LOG_PATH = Path(__file__).parent / "logs" / "geniex_serve.log"
 _spawned_proc: subprocess.Popen | None = None
 # GenieX NPU often 400s / wedges under concurrent chat — serialize desk + scene.
 _lock: asyncio.Lock | None = None
+# Short judge-facing reason for the last failed chat (2–3 words).
+_last_fail: str = ""
+
+
+def last_fail() -> str:
+    return _last_fail
+
+
+def _set_fail(reason: str) -> None:
+    global _last_fail
+    _last_fail = (reason or "").strip()[:32]
 
 
 def _chat_lock() -> asyncio.Lock:
@@ -41,6 +52,20 @@ def _chat_lock() -> asyncio.Lock:
     if _lock is None:
         _lock = asyncio.Lock()
     return _lock
+
+
+def _short_http_fail(status: int, body: str) -> str:
+    """Map GenieX error body → 2–3 word label for the TV tray."""
+    low = (body or "").lower()
+    if "finish_reason" in low and "length" in low:
+        return "token cap"
+    if status == 400:
+        return "HTTP 400"
+    if status in (429, 503):
+        return "NPU busy"
+    if status >= 500:
+        return f"HTTP {status}"
+    return f"HTTP {status}"
 
 
 def _extract(data: dict) -> str:
@@ -85,6 +110,7 @@ async def chat(
     }
     base = (url or GENIEX_URL).rstrip("/")
     ep = base + ("/chat/completions" if base.endswith("/v1") else "")
+    _set_fail("")
     try:
         async with _chat_lock():
             async with ClientSession(timeout=ClientTimeout(total=timeout)) as s:
@@ -92,13 +118,36 @@ async def chat(
                     ep, json=body, headers={"content-type": "application/json"}
                 ) as r:
                     if r.status != 200:
-                        err = (await r.text())[:240]
-                        _log(f"[geniex] HTTP {r.status} max_tokens={max_tokens}: {err}")
-                        raise RuntimeError(f"HTTP {r.status}")
-                    return _extract(await r.json()) or None
+                        err = (await r.text())[:400]
+                        reason = _short_http_fail(r.status, err)
+                        _set_fail(reason)
+                        _log(f"[geniex] {reason} max_tokens={max_tokens}: {err[:240]}")
+                        raise RuntimeError(reason)
+                    data = await r.json()
+                    text = _extract(data)
+                    if not text:
+                        # Often finish_reason=length with empty content.
+                        fr = ""
+                        try:
+                            fr = str((data.get("choices") or [{}])[0].get("finish_reason") or "")
+                        except Exception:
+                            fr = ""
+                        reason = "token cap" if fr == "length" else "empty out"
+                        _set_fail(reason)
+                        return None
+                    return text
+    except asyncio.TimeoutError:
+        _set_fail("timeout")
+        _log("[geniex] chat failed (timeout)")
+        return None
     except Exception as exc:
-        if not isinstance(exc, RuntimeError):
-            _log(f"[geniex] chat failed ({type(exc).__name__}: {exc})")
+        if not _last_fail:
+            name = type(exc).__name__
+            if "Timeout" in name:
+                _set_fail("timeout")
+            else:
+                _set_fail("NPU error")
+            _log(f"[geniex] chat failed ({name}: {exc})")
         return None
 
 
@@ -116,6 +165,8 @@ async def chat_json(
         url=url,
     )
     if not txt:
+        if not _last_fail:
+            _set_fail("no reply")
         return None
     txt = (
         txt.strip()
@@ -132,8 +183,10 @@ async def chat_json(
             try:
                 return json.loads(txt[i : j + 1])
             except json.JSONDecodeError:
+                _set_fail("bad JSON")
                 return None
-    return None
+        _set_fail("bad JSON")
+        return None
 
 
 async def ping(timeout=15.0, url: str | None = None) -> bool:
