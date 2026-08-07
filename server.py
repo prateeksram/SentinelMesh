@@ -270,8 +270,8 @@ T = {
     ],
     "end": {
         5: ["PERFECT. Five from five — THE WALL is in pieces."],
-        4: ["Four out of five. The machine got one look, that's all."],
-        3: ["Three of five. Honours roughly even — rematch?"],
+        4: ["Four goals. The machine got one look, that's all."],
+        3: ["Three from three. Clean sweep — THE WALL is in pieces."],
         2: ["Two goals. THE WALL is learning your game."],
         1: ["One solitary goal. The machine owned the night."],
         0: ["Shut out. THE WALL saw everything coming."],

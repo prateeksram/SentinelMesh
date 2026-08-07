@@ -140,7 +140,7 @@ class GameClient(
                         MatchState(
                             phase = phase,
                             kick = kick,
-                            kicksTotal = o.optInt("kicksTotal", 5),
+                            kicksTotal = o.optInt("kicksTotal", 3),
                             score = o.optInt("score", 0),
                             line = o.optString("line", ""),
                             sport = o.optString("sport", "football"),

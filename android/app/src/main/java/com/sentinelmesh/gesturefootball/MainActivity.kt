@@ -1512,7 +1512,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     }
                     if (lastPhase != "countdown") {
                         vibrate(30)
-                        coach?.speak(if (activeHandSport()) "Three, two, one" else "Ready")
+                        // No countdown callout — prompt comes at aim lock (shoot).
                     }
                 }
                 "shoot" -> {
@@ -1534,10 +1534,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                         pose?.phase = "shoot"
                         setZone(lockedAimZone!!)
                         vibrateBurst()
-                        coach?.speak(
-                            if (activeHandSport()) "Aim is locked. Throw when ready."
-                            else "Aim is locked. Kick when ready."
-                        )
+                        coach?.speak(if (activeHandSport()) "Throw" else "Kick")
                     } else {
                         // Keep detector pinned to the frozen corner every tick.
                         lockedAimZone?.let { pose?.forceZone(it) }
