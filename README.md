@@ -580,7 +580,7 @@ The interactive hoop target is centered at 2.0 m.
 
 | Variable | Default | Meaning |
 |---|---:|---|
-| `GF_KICKS` | `5` | Attempts per match |
+| `GF_KICKS` | `3` | Attempts per match |
 | `GF_SHOOT_WINDOW` | `60` | Base action window in seconds |
 | `GF_MIN_SHOOT_WINDOW` | `60` | Minimum action window floor |
 | `GF_KEEPER_REACTION` | `0.45` | Seconds of goalkeeper aim-read delay |

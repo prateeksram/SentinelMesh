@@ -28,21 +28,17 @@ ROOT = Path(__file__).parent
 URL = "http://127.0.0.1:8080/ws"
 UDP = ("127.0.0.1", 5005)
 
-# Scripted impacts (goalX, goalZ) per sport, kick 1..5, with expectations.
+# Scripted impacts (goalX, goalZ) per sport, kick/throw 1..3, with expectations.
 FOOTBALL = [
     ((5.00, 1.00), ("wide",)),           # way off frame — geometry says wide
     ((-3.70, 1.00), ("post",)),          # 4 cm outside the post — woodwork
     ((0.00, 1.20), ("goal", "save")),    # centre, on target — keeper contest
-    ((3.20, 0.40), ("goal", "save")),    # low right corner
-    ((-2.00, 2.00), ("goal", "save")),   # high left
 ]
 DARTS = [
     ((0.00, 1.73), 100), ((0.25, 1.73), 60), ((0.00, 1.20), 30),
-    ((0.90, 1.73), 10), ((2.50, 0.30), 0),
 ]
 BASKET = [
     ((0.00, 2.00), 100), ((0.50, 2.00), 40), ((2.00, 0.50), 0),
-    ((0.00, 1.20), 10), ((0.30, 2.20), 40),
 ]
 
 
@@ -116,7 +112,7 @@ async def run():
             # ---------------- football: hybrid referee ----------------
             st, seq = await play_match(ws, udp, "football", FOOTBALL, seq)
             shots = st["shotmap"]
-            assert len(shots) == 5, f"expected 5 kicks, got {len(shots)}"
+            assert len(shots) == 3, f"expected 3 kicks, got {len(shots)}"
             for i, (_, allowed) in enumerate(FOOTBALL):
                 r = shots[i]["result"]
                 assert r in allowed, f"kick {i+1}: {r} not in {allowed}"
@@ -124,10 +120,9 @@ async def run():
             assert all(sh["keeperZone"] in "LCR" for sh in shots)
             goals = sum(1 for sh in shots if sh["result"] == "goal")
             assert st["score"] == goals, "score != goals"
-            assert shots[2]["zone"] == "C" and shots[3]["zone"] == "R" \
-                and shots[4]["zone"] == "L", "impact zones wrong"
+            assert shots[2]["zone"] == "C", "impact zones wrong"
             # SceneEngine campaign: full time must have designed the next venue.
-            want_level = {0: 1, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5}[goals]
+            want_level = {0: 1, 1: 1, 2: 2, 3: 3}[goals]
             assert st["level"] == want_level, \
                 f"campaign level {st['level']}, expected {want_level} for {goals} goals"
             assert st["scene"], "no scene generated at full time"
@@ -149,9 +144,9 @@ async def run():
                 assert got == pts, f"dart {i+1}: {got} pts, expected {pts}"
                 assert shots[i]["result"] == ("hit" if pts else "miss")
             assert st["score"] == sum(p for _, p in DARTS), "dart total wrong"
-            # Target-sport campaign: 4/5 on target → level 4 → rings at 0.7×.
+            # Target-sport campaign: 3/3 on target → level 3 → rings at 0.8×.
             hits = sum(1 for sh in shots if sh["result"] == "hit")
-            want_level = {0: 1, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5}[hits]
+            want_level = {0: 1, 1: 1, 2: 2, 3: 3}[hits]
             assert st["level"] == want_level, \
                 f"darts campaign level {st['level']}, expected {want_level}"
             assert abs(st["ringScale"] - ring_for[want_level]) < 1e-6, \

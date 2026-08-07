@@ -48,7 +48,7 @@ PUBLIC = ROOT / "public"
 def _f(name, default):
     return float(os.environ.get(name, default))
 
-KICKS         = int(os.environ.get("GF_KICKS", 5))      # kicks per match
+KICKS         = int(os.environ.get("GF_KICKS", 3))      # kicks/throws per match
 SHOOT_WINDOW  = _f("GF_SHOOT_WINDOW", 60)    # seconds to release; timeout → skied (over)
 MIN_SHOOT_WINDOW = _f("GF_MIN_SHOOT_WINDOW", 60)  # floor so level difficulty can't rush the throw
 KEEPER_REACT  = _f("GF_KEEPER_REACTION", 0.45)  # keeper reads your aim this many s BEFORE the kick — feint inside this window to beat it

@@ -44,7 +44,7 @@ All read in [`server.py`](../server.py) unless noted. "-" means unset by default
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `GF_KICKS` | `5` | Attempts per match |
+| `GF_KICKS` | `3` | Attempts per match |
 | `GF_SHOOT_WINDOW` | `60` | Seconds allowed in the shoot phase; timeout → result `over` (skied) |
 | `GF_MIN_SHOOT_WINDOW` | `60` | Hard floor applied to every shoot window. **Consequence:** the SceneEngine's level-3+ `shootWindow` values (2.2–3.0 s) are floored away and currently have no effect. Set both vars low (e.g. `5`) for fast test runs. |
 | `GF_KEEPER_REACTION` | `0.45` | Keeper reads the aim this many seconds *before* the strike (feint window) |

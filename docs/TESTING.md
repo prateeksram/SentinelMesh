@@ -98,5 +98,5 @@ JVM-local JUnit tests (no device needed). Report: `android/app/build/reports/tes
 
 1. `python server.py` → open http://localhost:8080/tv.html → lobby renders, sport buttons work.
 2. `python snapkick_bridge.py` + `python snapkick_sim.py` → TV UNO Q LED turns green, START MATCH enables, kicks resolve every ~4 s.
-3. After 5 kicks → NEXT VENUE generation runs (template offline), difficulty rises, rematch keeps the level.
+3. After 3 kicks → NEXT VENUE generation runs (template offline), difficulty rises, rematch keeps the level.
 4. `Invoke-RestMethod -Method Post http://localhost:8080/api/report/simulate -ContentType application/json -Body '{"playerName":"Demo"}'` → TV shows the QR report panel; the QR resolves from a phone on the same LAN.
