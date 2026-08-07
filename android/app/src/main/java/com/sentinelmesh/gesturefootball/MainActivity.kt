@@ -484,8 +484,11 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         when (cmd.intent) {
             VoiceCoach.Intent.READY -> {
                 binding.hint.text = "Heard: \"${result.text}\""
-                if (hostConnected && (lastPhase == null || lastPhase == "lobby")) {
+                if (lobbyStartAllowed()) {
                     startMatchFromLobby()
+                } else if (calibrating || pickingSport || forceRecalibrate) {
+                    // Ignore "ready" while calibrating / picking a sport.
+                    vibrate(30)
                 } else {
                     vibrate(60)
                     binding.big.text = "READY"
@@ -702,14 +705,21 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     private fun beginCalibrationFlow() {
         val phase = lastPhase
-        if (phase in listOf("announce", "countdown", "shoot", "resolve")) {
+        if (phase in listOf("announce", "countdown", "shoot", "resolve", "generating")) {
             coach?.speak("Finish the match first.")
             binding.hint.text = "Finish the match first — then recalibrate."
             vibrate(40)
             return
         }
-        // Always re-run full calib after sport pick (don't reuse a saved profile).
+        // Block lobby auto-start (thumbs-up / I'm Ready) while the sport picker is up.
+        // pickingSport was false until showSportPicker(), so a ready gesture could
+        // sendStart() and yank TV into a match mid-calibrate.
         forceRecalibrate = true
+        showLobbyReadyButton(false)
+        lobbyThumbsHoldMs = 0
+        lobbyThumbsLastTs = 0
+        lobbyThumbsMissMs = 0
+        pickingSport = true
         showSportPicker()
     }
 
@@ -805,21 +815,27 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private fun onSportChosen(sport: String) {
         pendingSport = PlayerProfile.normalizeSport(sport)
         pose?.setSport(pendingSport)
-        hideOnboarding()
         vibrate(35)
         syncSportToHost(pendingSport)
 
         val existing = profile
         val recalibrate = forceRecalibrate
-        forceRecalibrate = false
         // Cold-start can reuse a saved profile; CALIBRATE always runs the full flow.
         val needsCalib = recalibrate ||
             existing == null ||
             existing.sport != pendingSport ||
             (PlayerProfile.isHandSport(pendingSport) && existing.throwMs == null)
         if (needsCalib) {
+            // Start calib before clearing the sport-picker gate so lobby
+            // thumbs-up / I'm Ready can't sneak a sendStart() in between.
             startCalibration(pendingSport, seedFrom = existing?.takeIf { recalibrate })
+            if (calibrating) {
+                forceRecalibrate = false
+                hideOnboarding()
+            }
         } else {
+            forceRecalibrate = false
+            hideOnboarding()
             pose?.applyProfile(existing)
             updateProfileHint()
             binding.big.text = "READY?"
@@ -951,10 +967,17 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         binding.lobbyReadyBtn.visibility = if (show) View.VISIBLE else View.GONE
     }
 
+    /** True only when a lobby start won't interrupt calibrate / sport pick. */
+    private fun lobbyStartAllowed(): Boolean {
+        if (calibrating || pickingSport || forceRecalibrate) return false
+        if (!hostConnected || profile == null) return false
+        if (lastPhase != null && lastPhase != "lobby") return false
+        return true
+    }
+
     /** Shared start path for thumbs-up, voice "ready", and the I'm Ready button. */
     private fun startMatchFromLobby() {
-        if (calibrating || !hostConnected || profile == null) return
-        if (lastPhase != null && lastPhase != "lobby") return
+        if (!lobbyStartAllowed()) return
         lobbyThumbsHoldMs = 0
         lobbyThumbsLastTs = 0
         lobbyThumbsMissMs = 0
@@ -967,8 +990,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     /** After calibration / lobby: thumbs-up, spoken ready, or tap I'm Ready. */
     private fun promptReadyToStart() {
-        if (calibrating || !hostConnected || profile == null) return
-        if (lastPhase != null && lastPhase != "lobby") return
+        if (!lobbyStartAllowed()) return
         showLobbyReadyButton(true)
         val now = System.currentTimeMillis()
         if (now - readyPromptAt < 20_000) return
@@ -1254,9 +1276,8 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         refreshNeuralLoad()
 
         // Lobby: hold thumbs-up to start the match (voice / I'm Ready still work).
-        if (!calibrating && hostConnected && profile != null &&
-            (lastPhase == null || lastPhase == "lobby")
-        ) {
+        // Skip while calibrating or on the sport picker (CALIBRATE flow).
+        if (lobbyStartAllowed()) {
             val now = System.currentTimeMillis()
             val dt = if (lobbyThumbsLastTs == 0L) {
                 33L
@@ -1490,7 +1511,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     binding.big.text = "READY?"
                     updateProfileHint()
                     lastResultSpoken = null
-                    if (lastPhase != "lobby") promptReadyToStart()
+                    // Don't arm "I'm Ready" / thumbs-up while CALIBRATE sport picker is open.
+                    if (lastPhase != "lobby" && !pickingSport && !forceRecalibrate) {
+                        promptReadyToStart()
+                    }
                 }
                 "announce" -> {
                     lockedAimZone = null
