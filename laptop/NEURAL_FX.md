@@ -18,7 +18,7 @@ Phone stays on pose / Whisper / coach. Laptop owns the public stadium look.
 
 ```powershell
 cd C:\Users\qc_de\SentinelMesh\laptop
-python server.py
+python ../server.py
 ```
 
 Open `http://localhost:8080/tv.html`. Ticker badge:
@@ -78,8 +78,8 @@ Logs: `laptop/logs/fx.jsonl` (`backend`, `ms`).
 
 ## Files
 
-- [`neural_fx.py`](neural_fx.py) — procedural + ORT Depth-Anything-V2
-- [`server.py`](server.py) — hosts `/fx/*`
+- [`../neural_fx.py`](../neural_fx.py) — procedural + ORT Depth-Anything-V2
+- [`../server.py`](../server.py) — hosts `/fx/*`
 - [`public/tv.html`](public/tv.html) — VFX director, post-FX, hero composite
 - [`models/`](models/) — optional ONNX weights (gitignored binaries OK)
 - [`fetch_aihub_models.ps1`](fetch_aihub_models.ps1) — AI Hub pull/export helper

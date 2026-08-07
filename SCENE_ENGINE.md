@@ -54,8 +54,9 @@ Files under `public/scenes/` are for logging / QUAD / replay only. **The WebSock
 ## Smoke test
 
 ```powershell
-cd laptop
+# Root host uses scene_engine.py. Optional agentic assets live under laptop/.
 python test_scene_gen.py
+# Or: py -3.13 laptop/test_scene_gen.py
 ```
 
 Score 1/5 vs 3/5 should differ in atmosphere + `keeperIq`. With GenieX down, `source` is `template`.

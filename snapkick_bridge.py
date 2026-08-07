@@ -35,9 +35,9 @@ AIM_RESEND_S = 0.5        # resend the same zone at most this often
 
 
 def zone_of_x(xm: float) -> str:
-    if xm < -ZONE_THIRD_M / 2:
+    if xm < -ZONE_THIRD_M:
         return "L"
-    if xm > ZONE_THIRD_M / 2:
+    if xm > ZONE_THIRD_M:
         return "R"
     return "C"
 

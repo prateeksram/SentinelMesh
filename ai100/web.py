@@ -111,6 +111,9 @@ class ReportWeb:
         except Exception:
             payload = {}
         player_name = str(payload.get("playerName") or "DEMO STRIKER")[:28]
+        sport = str(payload.get("sport") or getattr(self.game, "sport", "football"))
+        if sport not in ("football", "darts", "basketball"):
+            sport = "football"
         shots = payload.get("shotmap")
         if not isinstance(shots, list):
             shots = report_engine.sample_shotmap()
@@ -119,6 +122,7 @@ class ReportWeb:
             len(shots) or self.kicks_total,
             player_name=player_name,
             require_end=False,
+            sport=sport,
         )
         await self.game.broadcast()
         return web.json_response(self.game.report_card, status=202)

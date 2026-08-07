@@ -52,7 +52,7 @@ On `shoot`, aim freezes (phone + server). Feints only in announce/countdown.
 ## Smoke tests
 
 ```powershell
-cd laptop
+cd laptop   # scene asset tree only; match host is root server.py
 python debug_scene.py
 python test_scene_gen.py
 ```

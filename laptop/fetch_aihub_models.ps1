@@ -88,4 +88,4 @@ if ($onnx) {
     Write-Warning "No ONNX produced. Place Depth-Anything-V2 ONNX at laptop/models/hero_depth.onnx manually."
 }
 
-Write-Host "`nDone. Restart: python laptop/server.py"
+Write-Host "`nDone. Restart: python server.py"

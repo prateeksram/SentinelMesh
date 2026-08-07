@@ -6,15 +6,21 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
-import geniex_client
-import scene_contract
-
 ROOT = Path(__file__).parent
+REPO = ROOT.parent
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+import geniex_client  # noqa: E402  — root host client
+import scene_contract  # noqa: E402
+
 PUBLIC = ROOT / "public"
-GOLDEN = PUBLIC / "tv.html"
+# Golden TV chrome lives on the canonical root host; laptop/ only keeps scene assets.
+GOLDEN = REPO / "public" / "tv.html"
 SCENES = PUBLIC / "scenes"
 CANDIDATES = SCENES / "candidates"
 LIVE = SCENES / "live"

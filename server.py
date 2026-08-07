@@ -96,9 +96,9 @@ SPORT_TARGETS = {
 
 def zone_of_x(xm: float) -> str:
     """Goal-mouth third the metric impact falls in."""
-    if xm < -ZONE_THIRD_M / 2:
+    if xm < -ZONE_THIRD_M:
         return "L"
-    if xm > ZONE_THIRD_M / 2:
+    if xm > ZONE_THIRD_M:
         return "R"
     return "C"
 
@@ -794,7 +794,7 @@ class Game:
         self.campaign_level = level
         self.line = scene["copy"].get("lobbyLine") or self.line
         # 5) end — queue AI100 scorecard, then desk verdict can upgrade the line
-        self.queue_report(self.shotmap, KICKS, generation=gen)
+        self.queue_report(self.shotmap, KICKS, generation=gen, sport=self.sport)
         self.phase = "end"
         await self.broadcast()
         self.ask_desk("end", self.ctx(), {"end"})
@@ -807,11 +807,13 @@ class Game:
         generation=None,
         player_name="THE STRIKER",
         require_end=True,
+        sport=None,
     ):
         """Start report creation without holding up the full-time screen."""
         if self.report_task and not self.report_task.done():
             self.report_task.cancel()
         generation = self.match_gen if generation is None else generation
+        sport = sport or self.sport or "football"
         self.report_card = {
             "status": "generating",
             "startedAt": int(time.time()),
@@ -820,7 +822,8 @@ class Game:
 
         async def run():
             try:
-                card = await report_store.create(list(shots), int(kicks_total), player_name)
+                card = await report_store.create(
+                    list(shots), int(kicks_total), player_name, sport=sport)
             except asyncio.CancelledError:
                 return
             except Exception as exc:
@@ -921,10 +924,24 @@ class Game:
                     if speed is None:
                         speed = trajectory["launchSpeedMps"]
 
+                try:
+                    power = float(msg["power"]) if msg.get("power") is not None else 0.5
+                except (TypeError, ValueError):
+                    power = 0.5
+                power = min(1.0, max(0.0, power))
+                try:
+                    force = max(0, int(msg.get("force") or 0))
+                except (TypeError, ValueError):
+                    force = 0
+                try:
+                    dir_deg = int(msg.get("dirDeg") or 0)
+                except (TypeError, ValueError):
+                    dir_deg = 0
+
                 self.kick_msg = {"zone": msg["zone"],
-                                 "power": min(1.0, max(0.0, float(msg.get("power", 0.5)))),
-                                 "force": max(0, int(msg.get("force") or 0)),   # Newtons, from ForcePose
-                                 "dirDeg": int(msg.get("dirDeg") or 0),
+                                 "power": power,
+                                 "force": force,   # Newtons, from ForcePose
+                                 "dirDeg": dir_deg,
                                  "height": height,
                                  "spin": spin,
                                  "strike": strike,
@@ -1093,8 +1110,11 @@ async def ws_handler(request):
             if msg.type == WSMsgType.TEXT:
                 try:
                     await game.on_message(ws, json.loads(msg.data))
-                except (json.JSONDecodeError, KeyError, ValueError):
-                    pass
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                    print(f"[ws] bad frame ignored: {type(exc).__name__}: {exc}")
+                except Exception as exc:
+                    # Never let one bad client frame tear down the socket.
+                    print(f"[ws] handler error ignored: {type(exc).__name__}: {exc}")
     finally:
         game.on_close(ws)
         await game.broadcast()

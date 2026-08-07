@@ -242,16 +242,42 @@ def _first_image_record(payload: Any) -> dict[str, Any]:
     return payload
 
 
+def _infer_sport(shotmap: list[dict[str, Any]], sport: str | None) -> str:
+    if sport in ("football", "darts", "basketball"):
+        return sport
+    results = {shot.get("result") for shot in shotmap if isinstance(shot, dict)}
+    if results & {"hit", "miss"} and not (results & {"goal", "save", "post", "wide", "over"}):
+        zs = [
+            float(shot["goalZ"])
+            for shot in shotmap
+            if isinstance(shot, dict) and isinstance(shot.get("goalZ"), (int, float))
+        ]
+        if zs and statistics.mean(zs) >= 1.9:
+            return "basketball"
+        return "darts"
+    return "football"
+
+
 def analyze_match(
     shotmap: list[dict[str, Any]],
     kicks_total: int,
     player_name: str = "THE STRIKER",
+    sport: str = "football",
 ) -> dict[str, Any]:
     """Convert raw phone telemetry into display-safe deterministic metrics."""
     shots = [dict(shot) for shot in shotmap if isinstance(shot, dict)]
+    sport = _infer_sport(shots, sport)
     taken = max(len(shots), int(kicks_total or 0), 1)
-    goals = sum(1 for shot in shots if shot.get("result") == "goal")
-    rate = round(goals / taken * 100, 1)
+    if sport == "football":
+        scored = sum(1 for shot in shots if shot.get("result") == "goal")
+        score_label = "GOALS"
+        race_title = "THE PENALTY BENCHMARK RACE"
+    else:
+        scored = sum(1 for shot in shots if shot.get("result") == "hit")
+        score_label = "HITS"
+        race_title = f"THE {sport.upper()} CONVERSION RACE"
+    total_points = sum(int(shot.get("points") or 0) for shot in shots)
+    rate = round(scored / taken * 100, 1)
     forces = [float(shot["force"]) for shot in shots if float(shot.get("force") or 0) > 0]
     average_force = round(statistics.mean(forces)) if forces else 0
     max_force = round(max(forces)) if forces else 0
@@ -273,8 +299,8 @@ def analyze_match(
     fooled = sum(
         1
         for shot in shots
-        if shot.get("zone") in "LCR"
-        and shot.get("keeperZone") in "LCR"
+        if shot.get("zone") in ("L", "C", "R")
+        and shot.get("keeperZone") in ("L", "C", "R")
         and shot.get("zone") != shot.get("keeperZone")
     )
     spins = [abs(float(shot["spin"])) for shot in shots if isinstance(shot.get("spin"), (int, float))]
@@ -288,41 +314,74 @@ def analyze_match(
     high = sum(1 for shot in shots if shot.get("height") == "H")
     low = sum(1 for shot in shots if shot.get("height") == "L")
 
-    if rate >= 80 and average_force >= 280:
-        style, nickname = "POWER FINISHER", "THE THUNDERBOOT"
-    elif rate >= 80 and unpredictability >= 75:
-        style, nickname = "CHAOS CREATOR", "THE WALL BREAKER"
-    elif average_force >= 300:
-        style, nickname = "POWER SPECIALIST", "THE CANNON"
-    elif unpredictability >= 80:
-        style, nickname = "PLACEMENT ARTIST", "THE PUZZLE"
-    elif curve >= 55 or chips > drives:
-        style, nickname = "TRICK-SHOT MAKER", "THE CURVE ARCHITECT"
+    if sport == "football":
+        if rate >= 80 and average_force >= 280:
+            style, nickname = "POWER FINISHER", "THE THUNDERBOOT"
+        elif rate >= 80 and unpredictability >= 75:
+            style, nickname = "CHAOS CREATOR", "THE WALL BREAKER"
+        elif average_force >= 300:
+            style, nickname = "POWER SPECIALIST", "THE CANNON"
+        elif unpredictability >= 80:
+            style, nickname = "PLACEMENT ARTIST", "THE PUZZLE"
+        elif curve >= 55 or chips > drives:
+            style, nickname = "TRICK-SHOT MAKER", "THE CURVE ARCHITECT"
+        else:
+            style, nickname = "COOL FINISHER", "THE CONTENDER"
+    elif sport == "darts":
+        if rate >= 80 and total_points >= 300:
+            style, nickname = "BULLSEYE ARTIST", "THE TREBLE KING"
+        elif rate >= 60 and unpredictability >= 70:
+            style, nickname = "BOARD READER", "THE CHECKOUT"
+        elif average_force >= 250:
+            style, nickname = "HEAVY THROWER", "THE ARROW"
+        else:
+            style, nickname = "STEADY MARKSMAN", "THE OCHE"
     else:
-        style, nickname = "COOL FINISHER", "THE CONTENDER"
+        if rate >= 80 and total_points >= 300:
+            style, nickname = "HOT FROM DEEP", "THE SPLASH"
+        elif rate >= 60 and unpredictability >= 70:
+            style, nickname = "CREATIVE SCORER", "THE BUCKET"
+        elif average_force >= 250:
+            style, nickname = "POWER FORWARD", "THE SLAM"
+        else:
+            style, nickname = "COURT FINISHER", "THE SWISH"
 
-    conversion_competitors = [
-        {"name": "YOU", "rate": rate, "detail": f"{goals}/{taken} GAME SAMPLE", "kind": "player"}
-    ] + [
-        {
-            "name": pro["short"],
-            "rate": pro["rate"],
-            "detail": f"{pro['scored']}/{pro['scored'] + pro['missed']} CAREER PENS",
-            "kind": "pro",
-        }
-        for pro in PRO_BENCHMARKS
-    ]
-    conversion_competitors.sort(key=lambda row: (-row["rate"], row["name"] != "YOU"))
-    rank = next(i + 1 for i, row in enumerate(conversion_competitors) if row["name"] == "YOU")
+    if sport == "football":
+        conversion_competitors = [
+            {"name": "YOU", "rate": rate, "detail": f"{scored}/{taken} GAME SAMPLE", "kind": "player"}
+        ] + [
+            {
+                "name": pro["short"],
+                "rate": pro["rate"],
+                "detail": f"{pro['scored']}/{pro['scored'] + pro['missed']} CAREER PENS",
+                "kind": "pro",
+            }
+            for pro in PRO_BENCHMARKS
+        ]
+        conversion_competitors.sort(key=lambda row: (-row["rate"], row["name"] != "YOU"))
+        rank = next(i + 1 for i, row in enumerate(conversion_competitors) if row["name"] == "YOU")
 
-    ronaldo = PRO_BENCHMARKS[0]["rate"]
-    messi = PRO_BENCHMARKS[1]["rate"]
-    if rate > ronaldo:
-        comparison = f"This game sample finished {rate - ronaldo:.1f} points above Ronaldo's career penalty benchmark."
-    elif rate > messi:
-        comparison = f"This game sample split the legends: {rate - messi:.1f} above Messi, {ronaldo - rate:.1f} below Ronaldo."
+        ronaldo = PRO_BENCHMARKS[0]["rate"]
+        messi = PRO_BENCHMARKS[1]["rate"]
+        if rate > ronaldo:
+            comparison = f"This game sample finished {rate - ronaldo:.1f} points above Ronaldo's career penalty benchmark."
+        elif rate > messi:
+            comparison = f"This game sample split the legends: {rate - messi:.1f} above Messi, {ronaldo - rate:.1f} below Ronaldo."
+        else:
+            comparison = f"Next target: close the {messi - rate:.1f}-point gap to Messi's career penalty benchmark."
     else:
-        comparison = f"Next target: close the {messi - rate:.1f}-point gap to Messi's career penalty benchmark."
+        conversion_competitors = [
+            {"name": "YOU", "rate": rate, "detail": f"{scored}/{taken} HITS · {total_points} PTS", "kind": "player"},
+            {"name": "ELITE", "rate": 80.0, "detail": "DEMO TARGET", "kind": "pro"},
+            {"name": "CLUB", "rate": 60.0, "detail": "DEMO TARGET", "kind": "pro"},
+            {"name": "CASUAL", "rate": 40.0, "detail": "DEMO TARGET", "kind": "pro"},
+        ]
+        conversion_competitors.sort(key=lambda row: (-row["rate"], row["name"] != "YOU"))
+        rank = next(i + 1 for i, row in enumerate(conversion_competitors) if row["name"] == "YOU")
+        comparison = (
+            f"This {sport} sample hit {scored}/{taken} "
+            f"({rate:.0f}%) for {total_points} total points."
+        )
 
     performance_score = round(
         min(100, rate * 0.60 + min(100, average_force / 3.8) * 0.20 + unpredictability * 0.20)
@@ -331,11 +390,16 @@ def analyze_match(
 
     return {
         "playerName": player_name.strip().upper()[:28] or "THE STRIKER",
+        "sport": sport,
         "nickname": nickname,
         "style": style,
         "grade": grade,
         "performanceScore": performance_score,
-        "goals": goals,
+        "goals": scored,
+        "hits": scored,
+        "points": total_points,
+        "scoreLabel": score_label,
+        "raceTitle": race_title,
         "taken": taken,
         "conversionRate": rate,
         "averageForce": average_force,
@@ -358,27 +422,46 @@ def analyze_match(
         "conversionField": len(conversion_competitors),
         "conversionComparison": comparison,
         "conversionTable": conversion_competitors,
-        "proBenchmarks": [dict(pro) for pro in PRO_BENCHMARKS],
+        "proBenchmarks": [dict(pro) for pro in PRO_BENCHMARKS] if sport == "football" else [],
         "proSnapshotDate": PRO_SNAPSHOT_DATE,
         "shots": shots,
     }
 
 
 def artwork_prompt(analytics: dict[str, Any]) -> str:
-    goal_mood = "victorious goal explosion" if analytics["conversionRate"] >= 60 else "dramatic comeback energy"
+    sport = analytics.get("sport") or "football"
+    mood = "victorious celebration" if analytics["conversionRate"] >= 60 else "dramatic comeback energy"
     style = analytics["style"].lower()
     zone = analytics["favoriteZone"].lower()
+    if sport == "darts":
+        subject = (
+            "a precision dart hitting a glowing bullseye on a wood-panelled darts hall board, "
+            "warm pub lights and sharp metallic reflections"
+        )
+        setting = "darts-hall"
+    elif sport == "basketball":
+        subject = (
+            "a blazing basketball mid-swish through a neon arena hoop, "
+            "indoor floodlights and kinetic motion trails"
+        )
+        setting = "indoor basketball arena"
+    else:
+        subject = (
+            "a futuristic metallic goalkeeper wall cracks apart under a blazing football, packed fans "
+            "celebrate under gold and electric-cyan floodlights, dynamic energy trails and confetti"
+        )
+        setting = "football-stadium"
     return (
-        "Premium cinematic abstract football-stadium background for a vertical data visualization. "
-        f"Visual story: {goal_mood}, {style}, favorite target is the {zone}. "
-        "A futuristic metallic goalkeeper wall cracks apart under a blazing football, packed fans "
-        "celebrate under gold and electric-cyan floodlights, dynamic energy trails and confetti. "
-        "Architecture, the football, light and particles are the only foreground subjects; spectators "
+        f"Premium cinematic abstract {setting} background for a vertical data visualization. "
+        f"Visual story: {mood}, {style}, favorite target is the {zone}. "
+        f"{subject}. "
+        "Architecture, the primary sports object, light and particles are the only foreground subjects; spectators "
         "stay tiny and indistinct in distant stands. "
         "Leave clean dark negative space through the center and lower half for a statistics overlay. "
         "Polished sports-broadcast photography and graphic-design lighting. Absolutely no words, "
         "letters, numbers, logos, watermarks, UI, scoreboards or readable signs."
     )
+
 
 
 def render_report(
@@ -432,13 +515,16 @@ def render_report(
     y = 650
     metric_width = 464
     gap = 28
-    _metric_card(draw, (56, y, 56 + metric_width, y + 224), f"{analytics['goals']} / {analytics['taken']}", "GOALS", amber, panel, line)
+    score_label = analytics.get("scoreLabel") or "GOALS"
+    race_title = analytics.get("raceTitle") or "THE PENALTY BENCHMARK RACE"
+    force_label = "THUNDERFOOT" if analytics.get("sport", "football") == "football" else "PEAK FORCE"
+    _metric_card(draw, (56, y, 56 + metric_width, y + 224), f"{analytics['goals']} / {analytics['taken']}", score_label, amber, panel, line)
     _metric_card(draw, (56 + metric_width + gap, y, 56 + metric_width * 2 + gap, y + 224), f"{analytics['conversionRate']:.0f}%", "CONVERSION", cyan, panel, line)
-    _metric_card(draw, (56 + (metric_width + gap) * 2, y, 56 + metric_width * 3 + gap * 2, y + 224), f"{analytics['maxForce']} N", "THUNDERFOOT", "#FF6B45", panel, line)
+    _metric_card(draw, (56 + (metric_width + gap) * 2, y, 56 + metric_width * 3 + gap * 2, y + 224), f"{analytics['maxForce']} N", force_label, "#FF6B45", panel, line)
 
     race_y = 914
     draw.rounded_rectangle((56, race_y, 1544, race_y + 430), 26, fill=panel, outline=line, width=2)
-    draw.text((94, race_y + 36), "THE PENALTY BENCHMARK RACE", font=_font(34, black=True), fill=chalk)
+    draw.text((94, race_y + 36), race_title, font=_font(34, black=True), fill=chalk)
     draw.text((1506, race_y + 42), f"GAME RANK  #{analytics['conversionRank']} / {analytics['conversionField']}", font=_font(25, bold=True), fill=amber, anchor="ra")
     for index, row in enumerate(analytics["conversionTable"]):
         bar_y = race_y + 112 + index * 88
@@ -510,9 +596,10 @@ class ReportStore:
         shotmap: list[dict[str, Any]],
         kicks_total: int,
         player_name: str = "THE STRIKER",
+        sport: str = "football",
     ) -> dict[str, Any]:
         self.cleanup()
-        analytics = analyze_match(shotmap, kicks_total, player_name)
+        analytics = analyze_match(shotmap, kicks_total, player_name, sport=sport)
         artwork, ai_meta = await self.artwork.generate(artwork_prompt(analytics))
         png = await asyncio.to_thread(render_report, analytics, artwork, ai_meta)
         pdf = await asyncio.to_thread(png_to_pdf, png)

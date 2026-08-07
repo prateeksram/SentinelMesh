@@ -28,7 +28,7 @@ Your body is the controller: a **leg swing** takes the penalty, a **hand throw**
 - Run **on-device AI** where it belongs:
   - **Laptop (Copilot+ / Snapdragon X Elite):** match engine, stadium TV, optional Depth-Anything-V2 Neural FX via ONNX/QNN, GenieX venue design & commentary.
   - **Phone (optional):** Hexagon NPU pose, ForcePose (Newtons), Whisper ASR, private coach — camera frames stay on device.
-- Optionally generate a **post-match report** (PNG/PDF + QR) via the AI100 subsystem under `ai100/` when using the laptop host path.
+- Optionally generate a **post-match report** (PNG/PDF + QR) via the AI100 subsystem under `ai100/`.
 
 ### Intended deployment
 
@@ -96,7 +96,7 @@ Everything runs on one Wi‑Fi / hotspot. No internet is required for core play.
 | `android/` | Native **QPlay** Android striker (Hexagon NPU, ForcePose, Whisper, coach) |
 | `ai100/` | Optional Cloud AI100 post-match report engine |
 | `unoq/` | Edge pose streamer for Arduino UNO Q |
-| `laptop/` | Parallel host stack with AI100 TV integration |
+| `laptop/` | Optional SceneEngine assets / agentic venue pipeline (not a match host) |
 | `docs/` | Protocols and deep-dive setup guides |
 | `tools/` | Model fetch/push and launcher helpers |
 | `models/` | Optional `hero_depth.onnx` for Neural FX |
@@ -331,7 +331,7 @@ python -m pytest ai100\test_report_engine.py -q
 
 - **Privacy:** Camera frames and player biometrics stay on the phone. Only compact aim/kick JSON crosses the LAN.
 - **Offline play:** Core match + on-device coach work without internet. GenieX, cloud commentary, and AI100 art are optional upgrades.
-- **Dual host trees:** Root `server.py` + `public/` is the merged canonical game host. `laptop/` adds tighter AI100 report wiring for demos that need post-match QR art.
+- **Single host:** Root `server.py` + `public/` is the only match host. `laptop/` retains optional SceneEngine scene assets; do not run a second server from there.
 - **Models not in git:** Whisper / Qwen weight bins and large ONNX depth models are fetched or pushed via scripts under `tools/` and `fetch_aihub_models.ps1` (see `models/README.md`, `android/README.md`).
 - **Classifier roadmap:** `classifier/` can recognize a physical ball and switch sports; training/export exists but is not wired into `server.py` yet.
 

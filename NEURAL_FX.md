@@ -50,13 +50,13 @@ TV calls `/fx/hero` automatically on resolve when a kick has a result and (ideal
 
 ```powershell
 $env:QAI_HUB_API_TOKEN = "<token>"   # never commit
-.\laptop\fetch_aihub_models.ps1
+.\fetch_aihub_models.ps1
 ```
 
 Or download the Universal float ONNX zip from AI Hub release assets and copy the `.onnx` to:
 
 ```
-laptop/models/hero_depth.onnx
+models/hero_depth.onnx
 ```
 
 Public asset (v0.59 float ONNX):
@@ -65,7 +65,7 @@ Public asset (v0.59 float ONNX):
 
 For Hexagon QNN EP, keep `QNN_SDK_ROOT` pointed at QAIRT and prefer a QNN-embedded / device export when available. Absent model or `onnxruntime` → **procedural** plates; match never breaks.
 
-Logs: `laptop/logs/fx.jsonl` (`backend`, `ms`).
+Logs: `logs/fx.jsonl` (`backend`, `ms`).
 
 ## Degrade path
 

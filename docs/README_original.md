@@ -14,7 +14,7 @@ Branch: `prateek` · Phone: Galaxy S25 Ultra (Snapdragon 8 Elite)
 |---|---|---|
 | **Player 1** | Phone (`android/` app) | Aim, kick, all AI on-device |
 | **Player 2** | Arduino UNO Q (teammates) | Same WebSocket protocol |
-| **Host / TV** | Laptop (`laptop/server.py`) | Match engine, THE WALL, stadium UI |
+| **Host / TV** | Host (`server.py`) | Match engine, THE WALL, stadium UI |
 
 The phone is **not** the match host. It only sends tiny JSON (`aim`, `kick`, `skel`). No camera frames leave the device.
 
@@ -95,7 +95,7 @@ Details: [`android/README.md`](android/README.md).
 
 | Piece | Where | Status |
 |---|---|---|
-| Match server + AI keeper + WebSocket | `laptop/server.py` | Done (solo / THE WALL) |
+| Match server + AI keeper + WebSocket | `server.py` | Done (solo / THE WALL) |
 | TV stadium | `laptop/public/tv.html` | Done |
 | Browser striker (fallback) | `laptop/public/phone.html` | Done |
 | Headless match test | `laptop/test_match.py` | Done |
@@ -104,12 +104,11 @@ Details: [`android/README.md`](android/README.md).
 
 ## Quick start
 
-### 1) Laptop host + TV
+### 1) Host + TV
 ```powershell
-cd laptop
 python server.py
 ```
-Open `http://localhost:8080/tv.html`. Note laptop LAN IP (e.g. `172.20.10.2`).
+Open `http://localhost:8080/tv.html`. Note host LAN IP (e.g. `172.20.10.2`).
 
 ### 2) Phone app
 1. Install / open **Gesture Football** (camera + mic permissions).
@@ -210,10 +209,10 @@ Kick sensitivity: `KICK_MS` / `F_MAX` in `ForcePoseEngine.kt` (or browser `phone
 
 ```powershell
 $env:GF_ANNOUNCE_S="0.1"; $env:GF_COUNTDOWN_S="0.2"; $env:GF_SHOOT_WINDOW="1.0"; $env:GF_RESOLVE_S="0.1"
-python laptop/server.py
-python laptop/test_match.py
+python server.py
+python test_match.py
 ```
 
-Optional public desk on laptop: `ANTHROPIC_API_KEY` or `GF_LLM_URL`. Phone coach is separate and private.
+Optional public desk on host: `ANTHROPIC_API_KEY` or `GF_LLM_URL`. Phone coach is separate and private.
 
-On-device stadium VFX (Adreno + optional Hexagon): see [`laptop/NEURAL_FX.md`](laptop/NEURAL_FX.md).
+On-device stadium VFX (Adreno + optional Hexagon): see [`NEURAL_FX.md`](../NEURAL_FX.md).

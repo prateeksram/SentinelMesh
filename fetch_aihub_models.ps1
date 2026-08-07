@@ -4,7 +4,7 @@
 #
 # Usage:
 #   $env:QAI_HUB_API_TOKEN = "<token>"
-#   .\laptop\fetch_aihub_models.ps1
+#   .\fetch_aihub_models.ps1
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -85,7 +85,7 @@ if ($onnx) {
 } elseif (Test-Path $dest) {
     Write-Host "Keeping existing $dest"
 } else {
-    Write-Warning "No ONNX produced. Place Depth-Anything-V2 ONNX at laptop/models/hero_depth.onnx manually."
+    Write-Warning "No ONNX produced. Place Depth-Anything-V2 ONNX at models/hero_depth.onnx manually."
 }
 
-Write-Host "`nDone. Restart: python laptop/server.py"
+Write-Host "`nDone. Restart: python server.py"

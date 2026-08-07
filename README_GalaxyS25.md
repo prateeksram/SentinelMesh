@@ -5,7 +5,7 @@
 **ABI / SDK:** `arm64-v8a` only · `minSdk` 28 · `targetSdk` / `compileSdk` 35  
 **Branch intent:** `prateek` — native edge-AI striker, not the match host  
 
-This document covers **only the phone**. The laptop host / TV stadium (`laptop/server.py`, `tv.html`) and Arduino Player 2 are out of scope except where the phone talks to them over Wi‑Fi.
+This document covers **only the phone**. The match host / TV stadium (`server.py`, `public/tv.html`) and Arduino Player 2 are out of scope except where the phone talks to them over Wi‑Fi.
 
 ---
 
@@ -483,7 +483,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 **Play checklist**
 
 1. Phone + laptop on the **same Wi‑Fi / hotspot**.
-2. Laptop: `python laptop/server.py` → open TV.
+2. Host: `python server.py` → open TV (`http://<host>:8080/tv.html`).
 3. Phone: open Gesture Football → grant camera + mic.
 4. HOST = laptop LAN IP `:8080` → tap **HOST** (green pill / TV PHONE LED).
 5. Calibrate once if prompted → step back until **FULL BODY ✓**.

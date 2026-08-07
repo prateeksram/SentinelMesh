@@ -22,6 +22,7 @@ class ReportAnalyticsTests(unittest.TestCase):
             report_engine.sample_shotmap(), 5, "Demo Striker"
         )
         self.assertEqual(analytics["playerName"], "DEMO STRIKER")
+        self.assertEqual(analytics["sport"], "football")
         self.assertEqual(analytics["goals"], 4)
         self.assertEqual(analytics["conversionRate"], 80.0)
         self.assertEqual(analytics["averageForce"], 321)
@@ -62,6 +63,39 @@ class ReportAnalyticsTests(unittest.TestCase):
         }, clear=False):
             settings = report_engine.AI100Settings.from_env()
         self.assertEqual(settings.model, "stabilityai/sdxl-turbo")
+
+    def test_darts_counts_hits_and_points(self):
+        shots = [
+            {"kick": 1, "zone": "C", "power": 0.8, "force": 210, "result": "hit", "points": 100},
+            {"kick": 2, "zone": "L", "power": 0.7, "force": 180, "result": "hit", "points": 60},
+            {"kick": 3, "zone": "R", "power": 0.5, "force": 120, "result": "miss", "points": 0},
+            {"kick": 4, "zone": "C", "power": 0.9, "force": 240, "result": "hit", "points": 100},
+            {"kick": 5, "zone": "L", "power": 0.6, "force": 150, "result": "miss", "points": 0},
+        ]
+        analytics = report_engine.analyze_match(shots, 5, "Dart Player", sport="darts")
+        self.assertEqual(analytics["sport"], "darts")
+        self.assertEqual(analytics["hits"], 3)
+        self.assertEqual(analytics["goals"], 3)
+        self.assertEqual(analytics["points"], 260)
+        self.assertEqual(analytics["conversionRate"], 60.0)
+        self.assertEqual(analytics["scoreLabel"], "HITS")
+        self.assertIn("darts", analytics["conversionComparison"])
+        self.assertEqual(analytics["proBenchmarks"], [])
+
+    def test_basketball_artwork_prompt_mentions_hoop(self):
+        shots = [
+            {"kick": 1, "zone": "C", "power": 0.9, "force": 260, "result": "hit", "points": 100, "goalZ": 2.0},
+            {"kick": 2, "zone": "L", "power": 0.8, "force": 220, "result": "hit", "points": 40, "goalZ": 2.1},
+            {"kick": 3, "zone": "R", "power": 0.4, "force": 140, "result": "miss", "points": 0, "goalZ": 2.3},
+            {"kick": 4, "zone": "C", "power": 0.85, "force": 250, "result": "hit", "points": 100, "goalZ": 2.0},
+            {"kick": 5, "zone": "C", "power": 0.7, "force": 200, "result": "hit", "points": 40, "goalZ": 1.95},
+        ]
+        analytics = report_engine.analyze_match(shots, 5, sport="basketball")
+        self.assertEqual(analytics["sport"], "basketball")
+        self.assertEqual(analytics["hits"], 4)
+        prompt = report_engine.artwork_prompt(analytics)
+        self.assertIn("basketball", prompt.lower())
+        self.assertIn("hoop", prompt.lower())
 
 
 class ReportStoreTests(unittest.IsolatedAsyncioTestCase):
