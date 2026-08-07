@@ -42,7 +42,7 @@ The experience demonstrates useful multi-device intelligence rather than isolate
 - [Demo script](#demo-script)
 - [Troubleshooting](#troubleshooting)
 - [Known limitations](#known-limitations)
-- [Roadmap](#roadmap)
+- [Future roadmap](#future-roadmap)
 - [Team](#team)
 - [License](#license)
 
@@ -872,32 +872,102 @@ These items describe the current `main` branch and should be resolved before cal
 
 ---
 
-## Roadmap
+## Future roadmap
 
-### Demo blockers
+QPlay starts as a gesture-controlled sports game, but its reusable core is a **motion intelligence platform**: edge devices understand physical activity, the PC adapts an experience in real time, and AI100 creates a personalized result that returns to the participant's phone.
 
-- [ ] Add `.env`, `ai100/data/`, and `ai100/cache/` to `.gitignore`.
-- [ ] Make the full three-sport E2E harness deterministic.
-- [ ] Reduce AI100 demo timeout and expose clear retry/fallback status.
-- [ ] Add a one-command health check for PC, phone, UNO Q, GenieX, and AI100.
+### What the future platform looks like
 
-### Security and reliability
+```mermaid
+flowchart LR
+    Sense["1. Sense\nPhone + UNO Q"] --> Understand["2. Understand\nPose, force, direction"]
+    Understand --> Adapt["3. Adapt\nPC rules + coaching"]
+    Adapt --> Create["4. Create\nAI100 personalized media"]
+    Create --> Share["5. Share\nQR + mobile report"]
+    Share -.-> Profile["Private progress profile"]
+    Profile -.-> Adapt
+```
 
-- [ ] Introduce QR-paired session tokens.
-- [ ] Enforce permissions per device role.
-- [ ] Protect all camera and scene routes.
-- [ ] Add periodic report cleanup.
-- [ ] Move Neural FX work off the async server event loop.
-- [ ] Add structured logging and request correlation IDs.
-- [ ] Add CI for Python and Android unit tests.
+The same pipeline can power many experiences. Only the activity detector, rules, and output template need to change; pairing, telemetry, device health, privacy controls, AI100 generation, and QR delivery remain shared platform services.
 
-### Product improvements
+### Delivery phases
 
-- [ ] Add richer sport-specific AI100 card designs and benchmarks.
-- [ ] Add player consent and retention controls.
-- [ ] Support group sessions and tournament leaderboards.
-- [ ] Wire the object classifier into lobby sport selection.
-- [ ] Package the PC host as a signed Windows application.
+```mermaid
+flowchart LR
+    P1["Phase 1: Dependable demo\nNow"] --> P2["Phase 2: Personal AI coach\nNext"]
+    P2 --> P3["Phase 3: Motion SDK\nPlatform"]
+    P3 --> P4["Phase 4: Connected venues\nEcosystem"]
+```
+
+#### Phase 1 — Dependable demo
+
+- Add QR-paired session tokens and role-based device permissions.
+- Add `.env`, `ai100/data/`, and `ai100/cache/` to committed ignore rules.
+- Make the complete three-sport E2E harness deterministic and add CI.
+- Reduce the AI100 demo timeout and expose retry, cache, and fallback status.
+- Add one-command health checks for the PC, phone, UNO Q, GenieX, and AI100.
+- Add scheduled report cleanup, structured logs, and camera-route protection.
+
+#### Phase 2 — Personal AI coach
+
+- Create an opt-in player profile that shows improvement across sessions.
+- Compare players with their own history before using playful professional benchmarks.
+- Detect patterns such as weak-foot accuracy, inconsistent power, or predictable aim.
+- Generate personalized practice drills, spoken coaching, and sport-specific AI100 cards.
+- Adapt difficulty to player ability and support teams, tournaments, and leaderboards.
+- Add explicit consent, retention controls, profile export, and deletion.
+
+#### Phase 3 — Motion Intelligence SDK
+
+- Publish a versioned movement-event schema for kicks, throws, jumps, balance, and custom gestures.
+- Provide plug-in interfaces for activity detection, scoring rules, coaching, and report templates.
+- Wire object recognition into automatic activity selection.
+- Package the PC host as a signed Windows application with guided device setup.
+- Allow approved cameras, wearables, and smart equipment to become additional sensing sources.
+
+Representative event:
+
+```json
+{
+  "activity": "kick",
+  "force": 310,
+  "speed": 19.4,
+  "direction": 12,
+  "balance": 0.86,
+  "confidence": 0.93
+}
+```
+
+#### Phase 4 — Connected venues
+
+- Support multiple simultaneous players and team-based stations.
+- Connect schools, gyms, stadium booths, and rehabilitation spaces.
+- Run opt-in competitions across multiple physical locations.
+- Provide privacy-preserving facility dashboards and participation trends.
+- Release a developer toolkit for building new motion-controlled experiences.
+
+### Applications beyond the game
+
+| Use case | Participant experience | Device and AI collaboration | Potential value |
+|---|---|---|---|
+| Sports coaching | Perform kicks, throws, or jumps and receive technique feedback | Phone/UNO Q measures motion; PC analyzes form; AI100 creates the session report | Accessible skill development and progress tracking |
+| Physical education | Complete movement challenges, team relays, and class tournaments | Edge devices count movement; PC manages stations; teacher receives summaries | More engaging, measurable PE activities |
+| Rehabilitation support | Follow clinician-selected balance and range-of-motion exercises | Local pose tracking measures repetitions and symmetry; PC charts progress | Consistent exercise guidance between appointments |
+| Senior mobility | Complete gentle balance, sit-to-stand, and reaction exercises | Edge sensing detects movement quality; PC adjusts difficulty and records trends | Encourages safe, regular movement and early discussion of changes |
+| Workplace ergonomics | Practice lifting and receive posture or repetition feedback | Local vision identifies movement patterns; PC provides immediate guidance | Interactive safety training and reduced-risk technique practice |
+| Events and fan activations | Scan, pose, kick, or celebrate, then download a personalized poster | PC runs the experience; AI100 generates themed artwork; QR delivers the result | Memorable stadium, conference, retail, and brand experiences |
+| Dance and performance | Follow choreography and review timing or group synchronization | Multiple edge cameras estimate poses; PC compares timing; AI100 creates performance art | Practice feedback and shareable event content |
+| Accessible control | Map comfortable custom gestures to games or interfaces | Edge device recognizes personalized gestures; PC triggers approved actions | More flexible interaction for people who cannot use standard controllers |
+| STEM and AI education | Inspect how one movement travels through a real AI system | Students explore edge inference, networking, game physics, AI100, and privacy | Hands-on teaching for multi-device AI and engineering |
+| Remote coaching | Perform a guided session and share selected metrics with a coach | Local devices keep raw video private; PC exports consented summaries | Coaching access without continuously uploading camera video |
+
+### Responsible expansion
+
+- Keep camera processing local by default and transmit only the minimum required telemetry.
+- Require explicit consent before saving profiles, sharing results, or using identifiable images.
+- Treat rehabilitation, mobility, and safety features as assistive tools—not medical diagnosis—until clinically validated.
+- Use authenticated sessions, short retention windows, encrypted transport, and user-controlled deletion.
+- Keep AI-generated feedback clearly labeled and base every reported metric on deterministic measurements.
 
 ---
 
