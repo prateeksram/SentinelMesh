@@ -240,18 +240,25 @@
             border-radius:999px;padding:7px 12px;cursor:pointer;letter-spacing:1.5px;
             justify-content:center;margin-top:4px}
   #soundBtn.off{color:var(--mut);background:transparent}
-  #genBarWrap{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:6;
-              width:min(480px,70vw);height:6px;border-radius:999px;background:rgba(20,40,60,.7);
-              border:1px solid rgba(158,190,215,.25);overflow:hidden;display:none}
+  /* Bottom message tray — venue report + pipeline steps (small, not over the pitch) */
+  #msgBox{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:6;
+          width:min(560px,86vw);display:none;pointer-events:none;
+          background:linear-gradient(180deg,rgba(8,18,28,.92),rgba(4,10,16,.95));
+          border:1px solid rgba(62,199,244,.35);border-radius:10px;
+          box-shadow:0 8px 28px rgba(0,0,0,.55);padding:8px 12px 10px;text-align:center}
+  #msgBox.show{display:block}
+  #msgBox .msg-label{font-family:var(--fCond);font-weight:800;letter-spacing:1.8px;
+                     font-size:10px;color:var(--amber);margin-bottom:3px}
+  #msgBox .msg-body{font-family:var(--fBody);font-weight:500;font-size:11px;line-height:1.35;
+                    color:#9ec8de;max-height:2.8em;overflow:hidden}
+  #msgBox .msg-meta{font-family:var(--fCond);font-weight:700;letter-spacing:1.2px;
+                    font-size:10px;color:var(--cyan);margin-top:4px;opacity:.95}
+  #genBarWrap{width:100%;height:4px;border-radius:999px;background:rgba(20,40,60,.7);
+              border:1px solid rgba(158,190,215,.25);overflow:hidden;display:none;margin-bottom:7px}
   #genBarWrap.show{display:block}
   #genBar{height:100%;width:0%;background:linear-gradient(90deg,var(--cyan),var(--amber));
           transition:width .2s linear}
-  #genMeta{position:fixed;left:50%;transform:translateX(-50%);bottom:34px;z-index:6;
-           font-family:var(--fCond);font-weight:700;letter-spacing:1.5px;font-size:13px;
-           color:var(--cyan);display:none;max-width:min(920px,94vw);text-align:center;
-           white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-           text-shadow:0 1px 8px rgba(0,0,0,.65)}
-  #genMeta.show{display:block}
+  #genMeta{display:none} /* folded into #msgBox */
   #sceneDebug{position:fixed;left:14px;bottom:18px;z-index:9;display:none;
               font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:1.35;
               color:#cfe6f5;background:rgba(4,10,16,.82);border:1px solid #355873;
@@ -262,10 +269,9 @@
     .rail-left{width:min(120px,18vw)}
     #line{font-size:10px;-webkit-line-clamp:3}
     .links{font-size:9px;gap:5px;padding:8px}
+    #msgBox{width:min(92vw,520px);bottom:10px;padding:7px 10px 8px}
+    #msgBox .msg-body{font-size:10px}
   }
-  #reportLine{margin-top:10px;font-family:var(--fCond);font-weight:600;letter-spacing:1px;
-              font-size:clamp(13px,1.6vw,18px);color:var(--mut);max-width:70vw;display:none}
-  #reportLine.show{display:block}
   #reportPanel{position:fixed;right:14px;top:88px;z-index:8;width:min(118px,10vw);
                padding:10px;background:linear-gradient(160deg,rgba(9,25,37,.97),rgba(5,13,22,.98));
                border:1px solid #355873;border-top:3px solid var(--amber);border-radius:12px;
@@ -325,10 +331,17 @@
     <div id="big"></div>
     <div class="livebug" id="livebug"><span class="reddot"></span>LIVE<em>PENALTY SHOOTOUT</em></div>
     <div id="sub">waiting for the striker…</div>
-    <div id="reportLine"></div>
     <button id="startBtn" disabled>START MATCH</button>
   </div>
 </div>
+
+<div id="msgBox" aria-live="polite">
+  <div id="genBarWrap"><div id="genBar"></div></div>
+  <div class="msg-label" id="msgLabel"></div>
+  <div class="msg-body" id="msgBody"></div>
+  <div class="msg-meta" id="msgMeta"></div>
+</div>
+<div id="genMeta"></div>
 
 <aside class="rail-right" id="sportsRail" aria-label="Choose sport">
   <div class="sports" id="sports">
@@ -349,8 +362,6 @@
   <a id="reportOpen" href="#" target="_blank" rel="noopener">OPEN REPORT</a>
 </aside>
 
-<div id="genBarWrap"><div id="genBar"></div></div>
-<div id="genMeta"></div>
 <div id="sceneDebug"></div>
 
 <aside class="rail-left" aria-label="Desk and match status">
@@ -897,9 +908,7 @@ function onState(st){
   $("midTop").textContent = st.phase==="lobby"?"LOBBY":st.phase==="end"?"FULL TIME"
     :st.phase==="generating"?"NEXT VENUE":SPORT_LABEL[SPORT()];
   if(st.phase==="generating"){
-    $("midBot").textContent = st.genStep
-      ? String(st.genStep).slice(0, 42)
-      : (st.level>1?`LEVEL ${st.level}`:"DESIGNING…");
+    $("midBot").textContent = st.level>1?`LEVEL ${st.level}`:"DESIGNING…";
   }else{
     $("midBot").textContent = st.phase==="end"||st.phase==="lobby"
       ?(st.level>1?`LEVEL ${st.level}`:"QPlay")
@@ -935,12 +944,24 @@ function onState(st){
   updateReportPanel(st);
 
   const big=$("big"), sub=$("sub"), btn=$("startBtn"), abort=$("abortBtn");
-  const report=$("reportLine"), genWrap=$("genBarWrap"), genBar=$("genBar"), genMeta=$("genMeta");
+  const msgBox=$("msgBox"), msgLabel=$("msgLabel"), msgBody=$("msgBody"), msgMeta=$("msgMeta");
+  const genWrap=$("genBarWrap"), genBar=$("genBar");
   const overlay=document.querySelector(".overlay");
   big.className=""; btn.classList.add("hide");
   if(overlay) overlay.classList.toggle("lobby", st.phase==="lobby");
-  report.classList.remove("show"); report.textContent="";
-  genWrap.classList.remove("show"); genMeta.classList.remove("show");
+  // Reset bottom message tray each frame; phases that need it re-show below.
+  if(msgBox){ msgBox.classList.remove("show"); }
+  if(msgLabel) msgLabel.textContent="";
+  if(msgBody) msgBody.textContent="";
+  if(msgMeta) msgMeta.textContent="";
+  if(genWrap) genWrap.classList.remove("show");
+  const showMsg=(label, body, meta)=>{
+    if(!msgBox) return;
+    msgBox.classList.add("show");
+    if(msgLabel) msgLabel.textContent=label||"";
+    if(msgBody) msgBody.textContent=body||"";
+    if(msgMeta) msgMeta.textContent=meta||"";
+  };
   // END MATCH visible for any live / full-time phase (not lobby).
   abort.classList.toggle("hide", st.phase==="lobby");
   if(st.phase!=="lobby"){ abort.disabled=false; abort.textContent="END MATCH"; }
@@ -1003,18 +1024,17 @@ function onState(st){
       big.textContent="NEXT VENUE";
       const p=st.genProgress||0;
       const step=st.genStep||"Designing the ground…";
-      sub.textContent=`${step}  ·  ${p}%`;
+      // Keep center overlay short; full pipeline copy lives in the bottom tray.
+      sub.textContent=`Designing… ${p}%`;
       btn.classList.add("hide"); abort.classList.remove("hide");
-      genWrap.classList.add("show"); genBar.style.width=`${p}%`;
-      genMeta.classList.add("show");
+      if(genWrap){ genWrap.classList.add("show"); genBar.style.width=`${p}%`; }
       const chain=[];
       const s=String(step).toLowerCase();
-      if(s.includes("geniex")||s.includes("on-device")) chain.push("1 ON-DEVICE GenieX");
-      if(s.includes("openai")||s.includes("cloud")) chain.push("2 CLOUD OpenAI");
-      if(s.includes("template")||s.includes("offline")) chain.push("3 TEMPLATE");
+      if(s.includes("geniex")||s.includes("on-device")) chain.push("1 GenieX");
+      if(s.includes("openai")||s.includes("cloud")) chain.push("2 OpenAI");
+      if(s.includes("template")||s.includes("offline")) chain.push("3 Template");
       if(!chain.length) chain.push("GenieX → OpenAI → template");
-      genMeta.textContent=`PIPELINE  ${chain.join("  →  ")}  ·  ${p}%`;
-      // Live badge while generating so judges can follow the path.
+      showMsg("SCENE PIPELINE", step, `${chain.join(" → ")} · ${p}%`);
       const badge=$("sceneBadge");
       if(badge){
         if(s.includes("openai")||s.includes("cloud")){
@@ -1038,12 +1058,18 @@ function onState(st){
         big.className=st.score>st.kicksTotal/2?"goal":"save";
         sub.textContent=st.score>st.kicksTotal/2?"YOU BEAT THE WALL":"THE WALL STANDS";
       }
-      if(st.report){ report.textContent=st.report; report.classList.add("show"); }
       btn.classList.remove("hide"); btn.disabled=false;
       btn.textContent=st.level>1?"NEXT VENUE":"PLAY AGAIN";
-      if(st.sceneMetrics?.total_ms){
-        genMeta.classList.add("show");
-        genMeta.textContent=`scene ${st.sceneMetrics.total_ms} ms · ${st.sceneMetrics.source||""}`;
+      {
+        const m=st.sceneMetrics||st.scene?.metrics||{};
+        const src=(m.source||"").toUpperCase()||"—";
+        const ms=m.total_ms?`${m.total_ms} ms`:"—";
+        const title=(st.scene?.title||`Level ${st.level||1}`).toString();
+        showMsg(
+          `NEXT VENUE · ${title}`,
+          st.report||st.line||"Venue ready.",
+          `source ${src} · ${ms}`
+        );
       }
       if(st.scene) maybeNavigateVenue(st.scene);
       updateSceneDebug(st);

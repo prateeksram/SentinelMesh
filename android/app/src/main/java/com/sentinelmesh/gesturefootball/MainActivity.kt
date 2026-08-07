@@ -76,6 +76,12 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private var pickingSport = false
     /** True when CALIBRATE was tapped — always run full height/weight → L/C/R → practice. */
     private var forceRecalibrate = false
+    /**
+     * Sticky gate: once CALIBRATE is tapped, block lobby auto-start / I'm Ready /
+     * thumbs-up until calibration fully finishes (or is cancelled back to lobby).
+     * Survives sport-picker → calib transitions where forceRecalibrate is cleared.
+     */
+    private var blockMatchStart = false
     private var hostSport: String = PlayerProfile.SPORT_FOOTBALL
 
     private var lastAsrMs: Long = -1
@@ -711,15 +717,23 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
             vibrate(40)
             return
         }
-        // Block lobby auto-start (thumbs-up / I'm Ready) while the sport picker is up.
-        // pickingSport was false until showSportPicker(), so a ready gesture could
-        // sendStart() and yank TV into a match mid-calibrate.
+        // Park the host in lobby if we're still on full-time — otherwise TV
+        // NEXT VENUE / a stray ready gesture can start a match under the picker.
+        // Use "again" (keeps campaign) rather than abort (wipes level).
+        if (phase == "end" && hostConnected) {
+            game.sendAgain()
+            lastPhase = "lobby"
+        }
+        // Sticky block until finishCalibration clears it (not just sport-picker).
+        blockMatchStart = true
         forceRecalibrate = true
         showLobbyReadyButton(false)
         lobbyThumbsHoldMs = 0
         lobbyThumbsLastTs = 0
         lobbyThumbsMissMs = 0
         pickingSport = true
+        binding.big.text = "CALIBRATE"
+        binding.hint.text = "Calibrate · pick a sport, then height / aim / practice"
         showSportPicker()
     }
 
@@ -856,12 +870,13 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     ) {
         // Don't open calibration mid-match — wait-forever shoot would hang.
         val phase = lastPhase
-        if (phase in listOf("announce", "countdown", "shoot", "resolve")) {
+        if (phase in listOf("announce", "countdown", "shoot", "resolve", "generating")) {
             coach?.speak("Finish the match first.")
             binding.hint.text = "Finish the match first — then recalibrate."
             vibrate(40)
             return
         }
+        blockMatchStart = true
         calibrating = true
         showLobbyReadyButton(false)
         pendingSport = PlayerProfile.normalizeSport(sport)
@@ -929,6 +944,10 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
         binding.calibration.calibPanel.visibility = View.GONE
         applyChromeForMode()
         updateProfileHint()
+        // Calibration flow over — allow lobby start again.
+        blockMatchStart = false
+        forceRecalibrate = false
+        pickingSport = false
         if (lastPhase == null || lastPhase == "lobby") {
             binding.big.text = "READY?"
             promptReadyToStart()
@@ -969,7 +988,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
 
     /** True only when a lobby start won't interrupt calibrate / sport pick. */
     private fun lobbyStartAllowed(): Boolean {
-        if (calibrating || pickingSport || forceRecalibrate) return false
+        if (blockMatchStart || calibrating || pickingSport || forceRecalibrate) return false
         if (!hostConnected || profile == null) return false
         if (lastPhase != null && lastPhase != "lobby") return false
         return true
@@ -1135,8 +1154,18 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     private fun onCalibSkip() {
         if (!calibrating) return
         coach?.speak("Starting over.")
-        finishCalibration(save = false)
+        // Tear down session without re-arming lobby start, then re-enter picker.
+        calibrating = false
+        calib = null
+        pendingCalibKick = null
+        pose?.calibrationSwing = false
+        binding.overlay.setBodyGuide(show = false, ok = false)
+        binding.calibration.calibPanel.visibility = View.GONE
+        applyChromeForMode()
+        blockMatchStart = true
         forceRecalibrate = true
+        pickingSport = true
+        showLobbyReadyButton(false)
         showSportPicker()
     }
 
@@ -1492,8 +1521,16 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
     override fun onState(state: GameClient.MatchState) {
         mainHandler.post {
             hostSport = PlayerProfile.normalizeSport(state.sport)
-            if (calibrating) {
+            if (calibrating || blockMatchStart) {
                 lastPhase = state.phase
+                // If TV starts a match while calibrate / sport-picker is open, cancel it.
+                if (state.phase in listOf(
+                        "announce", "countdown", "shoot", "resolve", "generating"
+                    )
+                ) {
+                    game.sendAbort()
+                    binding.hint.text = "Stay in calibration — match start cancelled"
+                }
                 return@post
             }
             pose?.phase = state.phase
@@ -1512,7 +1549,7 @@ class MainActivity : AppCompatActivity(), GameClient.Listener {
                     updateProfileHint()
                     lastResultSpoken = null
                     // Don't arm "I'm Ready" / thumbs-up while CALIBRATE sport picker is open.
-                    if (lastPhase != "lobby" && !pickingSport && !forceRecalibrate) {
+                    if (lastPhase != "lobby" && lobbyStartAllowed()) {
                         promptReadyToStart()
                     }
                 }

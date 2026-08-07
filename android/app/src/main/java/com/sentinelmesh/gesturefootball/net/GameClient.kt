@@ -256,6 +256,16 @@ class GameClient(
         ws?.send(JSONObject().put("type", "start").toString())
     }
 
+    /** End / cancel the current match (or full-time screen) and return to lobby. */
+    fun sendAbort() {
+        ws?.send(JSONObject().put("type", "abort").toString())
+    }
+
+    /** Full-time → lobby, keeping campaign level / venue knobs. */
+    fun sendAgain() {
+        ws?.send(JSONObject().put("type", "again").toString())
+    }
+
     /** Lobby-only sport select (football | darts | basketball). */
     fun sendSport(sport: String) {
         ws?.send(
