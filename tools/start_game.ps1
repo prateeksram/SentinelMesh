@@ -4,7 +4,7 @@ param(
     [string]$UnoQUser = "arduino",
     [string]$LaptopIp,
     [ValidateSet("Laptop", "UnoQ")]
-    [string]$CameraMode = "Laptop",
+    [string]$CameraMode = "UnoQ",
     [int]$CameraIndex = 1,
     [string]$SnapKickRoot = "$env:USERPROFILE\Desktop\snap-kick\snapkick-starter",
     [string]$RemoteDir = "/home/arduino/sentinelmesh",
@@ -390,6 +390,11 @@ try {
             ) $SnapKickRoot
         } finally {
             $env:OPENCV_VIDEOIO_PRIORITY_MSMF = $oldMsmf
+        }
+        Start-Sleep -Milliseconds 750
+        $relayProcess.Refresh()
+        if ($relayProcess.HasExited) {
+            throw "Laptop camera relay exited before becoming ready. Camera index $CameraIndex may be unavailable. If the camera is connected to the UNO Q, omit -CameraMode or use '-CameraMode UnoQ'. See $runLogDir\camera-relay.err.log"
         }
         Wait-EdgeStatus "sourceCamera" 15 "the laptop camera relay" | Out-Null
     }

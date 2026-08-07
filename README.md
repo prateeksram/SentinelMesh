@@ -99,7 +99,7 @@ The one-step launcher keeps the newer root host while using the calibrated
 phone-side Uno Q detector and trajectory estimator:
 
 ```powershell
-.\start-game.bat -UnoQIp 192.168.150.72 -CameraIndex 1 -SyncUnoQ
+.\start-game.bat -UnoQIp 192.168.150.72 -SyncUnoQ
 ```
 
 On the phone, tap the pose badge until it reads **UNO Q**. The board performs
@@ -107,6 +107,10 @@ MediaPipe/ONNX pose inference, sends landmarks over UDP `9999`, and the phone
 handles calibration, kick state, force, direction, and sampled trajectory.
 NPU/GPU/CPU remain available by tapping the same badge, and loss of the edge
 stream automatically restores local pose inference.
+
+The default assumes the camera is connected to the UNO Q at `/dev/video0`.
+For a Windows-connected camera instead, add
+`-CameraMode Laptop -CameraIndex 1`.
 
 Add `-EnableSnapkickBridge` only for a separate producer that emits
 `snapkick.pose.v1` on UDP `5005`. The bundled raw landmark streamer does not
