@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """UNO Q USB-camera source for SentinelMesh.
 
-This wrapper reuses the proven OpenCV Zoo BlazePose backend from the local
-SnapKick checkout, but publishes all 33 MediaPipe points required by the
+The OpenCV Zoo BlazePose backend is vendored beside this file so deployment is
+self-contained. It publishes all 33 MediaPipe points required by the
 SentinelMesh calibration flow. Camera capture and JPEG relay are latest-only
 threads; slow pose inference cannot build a stale frame queue.
 """
@@ -15,7 +15,6 @@ import math
 import os
 import re
 import socket
-import sys
 import threading
 import time
 from pathlib import Path
@@ -595,6 +594,12 @@ def parse_args():
     parser.add_argument("--detector-stable-interval", type=int, default=6)
     parser.add_argument("--detector-recovery-interval", type=int, default=1)
     parser.add_argument(
+        "--dnn-target",
+        choices=("cpu", "opencl", "opencl-fp16"),
+        default="cpu",
+        help="OpenCV DNN execution target; CPU is the measured UNO Q default",
+    )
+    parser.add_argument(
         "--optical-flow",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -604,25 +609,20 @@ def parse_args():
         "--record-jsonl",
         help="optional append-only raw packet recording for offline replay",
     )
-    parser.add_argument(
-        "--snapkick-unoq",
-        default="/home/arduino/snapkick-starter/unoq",
-        help="Directory containing SnapKick pose_streamer.py and vendor/",
-    )
     parser.add_argument("--log-interval", type=float, default=1.0)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    snapkick = Path(args.snapkick_unoq).expanduser().resolve()
-    if not (snapkick / "pose_streamer.py").exists():
-        raise RuntimeError(f"SnapKick UNO Q backend not found: {snapkick}")
-    sys.path.insert(0, str(snapkick))
 
     import cv2
     import numpy as np
-    from pose_streamer import MediaPipeOnnxBackend
+    try:
+        from .mediapipe_onnx_backend import MediaPipeOnnxBackend
+    except ImportError:
+        # Direct board launch: python3 /home/arduino/sentinelmesh/sentinel_pose_streamer.py
+        from mediapipe_onnx_backend import MediaPipeOnnxBackend
 
     if not args.person_model and not args.roi_url:
         raise ValueError("pass --person-model for local detection or --roi-url for split mode")
@@ -633,6 +633,7 @@ def main() -> int:
         roi_url=args.roi_url,
         roi_hz=args.roi_hz,
         detector_interval=args.detector_interval,
+        dnn_target=args.dnn_target,
     )
     # SnapKick normally publishes a gameplay subset. Sentinel calibration needs
     # the complete indexed MediaPipe topology, including elbows and wrists.
@@ -718,7 +719,7 @@ def main() -> int:
                 "diagnostics": {
                     "fps": round(fps_ema, 2),
                     "inference_ms": round(inference_ms, 2),
-                    "backend": "uno-q-mediapipe-onnx-opencv",
+                    "backend": backend.name,
                     "detector_interval": detector_interval,
                     "flow_enabled": args.optical_flow,
                 },

@@ -9,6 +9,8 @@ param(
     [string]$SnapKickRoot = "$env:USERPROFILE\Desktop\snap-kick\snapkick-starter",
     [string]$RemoteDir = "/home/arduino/sentinelmesh",
     [string]$RemoteCamera = "/dev/video0",
+    [ValidateSet("cpu", "opencl", "opencl-fp16")]
+    [string]$UnoQDnnTarget = "cpu",
     [string]$IdentityFile,
     [switch]$SyncUnoQ,
     [switch]$SkipUnoQ,
@@ -25,6 +27,7 @@ $runLogDir = Join-Path $repoRoot "logs\game-run"
 $serverScript = Join-Path $repoRoot "server.py"
 $bridgeScript = Join-Path $repoRoot "snapkick_bridge.py"
 $streamerScript = Join-Path $repoRoot "unoq\sentinel_pose_streamer.py"
+$backendScript = Join-Path $repoRoot "unoq\mediapipe_onnx_backend.py"
 $serverProcess = $null
 $relayProcess = $null
 $bridgeProcess = $null
@@ -303,6 +306,11 @@ try {
             $scpArgs += @($streamerScript, "$UnoQUser@$UnoQIp`:$RemoteDir/sentinel_pose_streamer.py")
             & scp @scpArgs
             if ($LASTEXITCODE -ne 0) { throw "UNO Q sync failed with exit code $LASTEXITCODE" }
+            $backendScpArgs = @()
+            if ($IdentityFile) { $backendScpArgs += @("-i", (Resolve-Path -LiteralPath $IdentityFile).Path) }
+            $backendScpArgs += @($backendScript, "$UnoQUser@$UnoQIp`:$RemoteDir/mediapipe_onnx_backend.py")
+            & scp @backendScpArgs
+            if ($LASTEXITCODE -ne 0) { throw "UNO Q backend sync failed with exit code $LASTEXITCODE" }
         }
 
         $camera = if ($CameraMode -eq "Laptop") {
@@ -327,6 +335,7 @@ nohup "$PY" '{0}/sentinel_pose_streamer.py' \
   --camera '{2}' \
   --model '/home/arduino/models/opencv-mediapipe/pose_estimation_mediapipe_2023mar.onnx' \
   --person-model '/home/arduino/models/opencv-mediapipe/person_detection_mediapipe_2023mar.onnx' \
+  --dnn-target '{3}' \
   --width 640 --height 480 --camera-fps 30 \
   --target-fps 10 --preview-fps 5 \
   --detector-interval 4 --detector-stable-interval 6 --detector-recovery-interval 1 \
@@ -337,7 +346,7 @@ echo "$pid" >'{0}/pose_streamer.pid'
 sleep 2
 kill -0 "$pid"
 echo "UNO Q pose streamer started as PID $pid"
-'@ -f $RemoteDir, $LaptopIp, $camera
+'@ -f $RemoteDir, $LaptopIp, $camera, $UnoQDnnTarget
         # Set before SSH so a partially successful remote launch is still
         # cleaned up if the connection drops before the command returns.
         $remoteStarted = $true

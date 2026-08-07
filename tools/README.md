@@ -20,7 +20,8 @@ Catalog of every script in this folder. Windows scripts are PowerShell (run from
 
 | Script | Purpose |
 |---|---|
-| [`deploy_unoq.ps1`](deploy_unoq.ps1) | `scp` the streamer + its requirements to `/home/arduino/sentinelmesh` (`-HostAddress`, `-User`, `-RemoteDir`) — the manual alternative to `start-game.bat -SyncUnoQ` |
+| [`deploy_unoq.ps1`](deploy_unoq.ps1) | `scp` the streamer, self-contained MediaPipe ONNX backend, and requirements to `/home/arduino/sentinelmesh` (`-HostAddress`, `-User`, `-RemoteDir`) — the manual alternative to `start-game.bat -SyncUnoQ` |
+| [`unoq_dnn_probe.py`](unoq_dnn_probe.py) | Read-only detector/landmark graph benchmark for CPU, OpenCL, and OpenCL-FP16 on the UNO Q; also reports the actual OpenCL device and runtime fallbacks |
 | [`replay_unoq_recording.py`](replay_unoq_recording.py) | Replay a `--record-jsonl` capture through the real UDP 9999 path with rebased timestamps (`--speed`, `--no-timing`) for deterministic offline tuning |
 | [`unoq_imu_sender.py`](unoq_imu_sender.py) | **Legacy, superseded** — old IMU-only sender (LSM6DSOX → `{yaw,pitch,force,event}` on UDP 5005); `LAPTOP_IP` is hardcoded and must be edited. Kept for reference |
 

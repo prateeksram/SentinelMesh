@@ -5,7 +5,7 @@
 1. Stops stale recognized processes (`server.py`, `snapkick_bridge.py`, the SnapKick `camera_relay.py`) by checking who owns TCP 8080 / UDP 9999 / UDP 5005 - and **refuses to start** (reporting PID + command line) if an *unrecognized* program holds a port, so it never kills unrelated services.
 2. Starts the root [`server.py`](../server.py) host and waits for `http://127.0.0.1:8080/edge/status`.
 3. Optionally starts the SnapKick bridge and/or the laptop USB-camera relay.
-4. SSHes to the UNO Q: kills old streamers, optionally syncs the current [`unoq/sentinel_pose_streamer.py`](../unoq/sentinel_pose_streamer.py), launches remote pose inference, and waits for camera + pose health.
+4. SSHes to the UNO Q: kills old streamers, optionally syncs the current streamer plus its self-contained ONNX backend, launches remote pose inference, and waits for camera + pose health.
 5. Prints the TV URL, phone WebSocket address, status URL, and log locations, then supervises everything until Ctrl+C (which runs the reverse shutdown; a crashed session is pre-cleaned on the next launch).
 
 ## Parameters
@@ -18,9 +18,10 @@
 | `-CameraMode Laptop\|UnoQ` | `Laptop` | Where the USB camera is plugged in |
 | `-CameraIndex <n>` | `1` | Windows capture device index (`0` if the USB cam is first) |
 | `-RemoteCamera <dev>` | `/dev/video0` | Board camera device (UnoQ mode; check `v4l2-ctl --list-devices`) |
+| `-UnoQDnnTarget cpu\|opencl\|opencl-fp16` | `cpu` | OpenCV-DNN target; OpenCL modes are diagnostic and much slower on the currently tested board image |
 | `-SnapKickRoot <path>` | `%USERPROFILE%\Desktop\snap-kick\snapkick-starter` | External SnapKick checkout providing `camera_relay.py` (Laptop camera mode only) |
 | `-RemoteDir <path>` | `/home/arduino/sentinelmesh` | Streamer install dir on the board |
-| `-SyncUnoQ` | off | `scp` the current streamer to the board before launch |
+| `-SyncUnoQ` | off | `scp` the current streamer and owned ONNX backend to the board before launch |
 | `-SkipUnoQ` | off | Laptop/phone-only: no SSH, no relay, no remote inference |
 | `-EnableSnapkickBridge` | off | Also start `snapkick_bridge.py` on UDP 5005 |
 | `-IdentityFile <path>` | - | Non-default SSH key |

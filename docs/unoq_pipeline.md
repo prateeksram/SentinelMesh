@@ -14,12 +14,12 @@ USB webcam → UNO Q OpenCV DNN BlazePose (+ Lucas–Kanade optical flow)
                                                  · ShotTrajectoryEstimator
 ```
 
-The phone keeps calibration, kick detection, ForcePose/trajectory math, voice coach, and the private profile. Only camera capture and pose-model execution move to the board. Backend today is **OpenCV DNN on the UNO Q CPU** (OpenCV Zoo MediaPipe ONNX), not QNN/NPU.
+The phone keeps calibration, kick detection, ForcePose/trajectory math, voice coach, and the private profile. Only camera capture and pose-model execution move to the board. Backend today is **OpenCV DNN** (OpenCV Zoo MediaPipe ONNX). CPU is the safe default; OpenCL is retained only as an explicit benchmark target because it is much slower for these graphs on the current FD702 driver.
 
 ## Prerequisites
 
 - Laptop, phone, and UNO Q on the same LAN; inbound TCP 8080 + UDP 9999 allowed on the laptop.
-- A SnapKick board checkout at `/home/arduino/snapkick-starter/unoq` - the streamer imports its tested `MediaPipeOnnxBackend` and vendor preprocessing (hard requirement; the streamer exits if it's absent).
+- [`unoq/mediapipe_onnx_backend.py`](../unoq/mediapipe_onnx_backend.py), deployed beside the streamer. SentinelMesh owns this backend; no SnapKick checkout is required for inference.
 - Float models on the board:
   - `/home/arduino/models/opencv-mediapipe/pose_estimation_mediapipe_2023mar.onnx`
   - `/home/arduino/models/opencv-mediapipe/person_detection_mediapipe_2023mar.onnx`
@@ -42,7 +42,7 @@ Check `http://127.0.0.1:8080/edge/status` - camera and pose report `waiting` unt
 .\tools\deploy_unoq.ps1 -HostAddress 192.168.150.72
 ```
 
-(or copy [`unoq/sentinel_pose_streamer.py`](../unoq/sentinel_pose_streamer.py) + [`unoq/requirements.txt`](../unoq/requirements.txt) to `/home/arduino/sentinelmesh` manually).
+(or copy [`unoq/sentinel_pose_streamer.py`](../unoq/sentinel_pose_streamer.py), [`unoq/mediapipe_onnx_backend.py`](../unoq/mediapipe_onnx_backend.py), and [`unoq/requirements.txt`](../unoq/requirements.txt) to `/home/arduino/sentinelmesh` manually).
 
 ## 3. Identify the USB camera on the board
 
@@ -72,6 +72,7 @@ python3 /home/arduino/sentinelmesh/sentinel_pose_streamer.py \
   --camera /dev/video0 \
   --model /home/arduino/models/opencv-mediapipe/pose_estimation_mediapipe_2023mar.onnx \
   --person-model /home/arduino/models/opencv-mediapipe/person_detection_mediapipe_2023mar.onnx \
+  --dnn-target cpu \
   --width 640 --height 480 --camera-fps 30 \
   --target-fps 10 --preview-fps 5 \
   --detector-interval 4 --detector-stable-interval 6 --detector-recovery-interval 1 \
@@ -121,6 +122,7 @@ Tap POSE again to return to NPU. Unplugging the camera, stopping the board proce
 
 - Pose inference typically holds 8–10 FPS on the board CPU. Keep camera capture at 20–30 FPS so **optical flow** (pelvis-relative, confidence-gated, corrected by each new pose) can measure lower-body motion between pose anchors - that's what makes kick detection work at low pose rates. A/B it with `--no-optical-flow`.
 - The detector cadence is adaptive: every frame during recovery, every 4th pose while tracking, every 6th with a stable high-confidence torso.
+- `--dnn-target cpu` is intentional. On the tested UNO Q, direct graph benchmarks measured roughly 113 ms/99 ms for detector/landmark on CPU versus 3993 ms/3431 ms on OpenCL. OpenCL FP16 fell back to FP32, and the available block-quantized ONNX files do not load in OpenCV 4.10. Re-run [`tools/unoq_dnn_probe.py`](../tools/unoq_dnn_probe.py) after changing the board image, OpenCV, or driver.
 - `--record-jsonl` captures every packet for deterministic offline replay:
 
   ```powershell

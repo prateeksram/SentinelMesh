@@ -444,6 +444,7 @@ Useful flags:
 | `-CameraIndex <n>` | Windows camera index for laptop-camera relay |
 | `-CameraMode Laptop` | Relay a PC USB camera to UNO Q |
 | `-CameraMode UnoQ` | Read a camera directly on UNO Q |
+| `-UnoQDnnTarget cpu\|opencl\|opencl-fp16` | Select the UNO Q OpenCV-DNN target; CPU is the measured default |
 | `-SyncUnoQ` | Copy the current streamer to the board before launch |
 | `-SkipUnoQ` | Run PC/phone only |
 | `-EnableSnapkickBridge` | Enable the SnapKick UDP bridge |

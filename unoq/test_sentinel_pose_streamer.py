@@ -6,11 +6,25 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from unoq.mediapipe_onnx_backend import _ssd_anchors, available_dnn_targets
 from unoq.sentinel_pose_streamer import OpticalFlowTracker, SystemTelemetrySampler
 
 
 class FakeCamera:
     pass
+
+
+class MediaPipeOnnxBackendTests(unittest.TestCase):
+    def test_generated_anchors_match_mediapipe_detector_layout(self):
+        anchors = _ssd_anchors(np)
+        self.assertEqual((2254, 2), anchors.shape)
+        np.testing.assert_allclose(anchors[0], [0.5 / 28, 0.5 / 28])
+        np.testing.assert_allclose(anchors[1567], [27.5 / 28, 27.5 / 28])
+        np.testing.assert_allclose(anchors[1568], [0.5 / 14, 0.5 / 14])
+        np.testing.assert_allclose(anchors[-1], [6.5 / 7, 6.5 / 7])
+
+    def test_cpu_target_is_exposed(self):
+        self.assertIn("cpu", available_dnn_targets(cv2))
 
 
 class OpticalFlowTrackerTests(unittest.TestCase):
